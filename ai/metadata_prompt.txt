@@ -10,5 +10,3 @@ Respond with a JSON object and no other text:
 Use null for any field you cannot determine with confidence.
 The correspondent is typically a company, institution or person who sent or issued the document.
 Do not invent information; if uncertain, use null.
-
-Document text:

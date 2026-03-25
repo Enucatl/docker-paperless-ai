@@ -128,6 +128,12 @@ services:
       context: ./ai
     profiles: [ai]
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "[ -f /tmp/ai-healthy ] && [ $$(( $(date +%s) - $(cat /tmp/ai-healthy | cut -d. -f1) )) -lt 600 ]"]
+      interval: 60s
+      timeout: 5s
+      retries: 3
+      start_period: 120s
     secrets:
       - paperless_token
     environment:
@@ -169,6 +175,8 @@ services:
       - POLL_INTERVAL
       - TAG_PENDING=ai-review-pending
       - OCR_REASONING_EFFORT
+      - OCR_CONCURRENCY
+      - LLM_RETRIES
       # - DRY_RUN=false
     volumes:
       # Edit prompts to tune OCR/metadata instructions without rebuilding.

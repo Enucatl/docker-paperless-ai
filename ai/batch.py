@@ -414,7 +414,7 @@ async def process_document(
             log.warning("Document %d: invalid AI date format '%s', skipping", doc_id, ai_date)
 
     ai_correspondent = meta.get("correspondent")
-    if ai_correspondent and not doc.get("correspondent"):
+    if ai_correspondent:
         try:
             log.info("Document %d: looking up correspondent '%s'", doc_id, ai_correspondent)
             correspondent_id = client.find_or_create_correspondent(str(ai_correspondent).strip())
@@ -447,6 +447,7 @@ async def process_document(
             "pages": len(images),
             "chars": len(full_text),
             "paperless_version": client.paperless_version,
+            "ai_metadata": meta,
         }, ensure_ascii=False)
         try:
             client.add_note(doc_id, note)

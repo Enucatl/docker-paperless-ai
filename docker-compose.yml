@@ -1,0 +1,202 @@
+services:
+  broker:
+    image: docker.io/library/redis:8
+    restart: unless-stopped
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    networks:
+      - internal
+
+  db:
+    image: docker.io/library/postgres:17
+    restart: unless-stopped
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    environment:
+      - POSTGRES_DB=paperless
+      - POSTGRES_USER=paperless
+      - POSTGRES_PASSWORD
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    networks:
+      - internal
+    command: postgres -c max_connections=1000
+
+  webserver:
+    image: ghcr.io/paperless-ngx/paperless-ngx:latest
+    extra_hosts:
+      - "${DOCKER_DOMAIN}:host-gateway"
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+      broker:
+        condition: service_healthy
+      gotenberg:
+        condition: service_started
+      tika:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "curl", "-fs", "-S", "--max-time", "2", "http://localhost:8000"]
+      interval: 120s
+      timeout: 10s
+      retries: 5
+    volumes:
+      - data:/usr/src/paperless/data
+      - media:/usr/src/paperless/media
+      - export:/usr/src/paperless/export
+      - /opt/paperless-consume:/usr/src/paperless/consume
+      - /etc/ssl/certs/ca-certificates.crt:/usr/src/paperless/data/ca-certificates.crt:ro
+    environment:
+      - PAPERLESS_SECRET_KEY
+      - PAPERLESS_DBPASS
+      - PAPERLESS_OCR_LANGUAGE
+      - PAPERLESS_OCR_USER_ARGS
+      - PAPERLESS_TIME_ZONE
+      - USERMAP_UID
+      - USERMAP_GID
+      - PAPERLESS_REDIS=redis://broker:6379
+      - PAPERLESS_DBHOST=db
+      - PAPERLESS_TIKA_ENABLED=1
+      - PAPERLESS_TIKA_GOTENBERG_ENDPOINT=http://gotenberg:3000
+      - PAPERLESS_TIKA_ENDPOINT=http://tika:9998
+      - PAPERLESS_URL=https://paperless.${DOCKER_DOMAIN}
+      - PAPERLESS_ENABLE_HTTP_REMOTE_USER=true
+      - PAPERLESS_LOGOUT_REDIRECT_URL=https://authelia.${DOCKER_DOMAIN}/logout
+      - PAPERLESS_EMAIL_CERTIFICATE_LOCATION=/usr/src/paperless/data/ca-certificates.crt
+    networks:
+      - internal
+      - traefik_proxy
+    labels:
+      - "checkmk_monitor=true"
+      - "traefik.enable=true"
+      - "traefik.http.routers.paperless.rule=Host(`paperless.${DOCKER_DOMAIN}`)"
+      - "traefik.http.routers.paperless.entrypoints=https"
+      - "traefik.http.routers.paperless.middlewares=authelia@docker,secured@file"
+      - "traefik.http.routers.paperless.tls=true"
+      - "traefik.http.routers.paperless.service=paperless"
+      - "traefik.http.services.paperless.loadbalancer.server.port=8000"
+      - "traefik.docker.network=traefik_proxy"
+
+  gotenberg:
+    image: docker.io/gotenberg/gotenberg:8.25
+    restart: unless-stopped
+    # The gotenberg chromium route is used to convert .eml files. We do not
+    # want to allow external content like tracking pixels or even javascript.
+    command:
+      - "gotenberg"
+      - "--chromium-disable-javascript=true"
+      - "--chromium-allow-list=file:///tmp/.*"
+    networks:
+      - internal
+
+  tika:
+    image: docker.io/apache/tika:latest
+    restart: unless-stopped
+    networks:
+      - internal
+
+  # AI batch post-processing — runs permanently alongside paperless.
+  # Polls for documents tagged "ai-review-pending", re-OCRs them with a vision
+  # LLM, extracts metadata (title, date, correspondent) with a text LLM, and
+  # patches the documents via the paperless API. No paperless patches required.
+  #
+  # The heavy model serving (Ollama / vLLM) runs on the GPU workstation, which
+  # can be turned on/off independently. While the workstation is off, this
+  # service idles gracefully — documents queue up with the pending tag.
+  #
+  # One-shot run (skip watch mode, useful for ad-hoc processing):
+  #   docker compose run --rm ai --once
+  #
+  # Dry run (preview without modifying anything):
+  #   docker compose run --rm ai --once --dry-run
+  #
+  # Set up a paperless Workflow (UI → Workflows) to auto-tag new documents:
+  #   Trigger: DOCUMENT_ADDED  →  Action: ASSIGNMENT, add tag "ai-review-pending"
+  #
+  # See ai/README.md for full setup instructions.
+  ai:
+    build:
+      context: ./ai
+    profiles: [ai]
+    restart: unless-stopped
+    secrets:
+      - paperless_token
+    environment:
+      # Paperless connection (required)
+      - PAPERLESS_URL=http://webserver:8000
+      - PAPERLESS_TOKEN_FILE=/run/secrets/paperless_token
+
+      # OCR model — any LiteLLM vision model string:
+      #   gemini/gemini-2.5-flash          (cloud, default)
+      #   claude-3-5-sonnet-20241022       (cloud)
+      #   gpt-4o                           (cloud)
+      #   ollama/llava-llama3              (local Ollama, set OCR_API_BASE)
+      #   openai/Nanonets-OCR2-3B          (local vLLM, set OCR_API_BASE)
+      - OCR_MODEL
+
+      # Metadata extraction model — text-only, called once per document.
+      # Defaults to OCR_MODEL if unset. A smaller/faster model works well here.
+      #   ollama/llama3.2   openai/Meta-Llama-3.1-8B-Instruct   gemini/gemini-2.5-flash
+      - METADATA_MODEL
+
+      # Base URLs for local/self-hosted models (independent, can differ).
+      # Examples:
+      #   OCR_API_BASE=http://workstation:11434       (Ollama)
+      #   OCR_API_BASE=http://workstation:8000/v1     (vLLM)
+      - OCR_API_BASE
+      - METADATA_API_BASE
+
+      # API keys — set whichever your chosen model needs.
+      # Plain env vars (visible in docker inspect):
+      - GOOGLE_API_KEY
+      - ANTHROPIC_API_KEY
+      - OPENAI_API_KEY
+      # Docker secrets (_FILE variants read the key from a file, safer):
+      # - GOOGLE_API_KEY_FILE=/run/secrets/google_api_key
+      # - ANTHROPIC_API_KEY_FILE=/run/secrets/anthropic_api_key
+      # - OPENAI_API_KEY_FILE=/run/secrets/openai_api_key
+
+      # Behaviour tuning (all optional)
+      - POLL_INTERVAL
+      - TAG_PENDING=ai-review-pending
+      - OCR_REASONING_EFFORT
+      # - DRY_RUN=false
+    volumes:
+      # Edit prompts to tune OCR/metadata instructions without rebuilding.
+      - ./ai/prompt.txt:/app/prompt.txt:ro
+      - ./ai/metadata_prompt.txt:/app/metadata_prompt.txt:ro
+    networks:
+      - internal
+
+
+volumes:
+  data:
+    external: true
+    name: paperless-ai_data
+  media:
+    external: true
+    name: paperless-ai_media
+  export:
+  pgdata:
+  redisdata:
+
+secrets:
+  paperless_token:
+    file: ./secrets/paperless_token.txt
+
+networks:
+  traefik_proxy:
+    external: true
+  internal:
+    enable_ipv6: true
+    ipam:
+      driver: default

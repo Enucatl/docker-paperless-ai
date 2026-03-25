@@ -1,0 +1,14 @@
+Extract the following metadata from the document text below.
+Respond with a JSON object and no other text:
+
+{
+  "title": "<concise descriptive title, max 100 chars, no file extension>",
+  "date": "<primary document date as YYYY-MM-DD, e.g. invoice date, letter date>",
+  "correspondent": "<name of the sender or issuing organisation — not the recipient>"
+}
+
+Use null for any field you cannot determine with confidence.
+The correspondent is typically a company, institution or person who sent or issued the document.
+Do not invent information; if uncertain, use null.
+
+Document text:

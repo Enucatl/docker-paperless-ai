@@ -235,6 +235,19 @@ class PaperlessClient:
         r = self._client.post(f"/api/documents/{doc_id}/notes/", json={"note": note})
         r.raise_for_status()
 
+    def get_or_create_custom_field(self, name: str, data_type: str = "date") -> int:
+        """Return custom field ID by name, creating it if missing."""
+        r = self._client.get("/api/custom_fields/", params={"name": name})
+        r.raise_for_status()
+        for field in r.json()["results"]:
+            if field["name"] == name:
+                return field["id"]
+        r = self._client.post("/api/custom_fields/", json={"name": name, "data_type": data_type})
+        r.raise_for_status()
+        field_id = r.json()["id"]
+        log.info("Created custom field '%s' (id=%d, type=%s)", name, field_id, data_type)
+        return field_id
+
     def update_tags(self, doc: dict, remove_id: int, add_id: int | None) -> None:
         """Remove pending tag from document, optionally adding another."""
         current_tags = [t for t in doc["tags"] if t != remove_id]
@@ -331,6 +344,7 @@ async def process_document(
     doc: dict,
     client: PaperlessClient,
     pending_id: int,
+    custom_field_id: int,
     dry_run: bool,
 ) -> bool:
     doc_id = doc["id"]
@@ -377,7 +391,12 @@ async def process_document(
         log.warning("Document %d: metadata extraction failed: %s — skipping metadata", doc_id, e)
 
     # Build PATCH payload
-    payload: dict = {"content": full_text}
+    today = datetime.now(timezone.utc).date().isoformat()
+    existing_cf = [cf for cf in doc.get("custom_fields", []) if cf["field"] != custom_field_id]
+    payload: dict = {
+        "content": full_text,
+        "custom_fields": existing_cf + [{"field": custom_field_id, "value": today}],
+    }
 
     ai_title = meta.get("title")
     if ai_title:
@@ -408,6 +427,7 @@ async def process_document(
 
     if dry_run:
         log.info("Document %d: [dry-run] would PATCH fields: %s", doc_id, sorted(payload.keys()))
+        log.info("Document %d: [dry-run] would set custom field %d = %s", doc_id, custom_field_id, today)
         log.info("Document %d: [dry-run] would remove tag %d", doc_id, pending_id)
         return True
 
@@ -446,6 +466,7 @@ async def process_document(
 async def run_batch(
     client: PaperlessClient,
     pending_id: int,
+    custom_field_id: int,
     dry_run: bool,
 ) -> tuple[int, int]:
     """Process all pending documents. Returns (success_count, failure_count)."""
@@ -457,7 +478,7 @@ async def run_batch(
     log.info("Found %d document(s) to process", len(docs))
     success, failure = 0, 0
     for doc in docs:
-        ok = await process_document(doc, client, pending_id, dry_run)
+        ok = await process_document(doc, client, pending_id, custom_field_id, dry_run)
         if ok:
             success += 1
         else:
@@ -494,16 +515,22 @@ async def main_async(args: argparse.Namespace) -> None:
             log.error("Failed to resolve tag: %s", e)
             sys.exit(1)
 
-        log.info("Tag ID: pending=%d", pending_id)
+        try:
+            custom_field_id = client.get_or_create_custom_field("ai_processed", data_type="date")
+        except Exception as e:
+            log.error("Failed to resolve custom field: %s", e)
+            sys.exit(1)
+
+        log.info("Tag ID: pending=%d | custom field: ai_processed=%d", pending_id, custom_field_id)
 
         if args.once:
-            success, failure = await run_batch(client, pending_id, dry_run)
+            success, failure = await run_batch(client, pending_id, custom_field_id, dry_run)
             log.info("Done. Success: %d, Failed: %d", success, failure)
         else:
             log.info("Watch mode: polling every %ds (Ctrl+C to stop)", POLL_INTERVAL)
             while True:
                 try:
-                    success, failure = await run_batch(client, pending_id, dry_run)
+                    success, failure = await run_batch(client, pending_id, custom_field_id, dry_run)
                     if success or failure:
                         log.info("Batch done. Success: %d, Failed: %d", success, failure)
                 except Exception as e:

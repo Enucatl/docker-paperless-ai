@@ -191,6 +191,10 @@ Edit `ai/prompt.txt` and `ai/metadata_prompt.txt` — they are mounted into the 
 docker compose restart ai
 ```
 
+## Finding processed documents
+
+On first run the worker creates a custom field **`ai_processed`** (type: Date) and sets it to the processing date on every document it finishes. The field does not appear as a tag — it shows in the document detail panel and is filterable in the search bar (`ai_processed is set` / `ai_processed is not set`).
+
 ## Reprocessing a document
 
 Re-add the `ai-review-pending` tag and the worker will pick it up on the next poll. The service re-downloads the original and reprocesses, overwriting the previous content, title, and date.

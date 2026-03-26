@@ -54,6 +54,7 @@ log = logging.getLogger(__name__)
 # Configuration
 # ---------------------------------------------------------------------------
 
+
 def _read_secret(env_var: str) -> str | None:
     """Read env var, or if FOO_FILE is set, read its content from that file."""
     file_path = os.environ.get(f"{env_var}_FILE")
@@ -61,7 +62,9 @@ def _read_secret(env_var: str) -> str | None:
         p = Path(file_path)
         if p.is_file():
             return p.read_text().strip()
-        log.warning("Secret file %s not found (referenced by %s_FILE)", file_path, env_var)
+        log.warning(
+            "Secret file %s not found (referenced by %s_FILE)", file_path, env_var
+        )
     return os.environ.get(env_var)
 
 
@@ -125,6 +128,19 @@ for _key in ("GOOGLE_API_KEY", "ANTHROPIC_API_KEY", "OPENAI_API_KEY"):
 # Drop unsupported params (e.g. reasoning_effort) silently for local endpoints.
 litellm.drop_params = True
 
+
+def _raise_for_status(r: httpx.Response) -> None:
+    """Like raise_for_status() but includes the response body in the exception message."""
+    try:
+        r.raise_for_status()
+    except httpx.HTTPStatusError as e:
+        raise httpx.HTTPStatusError(
+            f"{e} — {e.response.text}",
+            request=e.request,
+            response=e.response,
+        ) from None
+
+
 # Lazily initialised inside the event loop (asyncio.Semaphore must be created inside a running loop).
 _ocr_semaphore: asyncio.Semaphore | None = None
 
@@ -153,6 +169,7 @@ def _get_ocr_semaphore() -> asyncio.Semaphore:
 # Paperless API client
 # ---------------------------------------------------------------------------
 
+
 class PaperlessClient:
     def __init__(self, base_url: str, token: str):
         self._client = httpx.Client(
@@ -161,6 +178,7 @@ class PaperlessClient:
             timeout=60,
         )
         self.paperless_version: str | None = None
+        self._correspondents_cache: list[dict] | None = None
 
     def close(self):
         self._client.close()
@@ -174,7 +192,7 @@ class PaperlessClient:
     def get_tag_id(self, name: str, create: bool = True) -> int:
         """Return tag ID by name, optionally creating it if missing."""
         r = self._client.get("/api/tags/", params={"name": name})
-        r.raise_for_status()
+        _raise_for_status(r)
         self.paperless_version = r.headers.get("x-version", self.paperless_version)
         results = r.json()["results"]
         for tag in results:
@@ -183,24 +201,36 @@ class PaperlessClient:
         if not create:
             raise ValueError(f"Tag '{name}' not found")
         r = self._client.post("/api/tags/", json={"name": name})
-        r.raise_for_status()
+        _raise_for_status(r)
         tag_id = r.json()["id"]
         log.info("Created tag '%s' (id=%d)", name, tag_id)
         return tag_id
 
-    def list_pending_documents(self, tag_id: int) -> list[dict]:
-        """Return all documents tagged with the pending tag."""
-        docs = []
-        params = {"tags__id__in": tag_id, "page_size": 50, "ordering": "created"}
+    def count_pending_documents(self, tag_id: int) -> int:
+        """Return the number of documents tagged with the pending tag."""
+        r = self._client.get(
+            "/api/documents/",
+            params={"tags__id__in": tag_id, "page_size": 1},
+        )
+        _raise_for_status(r)
+        return r.json().get("count", 0)
+
+    def iter_pending_documents(self, tag_id: int, page_size: int = 20):
+        """Yield pending documents one page at a time, keeping memory flat."""
+        params = {
+            "tags__id__in": tag_id,
+            "page_size": page_size,
+            "ordering": "created",
+            "fields": "id,title,correspondent,created_date,custom_fields,tags,language",
+        }
         url = "/api/documents/"
         while url:
             r = self._client.get(url, params=params)
-            r.raise_for_status()
+            _raise_for_status(r)
             data = r.json()
-            docs.extend(data["results"])
-            url = data.get("next")
+            yield from data["results"]
+            url = data.get("next") or None
             params = {}  # next URL already has params baked in
-        return docs
 
     def download_original(self, doc_id: int) -> bytes:
         """Download the original (pre-OCR) file for a document."""
@@ -209,79 +239,92 @@ class PaperlessClient:
             params={"original": "true"},
             timeout=120,
         )
-        r.raise_for_status()
+        _raise_for_status(r)
         return r.content
 
+    def _get_all_correspondents(self, force: bool = False) -> list[dict]:
+        """Return all correspondents, using a cache within the batch run."""
+        if self._correspondents_cache is not None and not force:
+            return self._correspondents_cache
+        all_corr: list[dict] = []
+        page = 1
+        while True:
+            r = self._client.get(
+                "/api/correspondents/", params={"page": page, "page_size": 250}
+            )
+            _raise_for_status(r)
+            data = r.json()
+            all_corr.extend(data["results"])
+            if not data.get("next"):
+                break
+            page += 1
+        self._correspondents_cache = all_corr
+        log.info("Loaded %d correspondent(s)", len(all_corr))
+        return all_corr
+
     def find_or_create_correspondent(self, name: str) -> int:
-        """Search for a correspondent by name (exact then fuzzy), or create a new one."""
+        """Match against all correspondents (exact → fuzzy), or create a new one."""
         log.info("Correspondent lookup: '%s'", name)
-        # Search by name — returns candidates (partial match from API)
-        r = self._client.get("/api/correspondents/", params={"name": name, "page_size": 25})
-        r.raise_for_status()
-        candidates = r.json()["results"]
-        log.debug("Correspondent search for '%s': %d candidate(s)", name, len(candidates))
-        # Exact match first (case-insensitive)
+        candidates = self._get_all_correspondents()
+
+        # Exact match (case-insensitive)
         for c in candidates:
             if c["name"].lower() == name.lower():
                 log.info("Exact match '%s' → id=%d", name, c["id"])
                 return c["id"]
-        # Fuzzy match among candidates
-        best_id, best_ratio = None, 0.0
+
+        # Fuzzy match
+        best, best_ratio = None, 0.0
         for c in candidates:
             ratio = SequenceMatcher(None, name.lower(), c["name"].lower()).ratio()
             if ratio > best_ratio:
-                best_id, best_ratio = c["id"], ratio
+                best, best_ratio = c, ratio
         if best_ratio >= 0.80:
-            log.info("Fuzzy match '%s' → id=%d (ratio=%.2f)", name, best_id, best_ratio)
-            return best_id
+            log.info(
+                "Fuzzy match '%s' → '%s' id=%d (ratio=%.2f)",
+                name,
+                best["name"],
+                best["id"],
+                best_ratio,
+            )
+            return best["id"]
+
         log.info("No match for '%s' (best ratio=%.2f) — creating", name, best_ratio)
-        try:
-            r = self._client.post("/api/correspondents/", json={"name": name})
-            if not r.is_success:
-                log.warning("Correspondent create failed (%d): %s", r.status_code, r.text)
-            r.raise_for_status()
-        except Exception:
-            # Unique constraint or race condition — page through all correspondents for exact match
-            page = 1
-            while True:
-                r = self._client.get("/api/correspondents/", params={"page": page, "page_size": 250})
-                r.raise_for_status()
-                data = r.json()
-                for c in data["results"]:
-                    if c["name"].lower() == name.lower():
-                        log.info("Correspondent '%s' found after creation conflict → id=%d", name, c["id"])
-                        return c["id"]
-                if not data.get("next"):
-                    break
-                page += 1
-            raise
-        new_id = r.json()["id"]
+        r = self._client.post("/api/correspondents/", json={"name": name})
+        _raise_for_status(r)
+        new_corr = r.json()
+        new_id = new_corr["id"]
         log.info("Created correspondent '%s' (id=%d)", name, new_id)
+        # Add to cache so subsequent lookups in this batch find it immediately
+        if self._correspondents_cache is not None:
+            self._correspondents_cache.append(new_corr)
         return new_id
 
     def patch_document(self, doc_id: int, payload: dict) -> None:
         r = self._client.patch(f"/api/documents/{doc_id}/", json=payload)
-        r.raise_for_status()
+        _raise_for_status(r)
 
     def add_note(self, doc_id: int, note: str) -> None:
         r = self._client.post(f"/api/documents/{doc_id}/notes/", json={"note": note})
-        r.raise_for_status()
+        _raise_for_status(r)
 
     def list_notes(self, doc_id: int) -> list[dict]:
         r = self._client.get(f"/api/documents/{doc_id}/notes/")
-        r.raise_for_status()
+        _raise_for_status(r)
         return r.json()
 
     def delete_note(self, doc_id: int, note_id: int) -> None:
         r = self._client.delete(f"/api/documents/{doc_id}/notes/{note_id}/")
-        r.raise_for_status()
+        _raise_for_status(r)
 
     def iter_all_documents(self) -> list[dict]:
         """Page through all documents and return them."""
         docs, page = [], 1
         while True:
-            r = self._client.get("/api/documents/", params={"page": page, "page_size": 100})
-            r.raise_for_status()
+            r = self._client.get(
+                "/api/documents/", params={"page": page, "page_size": 100}
+            )
+            _raise_for_status(r)
             data = r.json()
             docs.extend(data["results"])
             if not data.get("next"):
@@ -294,8 +337,10 @@ class PaperlessClient:
         # Page through all fields — the ?name= filter is not reliable in all paperless versions
         page = 1
         while True:
-            r = self._client.get("/api/custom_fields/", params={"page": page, "page_size": 250})
-            r.raise_for_status()
+            r = self._client.get(
+                "/api/custom_fields/", params={"page": page, "page_size": 250}
+            )
+            _raise_for_status(r)
             data = r.json()
             for field in data["results"]:
                 if field["name"] == name:
@@ -304,19 +349,23 @@ class PaperlessClient:
             if not data.get("next"):
                 break
             page += 1
-        r = self._client.post("/api/custom_fields/", json={"name": name, "data_type": data_type})
+        r = self._client.post(
+            "/api/custom_fields/", json={"name": name, "data_type": data_type}
+        )
         if not r.is_success:
             log.warning("Custom field create failed (%d): %s", r.status_code, r.text)
-        r.raise_for_status()
+        _raise_for_status(r)
         field_id = r.json()["id"]
-        log.info("Created custom field '%s' (id=%d, type=%s)", name, field_id, data_type)
+        log.info(
+            "Created custom field '%s' (id=%d, type=%s)", name, field_id, data_type
+        )
         return field_id
 
     def get_correspondent_name(self, correspondent_id: int) -> str | None:
         """Return the name of a correspondent by ID, or None on failure."""
         try:
             r = self._client.get(f"/api/correspondents/{correspondent_id}/")
-            r.raise_for_status()
+            _raise_for_status(r)
             return r.json().get("name")
         except Exception:
             return None
@@ -326,13 +375,16 @@ class PaperlessClient:
         current_tags = [t for t in doc["tags"] if t != remove_id]
         if add_id is not None and add_id not in current_tags:
             current_tags.append(add_id)
-        r = self._client.patch(f"/api/documents/{doc['id']}/", json={"tags": current_tags})
-        r.raise_for_status()
+        r = self._client.patch(
+            f"/api/documents/{doc['id']}/", json={"tags": current_tags}
+        )
+        _raise_for_status(r)
 
 
 # ---------------------------------------------------------------------------
 # OCR helpers
 # ---------------------------------------------------------------------------
+
 
 def document_to_pages(data: bytes) -> list[Image.Image]:
     """Convert a document to a list of page images.
@@ -372,7 +424,9 @@ def document_to_pages(data: bytes) -> list[Image.Image]:
     except Exception:
         pass
 
-    raise ValueError("Unsupported document format — only PDF and common image formats (JPEG, PNG, TIFF) are supported")
+    raise ValueError(
+        "Unsupported document format — only PDF and common image formats (JPEG, PNG, TIFF) are supported"
+    )
 
 
 def _image_to_b64(img: Image.Image) -> str:
@@ -392,12 +446,19 @@ async def ocr_page(image: Image.Image, language: str | None = None) -> str:
         {
             "role": "user",
             "content": [
-                {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{b64}"}},
+                {
+                    "type": "image_url",
+                    "image_url": {"url": f"data:image/png;base64,{b64}"},
+                },
                 {"type": "text", "text": prompt},
             ],
         }
     ]
-    kwargs: dict = {"model": OCR_MODEL, "messages": messages, "num_retries": LLM_RETRIES}
+    kwargs: dict = {
+        "model": OCR_MODEL,
+        "messages": messages,
+        "num_retries": LLM_RETRIES,
+    }
     if OCR_REASONING_EFFORT:
         kwargs["reasoning_effort"] = OCR_REASONING_EFFORT
     if OCR_API_BASE:
@@ -411,6 +472,7 @@ async def ocr_page(image: Image.Image, language: str | None = None) -> str:
 # Metadata extraction
 # ---------------------------------------------------------------------------
 
+
 async def extract_metadata(text: str, existing: dict | None = None) -> dict:
     """Extract title, date, correspondent from document text using a text LLM."""
     # Take first 4000 + last 2000 chars so footer dates/signatures are included
@@ -419,25 +481,48 @@ async def extract_metadata(text: str, existing: dict | None = None) -> dict:
     else:
         snippet = text
 
-    prompt = METADATA_PROMPT
-    if existing:
-        hints = "\n".join(
-            f"- {k}: {v}" for k, v in existing.items() if v is not None
-        )
-        if hints:
-            prompt += (
-                f"\nExisting metadata already associated with this document "
-                f"(use as hints, but the text of the document takes precedence):\n{hints}\n"
-            )
-
+    # NuExtract-style: template passed via chat_template_kwargs, document text as user message.
+    # Temperature 0 for deterministic structured extraction.
+    template = json.dumps(json.loads(METADATA_PROMPT), indent=4)
     messages = [
-        {"role": "system", "content": prompt},
-        {"role": "user", "content": snippet},
+        {
+            "role": "user",
+            "content": [{"type": "text", "text": snippet}],
+        }
+    ]
+    examples = [
+        {
+            "input": (
+                "Rechnung Nr. 2024-1234\nDatum: 15. März 2024\n\nSiemens AG\n"
+                "Werner-von-Siemens-Str. 1, 80333 München\n\nAn: Mustermann GmbH\n\n"
+                "Leistungszeitraum: Februar 2024\nBetrag: EUR 4.250,00"
+            ),
+            "output": json.dumps({
+                "oneline_short_summary": "Rechnung Siemens AG 2024-1234",
+                "document_date": "2024-03-15",
+                "correspondent_institution_or_individual": "Siemens AG",
+            }),
+        },
+        {
+            "input": (
+                "Kontoauszug\nDeutsche Bank AG\nIBAN: DE12 3456 7890 1234 5678 90\n\n"
+                "Zeitraum: 01.02.2025 – 28.02.2025\nKontoinhaber: Max Mustermann\n\n"
+                "Abschlusssaldo: 3.421,00 EUR"
+            ),
+            "output": json.dumps({
+                "oneline_short_summary": "Kontoauszug Deutsche Bank Februar 2025",
+                "document_date": "2025-02-28",
+                "correspondent_institution_or_individual": "Deutsche Bank AG",
+            }),
+        },
     ]
     kwargs: dict = {
         "model": METADATA_MODEL,
         "messages": messages,
-        "response_format": {"type": "json_object"},
+        "temperature": 0,
+        "extra_body": {
+            "chat_template_kwargs": {"template": template, "examples": examples}
+        },
         "num_retries": LLM_RETRIES,
     }
     if METADATA_API_BASE:
@@ -445,17 +530,24 @@ async def extract_metadata(text: str, existing: dict | None = None) -> dict:
 
     response = await litellm.acompletion(**kwargs)
     raw = response.choices[0].message.content or "{}"
+    log.info("Metadata raw response: %s", raw)
     try:
-        return json.loads(raw)
+        data = json.loads(raw)
     except json.JSONDecodeError:
         # Some models don't honour json_object mode; strip markdown fences and retry
         match = re.search(r"\{.*\}", raw, re.DOTALL)
-        return json.loads(match.group()) if match else {}
+        data = json.loads(match.group()) if match else {}
+    return {
+        "title": data.get("oneline_short_summary"),
+        "date": data.get("document_date"),
+        "correspondent": data.get("correspondent_institution_or_individual"),
+    }
 
 
 # ---------------------------------------------------------------------------
 # Document processing
 # ---------------------------------------------------------------------------
+
 
 async def process_document(
     doc: dict,
@@ -475,7 +567,7 @@ async def process_document(
         log.error("Document %d: download failed: %s", doc_id, e)
         return False
 
-    # Convert document to page images
+    # Convert document to page images and release the raw bytes
     try:
         images = document_to_pages(data)
     except ValueError as e:
@@ -487,8 +579,18 @@ async def process_document(
 
     num_pages = len(images)
     if num_pages > 100:
-        log.warning("Document %d: %d pages — this may use significant memory and API quota", doc_id, num_pages)
-    log.info("Document %d: %d page(s), OCR via %s (concurrency=%d)", doc_id, num_pages, OCR_MODEL, OCR_CONCURRENCY)
+        log.warning(
+            "Document %d: %d pages — this may use significant memory and API quota",
+            doc_id,
+            num_pages,
+        )
+    log.info(
+        "Document %d: %d page(s), OCR via %s (concurrency=%d)",
+        doc_id,
+        num_pages,
+        OCR_MODEL,
+        OCR_CONCURRENCY,
+    )
 
     # OCR all pages in parallel, bounded by semaphore
     t_start = time.time()
@@ -498,15 +600,20 @@ async def process_document(
     async def _ocr_one(idx: int, img: Image.Image) -> tuple[int, str]:
         async with sem:
             text = await ocr_page(img, language=language)
-            log.debug("Document %d: page %d/%d — %d chars", doc_id, idx, num_pages, len(text))
+            log.debug(
+                "Document %d: page %d/%d — %d chars", doc_id, idx, num_pages, len(text)
+            )
             return idx, text
 
     try:
-        results = await asyncio.gather(*[_ocr_one(i, img) for i, img in enumerate(images, 1)])
+        results = await asyncio.gather(*[
+            _ocr_one(i, img) for i, img in enumerate(images, 1)
+        ])
     except Exception as e:
         log.error("Document %d: OCR failed: %s", doc_id, e)
         return False
     page_texts = [text for _, text in sorted(results)]
+    num_pages = len(images)
 
     full_text = "\n\n".join(page_texts)
     log.info("Document %d: OCR complete — %d chars total", doc_id, len(full_text))
@@ -518,7 +625,9 @@ async def process_document(
     if doc.get("created_date"):
         existing_hints["date"] = doc["created_date"]
     if doc.get("correspondent"):
-        existing_hints["correspondent"] = client.get_correspondent_name(doc["correspondent"])
+        existing_hints["correspondent"] = client.get_correspondent_name(
+            doc["correspondent"]
+        )
 
     # Extract metadata
     meta: dict = {}
@@ -526,12 +635,16 @@ async def process_document(
         meta = await extract_metadata(full_text, existing=existing_hints or None)
         log.info("Document %d: metadata — %s", doc_id, meta)
     except Exception as e:
-        log.warning("Document %d: metadata extraction failed: %s — skipping metadata", doc_id, e)
+        log.warning(
+            "Document %d: metadata extraction failed: %s — skipping metadata", doc_id, e
+        )
 
     # Build PATCH payload
     today = datetime.now(timezone.utc).date().isoformat()
     managed_fields = {custom_field_id, ai_result_field_id}
-    existing_cf = [cf for cf in doc.get("custom_fields", []) if cf["field"] not in managed_fields]
+    existing_cf = [
+        cf for cf in doc.get("custom_fields", []) if cf["field"] not in managed_fields
+    ]
     payload: dict = {
         "content": full_text,
         "custom_fields": existing_cf + [{"field": custom_field_id, "value": today}],
@@ -544,42 +657,62 @@ async def process_document(
     ai_date = meta.get("date")
     if ai_date:
         try:
-            parsed = datetime.strptime(str(ai_date), "%Y-%m-%d").date()
+            parsed = datetime.fromisoformat(str(ai_date)).date()
             if date(1900, 1, 1) <= parsed <= date.today():
-                payload["created_date"] = ai_date
+                payload["created_date"] = parsed.isoformat()
             else:
-                log.warning("Document %d: AI date '%s' out of range, skipping", doc_id, ai_date)
+                log.warning(
+                    "Document %d: AI date '%s' out of range, skipping", doc_id, ai_date
+                )
         except ValueError:
-            log.warning("Document %d: invalid AI date format '%s', skipping", doc_id, ai_date)
+            log.warning(
+                "Document %d: invalid AI date format '%s', skipping", doc_id, ai_date
+            )
 
     ai_correspondent = meta.get("correspondent")
     if ai_correspondent:
         try:
-            log.info("Document %d: looking up correspondent '%s'", doc_id, ai_correspondent)
-            correspondent_id = client.find_or_create_correspondent(str(ai_correspondent).strip())
+            log.info(
+                "Document %d: looking up correspondent '%s'", doc_id, ai_correspondent
+            )
+            correspondent_id = client.find_or_create_correspondent(
+                str(ai_correspondent).strip()
+            )
             payload["correspondent"] = correspondent_id
             log.info("Document %d: correspondent id=%d", doc_id, correspondent_id)
         except Exception as e:
             log.warning("Document %d: correspondent lookup failed: %s", doc_id, e)
     else:
-        log.info("Document %d: skipping correspondent (ai=%r, existing=%r)", doc_id, ai_correspondent, doc.get("correspondent"))
+        log.info(
+            "Document %d: skipping correspondent (ai=%r, existing=%r)",
+            doc_id,
+            ai_correspondent,
+            doc.get("correspondent"),
+        )
 
-    ai_result = json.dumps({
-        "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-        "elapsed_s": round(time.time() - t_start, 1),
-        "OCR_MODEL": OCR_MODEL,
-        "OCR_API_BASE": OCR_API_BASE,
-        "METADATA_MODEL": METADATA_MODEL,
-        "METADATA_API_BASE": METADATA_API_BASE,
-        "pages": len(images),
-        "chars": len(full_text),
-        "paperless_version": client.paperless_version,
-        "ai_metadata": meta,
-    }, ensure_ascii=False)
+    ai_result = json.dumps(
+        {
+            "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "elapsed_s": round(time.time() - t_start, 1),
+            "OCR_MODEL": OCR_MODEL,
+            "OCR_API_BASE": OCR_API_BASE,
+            "METADATA_MODEL": METADATA_MODEL,
+            "METADATA_API_BASE": METADATA_API_BASE,
+            "pages": num_pages,
+            "chars": len(full_text),
+            "paperless_version": client.paperless_version,
+            "ai_metadata": meta,
+        },
+        ensure_ascii=False,
+    )
     payload["custom_fields"].append({"field": ai_result_field_id, "value": ai_result})
 
     if dry_run:
-        log.info("Document %d: [dry-run] would PATCH fields: %s", doc_id, sorted(payload.keys()))
+        log.info(
+            "Document %d: [dry-run] would PATCH fields: %s",
+            doc_id,
+            sorted(payload.keys()),
+        )
         log.info("Document %d: [dry-run] would remove tag %d", doc_id, pending_id)
         return True
 
@@ -600,6 +733,7 @@ async def process_document(
 # Batch runner
 # ---------------------------------------------------------------------------
 
+
 async def run_batch(
     client: PaperlessClient,
     pending_id: int,
@@ -608,18 +742,24 @@ async def run_batch(
     dry_run: bool,
 ) -> tuple[int, int]:
     """Process all pending documents. Returns (success_count, failure_count)."""
-    docs = client.list_pending_documents(pending_id)
-    if not docs:
+    total = client.count_pending_documents(pending_id)
+    if total == 0:
         log.info("No documents tagged '%s'", TAG_PENDING)
         return 0, 0
 
-    log.info("Found %d document(s) to process", len(docs))
+    log.info("Found %d document(s) to process", total)
     success, failure = 0, 0
-    for doc in docs:
+    for doc in client.iter_pending_documents(pending_id):
         if _shutdown_requested:
-            log.info("Shutdown requested — stopping batch after %d/%d documents", success + failure, len(docs))
+            log.info(
+                "Shutdown requested — stopping batch after %d/%d documents",
+                success + failure,
+                total,
+            )
             break
-        ok = await process_document(doc, client, pending_id, custom_field_id, ai_result_field_id, dry_run)
+        ok = await process_document(
+            doc, client, pending_id, custom_field_id, ai_result_field_id, dry_run
+        )
         if ok:
             success += 1
         else:
@@ -657,7 +797,9 @@ def purge_ai_notes(client: PaperlessClient, dry_run: bool) -> None:
                     log.info("Document %d: deleted note %d", doc_id, note_id)
                     deleted += 1
                 except Exception as e:
-                    log.warning("Document %d: could not delete note %d: %s", doc_id, note_id, e)
+                    log.warning(
+                        "Document %d: could not delete note %d: %s", doc_id, note_id, e
+                    )
     log.info("Done. %d note(s) deleted.", deleted)
 
 
@@ -674,7 +816,11 @@ async def main_async(args: argparse.Namespace) -> None:
         log.info("DRY RUN mode — no documents will be modified")
 
     log.info("Paperless URL: %s", PAPERLESS_URL)
-    log.info("OCR model: %s%s", OCR_MODEL, f" (api_base={OCR_API_BASE})" if OCR_API_BASE else "")
+    log.info(
+        "OCR model: %s%s",
+        OCR_MODEL,
+        f" (api_base={OCR_API_BASE})" if OCR_API_BASE else "",
+    )
     log.info(
         "Metadata model: %s%s",
         METADATA_MODEL,
@@ -685,9 +831,12 @@ async def main_async(args: argparse.Namespace) -> None:
         # Verify Paperless connectivity — fatal if unreachable.
         log.info("Checking Paperless API connectivity...")
         try:
-            r = client._client.get("/api/")
-            r.raise_for_status()
-            log.info("Paperless API reachable (version: %s)", r.headers.get("x-version", "unknown"))
+            r = client._client.get("/api/", follow_redirects=True)
+            _raise_for_status(r)
+            log.info(
+                "Paperless API reachable (version: %s)",
+                r.headers.get("x-version", "unknown"),
+            )
         except Exception as e:
             log.error("Cannot reach Paperless API at %s: %s", PAPERLESS_URL, e)
             sys.exit(1)
@@ -705,7 +854,9 @@ async def main_async(args: argparse.Namespace) -> None:
             await litellm.acompletion(**_kwargs)
             log.info("LLM connectivity OK")
         except Exception as e:
-            log.warning("LLM connectivity check failed: %s — will retry during processing", e)
+            log.warning(
+                "LLM connectivity check failed: %s — will retry during processing", e
+            )
 
         if args.purge_notes:
             purge_ai_notes(client, dry_run)
@@ -719,16 +870,27 @@ async def main_async(args: argparse.Namespace) -> None:
             sys.exit(1)
 
         try:
-            custom_field_id = client.get_or_create_custom_field("ai_processed", data_type="date")
-            ai_result_field_id = client.get_or_create_custom_field("ai_result", data_type="longtext")
+            custom_field_id = client.get_or_create_custom_field(
+                "ai_processed", data_type="date"
+            )
+            ai_result_field_id = client.get_or_create_custom_field(
+                "ai_result", data_type="longtext"
+            )
         except Exception as e:
             log.error("Failed to resolve custom field: %s", e)
             sys.exit(1)
 
-        log.info("Tag ID: pending=%d | custom fields: ai_processed=%d ai_result=%d", pending_id, custom_field_id, ai_result_field_id)
+        log.info(
+            "Tag ID: pending=%d | custom fields: ai_processed=%d ai_result=%d",
+            pending_id,
+            custom_field_id,
+            ai_result_field_id,
+        )
 
         if args.once:
-            success, failure = await run_batch(client, pending_id, custom_field_id, ai_result_field_id, dry_run)
+            success, failure = await run_batch(
+                client, pending_id, custom_field_id, ai_result_field_id, dry_run
+            )
             _write_heartbeat()
             log.info("Done. Success: %d, Failed: %d", success, failure)
         else:
@@ -736,18 +898,28 @@ async def main_async(args: argparse.Namespace) -> None:
 
             def _request_shutdown(signum: int, frame: object) -> None:
                 global _shutdown_requested
-                log.info("Received %s — will stop after current document completes", signal.Signals(signum).name)
+                log.info(
+                    "Received %s — will stop after current document completes",
+                    signal.Signals(signum).name,
+                )
                 _shutdown_requested = True
 
             signal.signal(signal.SIGTERM, _request_shutdown)
             signal.signal(signal.SIGINT, _request_shutdown)
 
-            log.info("Watch mode: polling every %ds (SIGTERM/Ctrl+C to stop gracefully)", POLL_INTERVAL)
+            log.info(
+                "Watch mode: polling every %ds (SIGTERM/Ctrl+C to stop gracefully)",
+                POLL_INTERVAL,
+            )
             while not _shutdown_requested:
                 try:
-                    success, failure = await run_batch(client, pending_id, custom_field_id, ai_result_field_id, dry_run)
+                    success, failure = await run_batch(
+                        client, pending_id, custom_field_id, ai_result_field_id, dry_run
+                    )
                     if success or failure:
-                        log.info("Batch done. Success: %d, Failed: %d", success, failure)
+                        log.info(
+                            "Batch done. Success: %d, Failed: %d", success, failure
+                        )
                 except Exception as e:
                     log.error("Batch error: %s", e)
                 _write_heartbeat()

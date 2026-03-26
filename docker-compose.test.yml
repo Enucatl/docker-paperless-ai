@@ -1,0 +1,58 @@
+# docker-compose.test.yml — E2E test override for paperless-ai.
+#
+# Usage (via run_tests.sh):
+#   docker compose -f docker-compose.yml -f docker-compose.test.yml ...
+#
+# Ephemeral strategy:
+#   - db and broker use tmpfs (RAM-disk) — disappears the instant the container stops,
+#     no named volumes to clean up even if the script is Ctrl+C'd.
+#   - webserver uses anonymous volumes — Docker auto-creates and auto-wipes them on
+#     `docker compose down -v`.
+#   - No volumes: block needed because no named volumes are created.
+#   - Dummy LLM keys prevent real API calls even if a mock is accidentally skipped.
+
+services:
+  db:
+    # RAM-disk: lightning-fast Django migrations, zero disk residue.
+    tmpfs:
+      - /var/lib/postgresql/data:mode=777,uid=999,gid=999
+
+  broker:
+    tmpfs:
+      - /data
+
+  webserver:
+    # Anonymous volumes — Docker auto-wipes them on `down -v`.
+    volumes:
+      - /usr/src/paperless/data
+      - /usr/src/paperless/media
+      - /usr/src/paperless/export
+      - /usr/src/paperless/consume
+    environment:
+      # Auto-create the admin user on first boot (idempotent on subsequent boots).
+      - PAPERLESS_ADMIN_USER=admin
+      - PAPERLESS_ADMIN_PASSWORD=admin
+      - PAPERLESS_ADMIN_MAIL=admin@localhost
+      - PAPERLESS_SECRET_KEY=test-secret-key-not-for-production
+      - PAPERLESS_URL=http://webserver:8000
+      - PAPERLESS_OCR_LANGUAGE=eng
+
+  ai:
+    # Override entrypoint+command to install test deps then run pytest.
+    entrypoint: []
+    command: >
+      bash -c "uv pip install --system -e .[test] && pytest -v /app/tests/"
+    environment:
+      - PAPERLESS_URL=http://webserver:8000
+      # Dummy keys guarantee no real LLM API calls even if a mock is misconfigured.
+      - GOOGLE_API_KEY=dummy-test-key
+      - ANTHROPIC_API_KEY=dummy-test-key
+      - OPENAI_API_KEY=dummy-test-key
+      - OCR_MODEL=gemini/gemini-2.5-flash
+      # Used by conftest.py to fetch an ephemeral API token at test startup.
+      - TEST_PAPERLESS_USER=admin
+      - TEST_PAPERLESS_PASS=admin
+    # secrets: [] moved to override if needed, but not needed in tests
+    depends_on:
+      webserver:
+        condition: service_healthy

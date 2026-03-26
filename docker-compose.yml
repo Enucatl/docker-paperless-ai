@@ -2,8 +2,6 @@ services:
   broker:
     image: docker.io/library/redis:8
     restart: unless-stopped
-    volumes:
-      - redisdata:/data
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 15s
@@ -15,8 +13,6 @@ services:
   db:
     image: docker.io/library/postgres:17
     restart: unless-stopped
-    volumes:
-      - pgdata:/var/lib/postgresql/data
     environment:
       - POSTGRES_DB=paperless
       - POSTGRES_USER=paperless
@@ -49,12 +45,7 @@ services:
       interval: 120s
       timeout: 10s
       retries: 5
-    volumes:
-      - data:/usr/src/paperless/data
-      - media:/usr/src/paperless/media
-      - export:/usr/src/paperless/export
-      - /opt/paperless-consume:/usr/src/paperless/consume
-      - /etc/ssl/certs/ca-certificates.crt:/usr/src/paperless/data/ca-certificates.crt:ro
+    volumes: [] # overridden in docker-compose.override.yml and docker-compose.test.yml
     environment:
       - PAPERLESS_SECRET_KEY
       - PAPERLESS_DBPASS
@@ -74,17 +65,6 @@ services:
       - PAPERLESS_EMAIL_CERTIFICATE_LOCATION=/usr/src/paperless/data/ca-certificates.crt
     networks:
       - internal
-      - traefik_proxy
-    labels:
-      - "checkmk_monitor=true"
-      - "traefik.enable=true"
-      - "traefik.http.routers.paperless.rule=Host(`paperless.${DOCKER_DOMAIN}`)"
-      - "traefik.http.routers.paperless.entrypoints=https"
-      - "traefik.http.routers.paperless.middlewares=authelia@docker,secured@file"
-      - "traefik.http.routers.paperless.tls=true"
-      - "traefik.http.routers.paperless.service=paperless"
-      - "traefik.http.services.paperless.loadbalancer.server.port=8000"
-      - "traefik.docker.network=traefik_proxy"
 
   gotenberg:
     image: docker.io/gotenberg/gotenberg:8.25
@@ -101,6 +81,17 @@ services:
   tika:
     image: docker.io/apache/tika:latest
     restart: unless-stopped
+    networks:
+      - internal
+
+  # Local observability & evaluation platform (Arize Phoenix).
+  # UI: http://localhost:6006  — traces, costs, and eval results.
+  phoenix:
+    image: arizephoenix/phoenix:latest
+    restart: unless-stopped
+    ports:
+      - "6006:6006"
+      - "4318:4318"
     networks:
       - internal
 
@@ -134,8 +125,7 @@ services:
       timeout: 5s
       retries: 3
       start_period: 120s
-    secrets:
-      - paperless_token
+    # secrets: [paperless_token] moved to override
     environment:
       # Paperless connection (required)
       - PAPERLESS_URL=http://webserver:8000
@@ -178,6 +168,10 @@ services:
       - OCR_CONCURRENCY
       - LLM_RETRIES
       # - DRY_RUN=false
+
+      # OpenTelemetry → Arize Phoenix (local, no external data sent)
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://phoenix:4318/v1/traces
+      - PHOENIX_CLIENT_HEADERS=api_key=local
     volumes:
       # Edit prompts to tune OCR/metadata instructions without rebuilding.
       - ./ai/prompt.txt:/app/prompt.txt:ro
@@ -186,24 +180,7 @@ services:
       - internal
 
 
-volumes:
-  data:
-    external: true
-    name: paperless-ai_data
-  media:
-    external: true
-    name: paperless-ai_media
-  export:
-  pgdata:
-  redisdata:
-
-secrets:
-  paperless_token:
-    file: ./secrets/paperless_token.txt
-
 networks:
-  traefik_proxy:
-    external: true
   internal:
     enable_ipv6: true
     ipam:

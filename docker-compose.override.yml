@@ -1,0 +1,51 @@
+services:
+  broker:
+    volumes:
+      - redisdata:/data
+
+  db:
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+  webserver:
+    networks:
+      - traefik_proxy
+    volumes:
+      - data:/usr/src/paperless/data
+      - media:/usr/src/paperless/media
+      - export:/usr/src/paperless/export
+      - /opt/paperless-consume:/usr/src/paperless/consume
+      - /etc/ssl/certs/ca-certificates.crt:/usr/src/paperless/data/ca-certificates.crt:ro
+    labels:
+      - "checkmk_monitor=true"
+      - "traefik.enable=true"
+      - "traefik.http.routers.paperless.rule=Host(`paperless.${DOCKER_DOMAIN}`)"
+      - "traefik.http.routers.paperless.entrypoints=https"
+      - "traefik.http.routers.paperless.middlewares=authelia@docker,secured@file"
+      - "traefik.http.routers.paperless.tls=true"
+      - "traefik.http.routers.paperless.service=paperless"
+      - "traefik.http.services.paperless.loadbalancer.server.port=8000"
+      - "traefik.docker.network=traefik_proxy"
+
+  ai:
+    secrets:
+      - paperless_token
+
+volumes:
+  data:
+    external: true
+    name: paperless-ai_data
+  media:
+    external: true
+    name: paperless-ai_media
+  export:
+  pgdata:
+  redisdata:
+
+secrets:
+  paperless_token:
+    file: ./secrets/paperless_token.txt
+
+networks:
+  traefik_proxy:
+    external: true

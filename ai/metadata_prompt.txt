@@ -1,1 +1,1 @@
-{"oneline_short_summary": "string", "document_date": "date-time", "corresponding_institution_or_individual": "string"}
+{"oneline_short_summary": "string", "document_date": "date-time", "correspondent_institution_or_individual": "string"}

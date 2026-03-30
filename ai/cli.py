@@ -128,7 +128,7 @@ async def main_async(args: argparse.Namespace) -> None:
         if args.eval:
             agent = _build_agent(config)
             from eval.run_evals import run_evals
-            await run_evals(agent, config)
+            await run_evals(agent, config, split=args.split)
             return
 
         log.info("Resolving tag: '%s'", config.tag_pending)
@@ -220,6 +220,12 @@ def main() -> None:
         "--eval",
         action="store_true",
         help="Run offline evaluation against eval/golden_dataset.json",
+    )
+    parser.add_argument(
+        "--split",
+        choices=["test", "validation", "all"],
+        default="test",
+        help="Dataset split to evaluate (default: test)",
     )
     parser.add_argument(
         "--dry-run",

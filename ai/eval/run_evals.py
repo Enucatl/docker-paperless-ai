@@ -22,8 +22,14 @@ GOLDEN_DATASET_PATH = Path(__file__).parent / "golden_dataset.json"
 EXPERIMENTS_YAML_PATH = Path(__file__).parent / "experiments.yaml"
 
 
-async def run_scientific_evaluation(config: AgentConfig) -> None:
-    """Run a parameter sweep across configurations defined in experiments.yaml."""
+async def run_scientific_evaluation(config: AgentConfig, split: str = "test") -> None:
+    """
+    Run a parameter sweep across configurations defined in experiments.yaml.
+
+    Args:
+        config: Agent configuration
+        split: Dataset split to evaluate ("test", "validation", or "all")
+    """
     try:
         import pandas as pd
         import phoenix as px
@@ -66,6 +72,8 @@ async def run_scientific_evaluation(config: AgentConfig) -> None:
     log.info("Starting scientific evaluation with %d experiments from YAML", len(experiments))
     from agents.smart_graph_agent import SmartDocumentAgent
     from core.telemetry import setup_telemetry
+    from eval.metrics import score_correspondent, score_date, score_title, aggregate_scores
+    from phoenix.evals import ExactMatchEvaluator, RougeScoreEvaluator
 
     setup_telemetry()
     tracer = trace.get_tracer(__name__)
@@ -88,6 +96,11 @@ async def run_scientific_evaluation(config: AgentConfig) -> None:
             span.set_attribute("llm.reasoning_effort", exp_config.ocr_reasoning_effort or "none")
 
             for entry in entries:
+                # Filter by split
+                entry_split = entry.get("split", "test")
+                if split != "all" and entry_split != split:
+                    continue
+
                 file_path = entry["file_path"]
                 if not Path(file_path).exists():
                     continue
@@ -97,12 +110,17 @@ async def run_scientific_evaluation(config: AgentConfig) -> None:
                     result = await agent.process(file_path, existing_hints={})
                     rows.append({
                         "file_path": file_path,
+                        "original_key": entry.get("original_key"),
                         "expected_correspondent": entry.get("expected_correspondent"),
                         "actual_correspondent": result.metadata.correspondent,
                         "expected_date": entry.get("expected_date"),
                         "actual_date": result.metadata.document_date,
+                        "expected_title_contains": entry.get("expected_title_contains"),
+                        "actual_title": result.metadata.title,
                         "expected_ocr_transcript": entry.get("expected_ocr_transcript"),
                         "actual_ocr_transcript": result.metadata.full_ocr_transcript,
+                        "_verified_null_correspondent": entry.get("_verified_null_correspondent", False),
+                        "_verified_null_date": entry.get("_verified_null_date", False),
                     })
                 except Exception as e:
                     log.error("  Failed %s: %s", file_path, e)
@@ -111,23 +129,48 @@ async def run_scientific_evaluation(config: AgentConfig) -> None:
             continue
 
         df = pd.DataFrame(rows)
-        
-        # Run evaluators
-        from phoenix.evals import ExactMatchEvaluator, RougeScoreEvaluator
-        
+
+        # Compute custom metrics
+        row_scores = []
+        for _, row in df.iterrows():
+            corr_score = score_correspondent(row["expected_correspondent"], row["actual_correspondent"])
+            date_score = score_date(row["expected_date"], row["actual_date"])
+            title_score = score_title(row.get("expected_title_contains"), row.get("actual_title"))
+            combined = {**corr_score, **date_score, **title_score}
+            row_scores.append(combined)
+
+        scores_df = pd.DataFrame(row_scores)
+        df = pd.concat([df, scores_df], axis=1)
+
+        # Aggregate scores
+        agg = aggregate_scores(row_scores)
+        log.info(
+            "  Correspondent: exact=%.1f%% fuzzy=%.2f | "
+            "Date: exact=%.1f%% partial=%.2f | "
+            "Title: %.1f%% | Null: precision=%.1f%% recall=%.1f%%",
+            agg.get("correspondent_exact_accuracy", 0) * 100,
+            agg.get("correspondent_fuzzy_mean", 0),
+            agg.get("date_exact_accuracy", 0) * 100,
+            agg.get("date_partial_mean", 0),
+            agg.get("title_contains_rate", 0) * 100 if agg.get("title_contains_rate") else 0,
+            agg.get("null_precision", 0) * 100 if agg.get("null_precision") else 0,
+            agg.get("null_recall", 0) * 100 if agg.get("null_recall") else 0,
+        )
+
+        # Run Phoenix evaluators (keep for backwards compatibility)
         corr_evaluator = ExactMatchEvaluator()
         ocr_evaluator = RougeScoreEvaluator()
-        
+
         # Grade correspondent
         corr_results = px_run_evals(
             dataframe=df,
             evaluators=[corr_evaluator],
             provide_explanation=False,
-            input_col="file_path", 
+            input_col="file_path",
             output_col="actual_correspondent",
             label_col="expected_correspondent"
         )
-        
+
         # Grade OCR transcript (if available in ground truth)
         ocr_results = None
         if "expected_ocr_transcript" in df.columns and not df["expected_ocr_transcript"].isna().all():
@@ -168,6 +211,13 @@ async def run_scientific_evaluation(config: AgentConfig) -> None:
     log.info("\nAll experiments complete! View results at http://localhost:6006")
 
 
-async def run_evals(agent, config) -> None:
-    """Wrapper to maintain CLI compatibility while enabling scientific mode."""
-    await run_scientific_evaluation(config)
+async def run_evals(agent, config, split: str = "test") -> None:
+    """
+    Wrapper to maintain CLI compatibility while enabling scientific mode.
+
+    Args:
+        agent: Document processing agent (unused but kept for CLI compat)
+        config: Agent configuration
+        split: Dataset split to evaluate ("test", "validation", or "all")
+    """
+    await run_scientific_evaluation(config, split=split)

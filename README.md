@@ -35,13 +35,31 @@ The worker runs permanently alongside paperless and idles when no documents are 
 ```
 docker-paperless-ai/
 ├── ai/
-│   ├── batch.py              # AI worker service
+│   ├── cli.py                      # Entry point (--once, --eval, --dry-run, …)
 │   ├── Dockerfile
-│   ├── requirements.txt
-│   ├── prompt.txt            # OCR instruction prompt (edit without rebuild)
-│   └── metadata_prompt.txt   # Metadata extraction prompt (edit without rebuild)
-├── docker-compose.yml        # Full server stack (paperless + AI worker)
-└── .env.example              # All environment variables documented
+│   ├── pyproject.toml
+│   ├── prompt.txt                  # OCR instruction prompt (edit without rebuild)
+│   ├── metadata_prompt.txt         # Metadata extraction prompt (edit without rebuild)
+│   ├── agents/
+│   │   ├── smart_graph_agent.py    # LangGraph-based vision OCR + metadata agent
+│   │   └── base.py                 # AgentResult / DocumentMetadata types
+│   ├── core/
+│   │   ├── config.py               # AgentConfig — all settings from env vars
+│   │   ├── paperless.py            # Paperless REST API client
+│   │   ├── runner.py               # Poll-and-process loop
+│   │   └── telemetry.py            # OpenTelemetry → Arize Phoenix
+│   ├── eval/
+│   │   ├── golden_dataset.json     # Ground truth for 50 IDL documents
+│   │   ├── experiments.yaml        # Experiment configurations to compare
+│   │   ├── run_evals.py            # Evaluation runner (called by --eval)
+│   │   ├── metrics.py              # Scoring functions (fuzzy match, date distance, …)
+│   │   ├── review_ground_truth.py  # Interactive annotation script
+│   │   └── assign_splits.py        # One-time train/validation split assignment
+│   └── tests/
+│       ├── test_metrics.py         # Unit tests for scoring functions
+│       └── test_evaluator.py       # Unit tests for evaluation runner
+├── docker-compose.yml              # Full server stack (paperless + AI worker)
+└── .env.example                    # All environment variables documented
 ```
 
 ## Setup
@@ -200,3 +218,98 @@ On first run the worker creates a custom field **`ai_processed`** (type: Date) a
 Re-add the `ai-review-pending` tag and the worker will pick it up on the next poll. The service re-downloads the original and reprocesses, overwriting the previous content, title, and date.
 
 To revert to Tesseract permanently, trigger a reprocess from the paperless UI (More → Reprocess document).
+
+---
+
+## Testing and evaluation
+
+### Unit tests
+
+Run the full test suite inside the container:
+
+```bash
+docker compose run --rm --entrypoint uv ai run pytest tests/
+```
+
+Tests do not require a running Paperless or Phoenix instance — all external calls are mocked.
+
+### Evaluation framework
+
+The `ai/eval/` directory contains a golden dataset of 50 scanned documents (from the [IDL dataset](https://huggingface.co/datasets/aharley/rvl-cdip)) with ground-truth title, correspondent, and date annotations.
+
+#### Ground truth annotation
+
+Before running evaluations for the first time, annotate the golden dataset with the interactive review script. It runs the full agent pipeline on each document and prompts you to confirm or correct the proposed values:
+
+```bash
+docker compose run --rm --entrypoint python ai eval/review_ground_truth.py
+```
+
+For each document the script shows the OCR transcript and proposed title, correspondent, and date. Type `y` to accept, `n` to mark as genuinely null, `s` to skip, or enter a custom value.
+
+Progress is saved after each document, so you can interrupt and resume at any time.
+
+#### Train / validation split
+
+After annotation, assign the train/validation split (one-time, deterministic):
+
+```bash
+docker compose run --rm --entrypoint python ai eval/assign_splits.py
+```
+
+This writes a `"split": "test" | "validation"` field to each entry in `golden_dataset.json`. Ten representative documents are held out as a validation set for prompt tuning and hyperparameter search; the remaining ~40 are the test set.
+
+#### Running evaluations
+
+Evaluations run all experiments defined in `ai/eval/experiments.yaml` and report metrics for each. Results are also logged to Arize Phoenix (`http://localhost:6006`).
+
+```bash
+# Run against the test set (default)
+docker compose run --rm ai --eval
+
+# Run against the held-out validation set
+docker compose run --rm ai --eval --split validation
+
+# Run against all documents
+docker compose run --rm ai --eval --split all
+```
+
+#### Metrics
+
+Each evaluation run reports per-experiment:
+
+| Metric | Description |
+|---|---|
+| `correspondent_exact_accuracy` | Exact match after case-normalisation and suffix removal (Inc., AG, …) |
+| `correspondent_fuzzy_mean` | Token-sort fuzzy score — robust to word reordering |
+| `date_exact_accuracy` | Exact ISO date match |
+| `date_partial_mean` | Partial credit: linear decay from 1.0 (exact) to 0.0 (≥ 1 year off) |
+| `null_precision` / `null_recall` | Precision/recall for documents where no correspondent exists |
+| `title_contains_rate` | Fraction where actual title contains the expected keyword |
+
+A comparison table is printed at the end of each run:
+
+```
+=== Experiment Comparison ===
+  baseline-flash:  corr_exact=65.0%  corr_fuzzy=0.82  date_exact=72.0%  date_partial=0.89
+  creative-flash:  corr_exact=60.0%  corr_fuzzy=0.79  date_exact=68.0%  date_partial=0.85
+```
+
+#### Adding experiments
+
+Edit `ai/eval/experiments.yaml` — no rebuild required. Any `AgentConfig` field can be overridden per experiment:
+
+```yaml
+experiments:
+  - name: "baseline-flash"
+    ocr_model: "gemini/gemini-2.5-flash"
+    metadata_model: "gemini/gemini-2.5-flash"
+    temperature: 0.0
+
+  - name: "local-nuextract"
+    ocr_model: "openai/Nanonets-OCR2-3B"
+    ocr_api_base: "http://workstation:8100/v1"
+    metadata_model: "openai/numind/NuExtract-2.0-4B"
+    metadata_api_base: "http://workstation:8101/v1"
+    temperature: 0.0
+```

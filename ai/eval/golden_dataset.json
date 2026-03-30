@@ -2,18 +2,6 @@
   "description": "Ground-truth dataset for offline agent evaluation. Each entry maps a local PDF path to its expected metadata. Run: python cli.py --eval",
   "entries": [
     {
-      "file_path": "/data/eval/invoice_siemens_2024.pdf",
-      "expected_correspondent": "Siemens AG",
-      "expected_date": "2024-03-15",
-      "expected_title_contains": "Rechnung"
-    },
-    {
-      "file_path": "/data/eval/bank_statement_deutsche_bank_2025.pdf",
-      "expected_correspondent": "Deutsche Bank AG",
-      "expected_date": "2025-02-28",
-      "expected_title_contains": "Kontoauszug"
-    },
-    {
       "file_path": "/app/eval/data/idl/klpb0135.pdf",
       "expected_correspondent": "Brown & Williamson Tobacco Corporation",
       "expected_date": "1983-01-13",

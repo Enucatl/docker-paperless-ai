@@ -30,6 +30,8 @@ services:
   ai:
     secrets:
       - paperless_token
+    volumes:
+      - ./ai/eval:/app/eval
 
 volumes:
   data:

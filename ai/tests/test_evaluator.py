@@ -159,7 +159,7 @@ async def test_run_evals_grades_correct_prediction(tmp_path):
 
 @pytest.mark.asyncio
 async def test_run_evals_handles_agent_exception(tmp_path):
-    """run_evals should record an error row when the agent raises."""
+    """run_evals should skip entries where the agent raises an exception."""
     from core.config import AgentConfig
 
     try:
@@ -216,8 +216,95 @@ async def test_run_evals_handles_agent_exception(tmp_path):
         ):
             await evals_module.run_evals(_BrokenAgent(), config)
 
-    assert rows_captured, "Expected an error row"
-    row = rows_captured[0]
-    assert row["actual_correspondent"] is None
-    assert "error" in row
-    assert "Simulated agent failure" in row["error"]
+    # When agent raises, no row is added (it's skipped with an error log)
+    assert rows_captured == []
+
+
+@pytest.mark.asyncio
+async def test_run_evals_split_filtering(tmp_path):
+    """run_evals should filter entries by split (test, validation, or all)."""
+    import pandas as pd
+
+    from core.config import AgentConfig
+
+    # Create two PDFs
+    try:
+        import fitz
+        for name in ["test1.pdf", "val1.pdf"]:
+            doc = fitz.open()
+            page = doc.new_page()
+            page.insert_text((72, 700), f"Invoice {name}")
+            buf_path = tmp_path / name
+            doc.save(str(buf_path))
+            doc.close()
+    except Exception:
+        pytest.skip("PyMuPDF not available for this unit test")
+
+    dataset = {
+        "entries": [
+            {
+                "file_path": str(tmp_path / "test1.pdf"),
+                "expected_correspondent": "Acme Corp",
+                "expected_date": "2024-01-15",
+                "split": "test",
+            },
+            {
+                "file_path": str(tmp_path / "val1.pdf"),
+                "expected_correspondent": "Acme Corp",
+                "expected_date": "2024-01-15",
+                "split": "validation",
+            },
+        ]
+    }
+    dataset_path = tmp_path / "golden_dataset.json"
+    dataset_path.write_text(json.dumps(dataset))
+
+    # Create a minimal experiments.yaml
+    experiments = {
+        "experiments": [
+            {"name": "test-exp", "ocr_model": "gpt-4o", "metadata_model": "gpt-4o", "temperature": 0.0}
+        ]
+    }
+    experiments_path = tmp_path / "experiments.yaml"
+    import yaml
+    experiments_path.write_text(yaml.dump(experiments))
+
+    config = AgentConfig(
+        paperless_url="http://localhost:8000",
+        paperless_token="dummy",
+    )
+    agent = _MockAgent(_make_agent_result(correspondent="Acme Corp", date="2024-01-15"))
+
+    import eval.run_evals as evals_module
+
+    rows_captured = []
+
+    real_pd = pd
+
+    def capture_df(rows):
+        rows_captured.extend(rows)
+        return real_pd.DataFrame(rows)
+
+    with patch.object(evals_module, "GOLDEN_DATASET_PATH", dataset_path):
+        with patch.object(evals_module, "EXPERIMENTS_YAML_PATH", experiments_path):
+            mock_phoenix = MagicMock()
+            with (
+                patch.dict("sys.modules", {"phoenix": mock_phoenix, "phoenix.evals": mock_phoenix.evals}),
+                patch("eval.run_evals.pd.DataFrame", side_effect=capture_df),
+            ):
+                # Run with split="test" - should only process test1.pdf
+                rows_captured.clear()
+                await evals_module.run_evals(agent, config, split="test")
+                assert len(rows_captured) == 1
+                assert "test1.pdf" in rows_captured[0]["file_path"]
+
+                # Run with split="validation" - should only process val1.pdf
+                rows_captured.clear()
+                await evals_module.run_evals(agent, config, split="validation")
+                assert len(rows_captured) == 1
+                assert "val1.pdf" in rows_captured[0]["file_path"]
+
+                # Run with split="all" - should process both
+                rows_captured.clear()
+                await evals_module.run_evals(agent, config, split="all")
+                assert len(rows_captured) == 2

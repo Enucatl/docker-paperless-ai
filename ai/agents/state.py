@@ -25,3 +25,7 @@ class AgentState(TypedDict):
 
     # Accumulated across loop iterations — LangGraph concatenates via operator.add
     extracted_text_chunks: Annotated[list[str], operator.add]
+
+    # Written by extract_metadata node; read back in SmartDocumentAgent.process()
+    _extracted_metadata: dict
+    _full_text: str

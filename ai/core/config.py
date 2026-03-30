@@ -40,12 +40,18 @@ Do not invent information; if uncertain, use null.
 
 
 def _read_secret(env_var: str) -> str | None:
-    """Read env var, or if FOO_FILE is set, read its content from that file."""
+    """Read env var, or if FOO_FILE is set, read its content from that file.
+
+    Gracefully handles missing or inaccessible secret files (e.g., not in Docker Swarm).
+    """
     file_path = os.environ.get(f"{env_var}_FILE")
     if file_path:
         p = Path(file_path)
-        if p.is_file():
-            return p.read_text().strip()
+        try:
+            if p.is_file():
+                return p.read_text().strip()
+        except (PermissionError, FileNotFoundError):
+            pass  # Secret file not available (not in Swarm mode)
     return os.environ.get(env_var)
 
 

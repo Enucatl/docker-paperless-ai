@@ -24,15 +24,15 @@ experiments:
   #   jury:
   #     - model: "gemini/gemini-2.5-flash-lite"
 
-  - name: "gemini-3.1"
-    agent_class: "agents.smart_graph_agent.SmartDocumentAgent"
-    ocr_model: "gemini/gemini-3.1-flash-lite-preview"
-    metadata_model: "gemini/gemini-3.1-flash-lite-preview"
-    temperature: 1
-    ocr_reasoning_effort: "minimal"
-    metadata_reasoning_effort: "minimal"
-    jury:
-      - model: "gemini/gemini-2.5-flash-lite"
+  # - name: "gemini-3.1"
+  #   agent_class: "agents.smart_graph_agent.SmartDocumentAgent"
+  #   ocr_model: "gemini/gemini-3.1-flash-lite-preview"
+  #   metadata_model: "gemini/gemini-3.1-flash-lite-preview"
+  #   temperature: 1
+  #   ocr_reasoning_effort: "minimal"
+  #   metadata_reasoning_effort: "minimal"
+  #   jury:
+  #     - model: "gemini/gemini-2.5-flash-lite"
 
   - name: "local"
     agent_class: "agents.smart_graph_agent.SmartDocumentAgent"

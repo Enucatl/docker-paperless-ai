@@ -133,31 +133,28 @@ class BaseExtractionStrategy(ABC):
     def _fallback_parse(self, raw: str) -> dict:
         """Robust fallback parser for handling free-form or incomplete JSON output.
 
-        Attempts multiple strategies to extract valid JSON:
-        1. Try to parse the raw text as-is (clean JSON).
-        2. Search for a JSON object within the text using regex.
-        3. If found, try to parse the extracted object.
-        4. Fall back to loose key mapping from the result.
-        5. Return an empty dict as last resort.
+        For models that produce malformed JSON, extract key-value pairs directly
+        without relying on JSON parsing. Looks for patterns like:
+            "key": "value"
+        and extracts them regardless of surrounding syntax errors.
         """
         try:
             return json.loads(raw)
         except Exception:
             pass
 
-        # Try to extract a JSON object from within the text
-        match = re.search(r"\{.*\}", raw, re.DOTALL)
-        try:
-            return json.loads(match.group() if match else "{}")
-        except Exception:
-            pass
+        # Fallback: extract key-value pairs directly using regex
+        # Pattern: "key_name": value_content (handles string values with trailing commas, etc.)
+        result = {}
+        pattern = r'"([^"]+)"\s*:\s*"([^"]*)(?:"|,|"\s*,)'
+        for match in re.finditer(pattern, raw):
+            key, value = match.groups()
+            result[key] = value
 
-        # Loose parsing: try to extract from raw or regex-matched text
-        try:
-            data = json.loads(match.group() if match else raw)
-            return data
-        except Exception:
-            return {}
+        if result:
+            return result
+
+        return {}
 
     @abstractmethod
     async def extract(self, text: str, config: AgentConfig) -> _ExtractedMetadata:
@@ -222,11 +219,14 @@ class NuExtractStrategy(BaseExtractionStrategy):
     """NuExtract template-based extraction using extra_body."""
 
     # NuExtract template with highly descriptive keys
+    document_title_key = "title_summarizing_subject_clear_concise_descriptive"
+    date_key = "document_date"
+    correspondent_key = "issuing_organization_or_sender"
     _NUEXTRACT_TEMPLATE = json.dumps(
         {
-            "document_title": "string",
-            "document_date": "date-time",
-            "issuing_organization_or_sender": "string",
+            document_title_key: "string",
+            date_key: "date-time",
+            correspondent_key: "string",
         },
         indent=4,
     )
@@ -243,11 +243,7 @@ class NuExtractStrategy(BaseExtractionStrategy):
         kwargs: dict = {
             "model": config.effective_metadata_model,
             "messages": messages,
-            "extra_body": {
-                "chat_template_kwargs": {
-                    "template": template_str
-                }
-            },
+            "extra_body": {"chat_template_kwargs": {"template": template_str}},
             "num_retries": config.llm_retries,
             "temperature": 0,
         }
@@ -262,9 +258,9 @@ class NuExtractStrategy(BaseExtractionStrategy):
         # Parse using fallback chain and map custom keys back to standard schema
         data = self._fallback_parse(raw)
         return _ExtractedMetadata(
-            title=data.get("document_title"),
-            date=data.get("document_date"),
-            correspondent=data.get("issuing_organization_or_sender"),
+            title=data.get(self.document_title_key),
+            date=data.get(self.date_key),
+            correspondent=data.get(self.correspondent_key),
         )
 
 

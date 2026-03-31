@@ -1,31 +1,48 @@
 # ai/eval/experiments.yaml
-# Define the array of configurations you want to test. 
+# Define the array of configurations you want to test.
 # Any field omitted will fall back to the defaults defined in AgentConfig.
+#
+# agent_class is the dotted import path to the agent class to instantiate.
+# Omitting it defaults to "agents.smart_graph_agent.SmartDocumentAgent".
+#
+# llm_judge_model is the model used to evaluate title quality as a single LLM judge.
+# Should be a strong, fixed model independent of the experiment to avoid
+# self-grading bias. Defaults to "gemini/gemini-2.5-flash".
+#
+# jury replaces llm_judge_model with a panel of judges that vote by majority.
+# Each member supports: model (required), api_base, reasoning_effort, temperature.
+# api_base and reasoning_effort are forwarded to LiteLLM as model_kwargs.
+# Ties in an even-sized jury resolve to 0.0 (conservative / "inappropriate").
 experiments:
-  # 1. The Strict Baseline
-  - name: "baseline-flash"
-    ocr_model: "gemini/gemini-2.5-flash"
-    metadata_model: "gemini/gemini-2.5-flash"
+  # - name: "gemini-2.5"
+  #   agent_class: "agents.smart_graph_agent.SmartDocumentAgent"
+  #   ocr_model: "gemini/gemini-2.5-flash-lite"
+  #   metadata_model: "gemini/gemini-2.5-flash-lite"
+  #   temperature: 1.0
+  #   ocr_reasoning_effort: "minimal"
+  #   metadata_reasoning_effort: "minimal"
+  #   jury:
+  #     - model: "gemini/gemini-2.5-flash-lite"
+
+  - name: "gemini-3.1"
+    agent_class: "agents.smart_graph_agent.SmartDocumentAgent"
+    ocr_model: "gemini/gemini-3.1-flash-lite-preview"
+    metadata_model: "gemini/gemini-3.1-flash-lite-preview"
+    temperature: 1
+    ocr_reasoning_effort: "minimal"
+    metadata_reasoning_effort: "minimal"
+    jury:
+      - model: "gemini/gemini-2.5-flash-lite"
+
+  - name: "local"
+    agent_class: "agents.smart_graph_agent.SmartDocumentAgent"
+    # Nanonets-OCR2-3B for vision OCR, served via vLLM on complex.home.arpa:8100.
+    # max-model-len is 16128; cap image dimension to stay within that budget.
+    ocr_model: "openai/nanonets/Nanonets-OCR2-3B"
+    ocr_api_base: "http://complex.home.arpa:8100/v1"
+    ocr_max_image_dimension: 1920
+    metadata_model: "openai/numind/NuExtract-2.0-3B"
+    metadata_api_base: "http://complex.home.arpa:8103/v1"
     temperature: 0.0
-
-  # 2. Testing if a higher temperature helps with complex edge-case correspondents
-  - name: "creative-flash"
-    ocr_model: "gemini/gemini-2.5-flash"
-    metadata_model: "gemini/gemini-2.5-flash"
-    temperature: 0.7
-
-  # 3. Testing OpenAI's new reasoning models
-  # Note: temperature is omitted because o-series models reject it
-  - name: "reasoning-o3"
-    ocr_model: "gpt-4o" 
-    metadata_model: "o3-mini"
-    ocr_reasoning_effort: "high"
-
-  # 4. Testing a fully local pipeline
-  - name: "local-llama-vision"
-    ocr_model: "openai/llava"
-    # Example local base — update if your workstation IP differs
-    ocr_api_base: "http://workstation:11434/v1"
-    metadata_model: "openai/llama3.2"
-    metadata_api_base: "http://workstation:11434/v1"
-    temperature: 0.1
+    jury:
+      - model: "gemini/gemini-2.5-flash-lite"

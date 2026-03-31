@@ -30,6 +30,9 @@ services:
   ai:
     secrets:
       - paperless_token
+      - openai_api_key
+      - anthropic_api_key
+      - google_api_key
     volumes:
       - ./ai/eval:/app/eval
 
@@ -47,6 +50,12 @@ volumes:
 secrets:
   paperless_token:
     file: ./secrets/paperless_token.txt
+  openai_api_key:
+    file: ./secrets/openai_api_key.txt
+  anthropic_api_key:
+    file: ./secrets/anthropic_api_key.txt
+  google_api_key:
+    file: ./secrets/google_api_key.txt
 
 networks:
   traefik_proxy:

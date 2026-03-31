@@ -23,16 +23,16 @@ GOLDEN_DATASET_PATH = Path(__file__).parent / "golden_dataset.json"
 
 # Validation set: 10 entries chosen for diversity
 VALIDATION_KEYS = {
-    "invoice_siemens_2024",  # Manual, German invoice
-    "fklm0254",              # Both-null (tests null handling)
-    "gqhb0141",              # Both-null, second example
-    "hlhj0239",              # Null-date-only (pharma, opioid)
-    "fkhg0105",              # Null-date-only (Lorillard)
-    "grmj0172",              # Complete, non-tobacco (GMR Marketing)
-    "hgcb0104",              # Complete, media/newspaper (USA TODAY)
-    "jmyg0244",              # Complete, recent date, pharma (Covidien)
-    "frvb0205",              # Complete, old date (1976), UK company (BAT)
-    "jjcj0064",              # Complete, individual person (Margaret Yates)
+    "fkff0016",
+    "fklm0254",  # Both-null (tests null handling)
+    "gqhb0141",  # Both-null, second example
+    "hlhj0239",  # Null-date-only (pharma, opioid)
+    "fkhg0105",  # Null-date-only (Lorillard)
+    "grmj0172",  # Complete, non-tobacco (GMR Marketing)
+    "hgcb0104",  # Complete, media/newspaper (USA TODAY)
+    "jmyg0244",  # Complete, recent date, pharma (Covidien)
+    "frvb0205",  # Complete, old date (1976), UK company (BAT)
+    "jjcj0064",  # Complete, individual person (Margaret Yates)
 }
 
 
@@ -75,7 +75,9 @@ def main():
     print(f"\nSaved to {GOLDEN_DATASET_PATH}")
 
     # Verify the expected keys were found
-    found_keys = {e.get("original_key") or Path(e.get("file_path")).stem for e in entries}
+    found_keys = {
+        e.get("original_key") or Path(e.get("file_path")).stem for e in entries
+    }
     not_found = VALIDATION_KEYS - found_keys
     if not_found:
         print(f"\nWarning: validation keys not found: {not_found}")

@@ -7,7 +7,7 @@ and exposes a validated AgentConfig Pydantic model.
 
 import os
 from pathlib import Path
-from typing import Optional
+from typing import List, Optional
 
 import litellm
 from pydantic import BaseModel
@@ -70,6 +70,24 @@ def _load_prompt(path: str) -> str | None:
     return None
 
 
+class JuryMemberConfig(BaseModel):
+    """Configuration for a single judge in the LLM-as-a-jury panel."""
+    model: str
+    # Passed to LiteLLMModel.model_kwargs — covers api_base, reasoning_effort, etc.
+    api_base: Optional[str] = None
+    reasoning_effort: Optional[str] = None
+    temperature: Optional[float] = None
+
+    def to_litellm_model_kwargs(self) -> dict:
+        """Extra kwargs forwarded to litellm.completion via LiteLLMModel.model_kwargs."""
+        kwargs = {}
+        if self.api_base:
+            kwargs["api_base"] = self.api_base
+        if self.reasoning_effort:
+            kwargs["reasoning_effort"] = self.reasoning_effort
+        return kwargs
+
+
 class AgentConfig(BaseModel):
     name: Optional[str] = None  # Friendly name for experiments in Phoenix
     paperless_url: str
@@ -80,6 +98,7 @@ class AgentConfig(BaseModel):
     ocr_api_base: Optional[str] = None
     metadata_api_base: Optional[str] = None
     ocr_reasoning_effort: Optional[str] = "minimal"
+    metadata_reasoning_effort: Optional[str] = None
 
     poll_interval: int = 300
     llm_retries: int = 3
@@ -93,18 +112,48 @@ class AgentConfig(BaseModel):
 
     # Smart agent batch size for memory-safe vision OCR loops
     vision_batch_size: int = 5
+    # Cap the longest image dimension (px) before encoding for vision OCR.
+    # Prevents context-length errors on models with small token budgets.
+    # None = no cap (use full 300 DPI render).
+    ocr_max_image_dimension: Optional[int] = None
+    metadata_max_tokens: int = 1000
+
+    # Dotted import path to the agent class to use in eval experiments.
+    agent_class: str = "agents.smart_graph_agent.SmartDocumentAgent"
+
+    # Model used as LLM judge for title quality evaluation.
+    # Should be a strong, fixed model independent of the experiment being
+    # evaluated to avoid self-grading bias.
+    llm_judge_model: str = "gemini/gemini-2.5-flash"
+
+    # Optional jury of LLM judges for title quality evaluation.
+    # When set, each member votes independently and the final score is
+    # determined by majority vote, which improves alignment with human
+    # judgment compared to a single judge.
+    # If None, falls back to a single judge using llm_judge_model.
+    jury: Optional[List[JuryMemberConfig]] = None
 
     @property
     def effective_metadata_model(self) -> str:
         return self.metadata_model or self.ocr_model
 
-    def get_litellm_kwargs(self) -> dict:
-        """Helper to safely construct hyperparameter kwargs for LiteLLM."""
+    def get_ocr_litellm_kwargs(self) -> dict:
+        """Hyperparameter kwargs for the OCR (vision) LiteLLM call."""
         kwargs = {}
         if self.temperature is not None:
             kwargs["temperature"] = self.temperature
         if self.ocr_reasoning_effort:
             kwargs["reasoning_effort"] = self.ocr_reasoning_effort
+        return kwargs
+
+    def get_metadata_litellm_kwargs(self) -> dict:
+        """Hyperparameter kwargs for the metadata extraction LiteLLM call."""
+        kwargs: dict = {"max_tokens": self.metadata_max_tokens}
+        if self.temperature is not None:
+            kwargs["temperature"] = self.temperature
+        effort = self.metadata_reasoning_effort or self.ocr_reasoning_effort
+        if effort:
+            kwargs["reasoning_effort"] = effort
         return kwargs
 
     @classmethod
@@ -134,4 +183,5 @@ class AgentConfig(BaseModel):
             temperature=temperature,
             ocr_prompt=_load_prompt("/app/prompt.txt") or _OCR_PROMPT_DEFAULT,
             metadata_prompt=_load_prompt("/app/metadata_prompt.txt") or _METADATA_PROMPT_DEFAULT,
+            metadata_max_tokens=int(os.environ.get("METADATA_MAX_TOKENS", "1000")),
         )

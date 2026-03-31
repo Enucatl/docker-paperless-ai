@@ -26,7 +26,7 @@ async def test_full_pipeline_patches_document_correctly(
     Full path: SmartDocumentAgent → native text extraction → metadata extraction
     → Paperless PATCH. Asserts all fields are written and the pending tag removed.
     """
-    from agents.smart_graph_agent import SmartDocumentAgent
+    from agents.smart_graph_agent import SmartDocumentAgent, _select_extraction_strategy
     from core.config import AgentConfig
     from core.runner import run_batch
 
@@ -38,7 +38,8 @@ async def test_full_pipeline_patches_document_correctly(
         ocr_model="gemini/gemini-2.5-flash",
         dry_run=False,
     )
-    agent = SmartDocumentAgent(config)
+
+    agent = SmartDocumentAgent(config, extraction_strategy=_select_extraction_strategy(config))
 
     pending_id = paperless_client.get_tag_id(config.tag_pending, create=True)
     custom_field_id = paperless_client.get_or_create_custom_field(
@@ -94,7 +95,7 @@ async def test_dry_run_does_not_modify_document(
     In dry-run mode, run_batch must return success=1 but leave the document
     completely untouched (tag still present, fields unchanged).
     """
-    from agents.smart_graph_agent import SmartDocumentAgent
+    from agents.smart_graph_agent import SmartDocumentAgent, _select_extraction_strategy
     from core.config import AgentConfig
     from core.runner import run_batch
 
@@ -106,7 +107,8 @@ async def test_dry_run_does_not_modify_document(
         ocr_model="gemini/gemini-2.5-flash",
         dry_run=True,  # ← dry run
     )
-    agent = SmartDocumentAgent(config)
+
+    agent = SmartDocumentAgent(config, extraction_strategy=_select_extraction_strategy(config))
 
     pending_id = paperless_client.get_tag_id(config.tag_pending, create=True)
     custom_field_id = paperless_client.get_or_create_custom_field(

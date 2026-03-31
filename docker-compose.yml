@@ -85,15 +85,23 @@ services:
       - internal
 
   # Local observability & evaluation platform (Arize Phoenix).
-  # UI: http://localhost:6006  — traces, costs, and eval results.
+  # UI: https://phoenix.${DOCKER_DOMAIN}  — traces, costs, and eval results.
   phoenix:
     image: arizephoenix/phoenix:latest
     restart: unless-stopped
-    ports:
-      - "6006:6006"
-      - "4318:4318"
     networks:
       - internal
+      - traefik_proxy
+    labels:
+      - "checkmk_monitor=true"
+      - "traefik.enable=true"
+      - "traefik.docker.network=traefik_proxy"
+      - "traefik.http.routers.phoenix.rule=Host(`phoenix.${DOCKER_DOMAIN}`)"
+      - "traefik.http.routers.phoenix.entrypoints=https"
+      - "traefik.http.routers.phoenix.tls=true"
+      - "traefik.http.routers.phoenix.middlewares=authelia@docker,secured@file"
+      - "traefik.http.routers.phoenix.service=phoenix"
+      - "traefik.http.services.phoenix.loadbalancer.server.port=6006"
 
   # AI batch post-processing — runs permanently alongside paperless.
   # Polls for documents tagged "ai-review-pending", re-OCRs them with a vision
@@ -119,12 +127,6 @@ services:
       context: ./ai
     profiles: [ai]
     restart: unless-stopped
-    healthcheck:
-      test: ["CMD-SHELL", "[ -f /tmp/ai-healthy ] && [ $$(( $(date +%s) - $(cat /tmp/ai-healthy | cut -d. -f1) )) -lt 600 ]"]
-      interval: 60s
-      timeout: 5s
-      retries: 3
-      start_period: 120s
     # secrets: [paperless_token] moved to override
     environment:
       # Paperless connection (required)
@@ -157,9 +159,9 @@ services:
       - ANTHROPIC_API_KEY
       - OPENAI_API_KEY
       # Docker secrets (_FILE variants read the key from a file, safer):
-      # - GOOGLE_API_KEY_FILE=/run/secrets/google_api_key
-      # - ANTHROPIC_API_KEY_FILE=/run/secrets/anthropic_api_key
-      # - OPENAI_API_KEY_FILE=/run/secrets/openai_api_key
+      - GOOGLE_API_KEY_FILE=/run/secrets/google_api_key
+      - ANTHROPIC_API_KEY_FILE=/run/secrets/anthropic_api_key
+      - OPENAI_API_KEY_FILE=/run/secrets/openai_api_key
 
       # Behaviour tuning (all optional)
       - POLL_INTERVAL
@@ -170,7 +172,7 @@ services:
       # - DRY_RUN=false
 
       # OpenTelemetry → Arize Phoenix (local, no external data sent)
-      - OTEL_EXPORTER_OTLP_ENDPOINT=http://phoenix:4318/v1/traces
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://phoenix:6006/v1/traces
       - PHOENIX_CLIENT_HEADERS=api_key=local
     volumes:
       # Edit prompts to tune OCR/metadata instructions without rebuilding.
@@ -185,3 +187,5 @@ networks:
     enable_ipv6: true
     ipam:
       driver: default
+  traefik_proxy:
+    external: true

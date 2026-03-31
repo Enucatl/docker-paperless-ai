@@ -5,301 +5,352 @@
       "file_path": "/app/eval/data/idl/klpb0135.pdf",
       "expected_correspondent": "Brown & Williamson Tobacco Corporation",
       "expected_date": "1983-01-13",
-      "original_key": "klpb0135"
+      "original_key": "klpb0135",
+      "split": "test",
+      "tags": ["code-test"]
     },
     {
       "file_path": "/app/eval/data/idl/hqcx0242.pdf",
       "expected_correspondent": "Mallinckrodt/Covidien Pharmaceuticals",
       "expected_date": "2011-05-04",
-      "original_key": "hqcx0242"
+      "original_key": "hqcx0242",
+      "split": "test"
     },
     {
       "file_path": "/app/eval/data/idl/hlhj0239.pdf",
       "expected_correspondent": "The ER/LA Opioid Analgesic Companies",
       "expected_date": null,
-      "original_key": "hlhj0239"
+      "original_key": "hlhj0239",
+      "split": "validation"
     },
     {
       "file_path": "/app/eval/data/idl/kykb0006.pdf",
       "expected_correspondent": "R.J. Reynolds (RJR)",
       "expected_date": "1995-07-01",
-      "original_key": "kykb0006"
+      "original_key": "kykb0006",
+      "split": "test"
     },
     {
       "file_path": "/app/eval/data/idl/ksdd0025.pdf",
       "expected_correspondent": "Philip Morris U.S.A.",
       "expected_date": "1981-07-31",
-      "original_key": "ksdd0025"
+      "original_key": "ksdd0025",
+      "split": "test"
     },
     {
       "file_path": "/app/eval/data/idl/hrpp0144.pdf",
       "expected_correspondent": "Universitat Mainz",
       "expected_date": null,
-      "original_key": "hrpp0144"
+      "original_key": "hrpp0144",
+      "split": "test"
     },
     {
       "file_path": "/app/eval/data/idl/fklm0254.pdf",
       "expected_correspondent": null,
       "expected_date": null,
-      "original_key": "fklm0254"
+      "original_key": "fklm0254",
+      "split": "validation"
     },
     {
       "file_path": "/app/eval/data/idl/gplk0025.pdf",
       "expected_correspondent": "Philip Morris U.S.A.",
       "expected_date": "1992-05-15",
-      "original_key": "gplk0025"
+      "original_key": "gplk0025",
+      "split": "test"
     },
     {
       "file_path": "/app/eval/data/idl/glvp0169.pdf",
       "expected_correspondent": "Philip Morris U.S.A.",
       "expected_date": "1993-04-14",
-      "original_key": "glvp0169"
+      "original_key": "glvp0169",
+      "split": "test"
     },
     {
       "file_path": "/app/eval/data/idl/grmj0172.pdf",
       "expected_correspondent": "GMR Marketing",
       "expected_date": "1999-07-21",
-      "original_key": "grmj0172"
+      "original_key": "grmj0172",
+      "split": "validation"
     },
     {
       "file_path": "/app/eval/data/idl/htdn0068.pdf",
       "expected_correspondent": "Peter McFadden",
       "expected_date": "1993-02-24",
-      "original_key": "htdn0068"
+      "original_key": "htdn0068",
+      "split": "test"
     },
     {
       "file_path": "/app/eval/data/idl/gplk0093.pdf",
       "expected_correspondent": "RBS Associates",
       "expected_date": "1994-11-02",
-      "original_key": "gplk0093"
+      "original_key": "gplk0093",
+      "split": "test"
     },
     {
       "file_path": "/app/eval/data/idl/fzlk0038.pdf",
       "expected_correspondent": "Knickerbocker Toy Company",
       "expected_date": null,
-      "original_key": "fzlk0038"
+      "original_key": "fzlk0038",
+      "split": "test"
     },
     {
       "file_path": "/app/eval/data/idl/fmbl0060.pdf",
       "expected_correspondent": "Lorillard",
       "expected_date": "1998-10-30",
-      "original_key": "fmbl0060"
+      "original_key": "fmbl0060",
+      "split": "test"
     },
     {
       "file_path": "/app/eval/data/idl/hskv0031.pdf",
       "expected_correspondent": "Philip Morris U.S.A.",
       "expected_date": "1993-01-07",
-      "original_key": "hskv0031"
+      "original_key": "hskv0031",
+      "split": "test"
     },
     {
       "file_path": "/app/eval/data/idl/klyw0086.pdf",
       "expected_correspondent": "Roger Mozingo (RJR)",
       "expected_date": "1995-05-15",
-      "original_key": "klyw0086"
+      "original_key": "klyw0086",
+      "split": "test"
     },
     {
       "file_path": "/app/eval/data/idl/hsgw0178.pdf",
       "expected_correspondent": "Janice Munson",
       "expected_date": "2001-10-24",
-      "original_key": "hsgw0178"
+      "original_key": "hsgw0178",
+      "split": "test"
     },
     {
       "file_path": "/app/eval/data/idl/gsvf0073.pdf",
       "expected_correspondent": "Virginia Slims (Philip Morris)",
       "expected_date": "1999-11-18",
-      "original_key": "gsvf0073"
+      "original_key": "gsvf0073",
+      "split": "test"
     },
     {
       "file_path": "/app/eval/data/idl/hgcb0104.pdf",
       "expected_correspondent": "USA TODAY",
       "expected_date": "1983-10-18",
-      "original_key": "hgcb0104"
+      "original_key": "hgcb0104",
+      "split": "validation"
     },
     {
       "file_path": "/app/eval/data/idl/jmxb0055.pdf",
       "expected_correspondent": "Karen Chaikin (Youth Smoking Prevention)",
       "expected_date": "2001-06-25",
-      "original_key": "jmxb0055"
+      "original_key": "jmxb0055",
+      "split": "test"
     },
     {
       "file_path": "/app/eval/data/idl/fqvp0073.pdf",
       "expected_correspondent": "Time Inc. Magazines",
       "expected_date": "1992-05-04",
-      "original_key": "fqvp0073"
+      "original_key": "fqvp0073",
+      "split": "test"
     },
     {
       "file_path": "/app/eval/data/idl/krcp0137.pdf",
       "expected_correspondent": "The American Tobacco Company",
       "expected_date": "1984-06-18",
-      "original_key": "krcp0137"
+      "original_key": "krcp0137",
+      "split": "test"
     },
     {
       "file_path": "/app/eval/data/idl/hjfy0224.pdf",
       "expected_correspondent": null,
       "expected_date": null,
-      "original_key": "hjfy0224"
+      "original_key": "hjfy0224",
+      "split": "test"
     },
     {
       "file_path": "/app/eval/data/idl/gzww0187.pdf",
       "expected_correspondent": "Bonnie L. Reese (RJR)",
       "expected_date": "1998-09-10",
-      "original_key": "gzww0187"
+      "original_key": "gzww0187",
+      "split": "test"
     },
     {
       "file_path": "/app/eval/data/idl/fmnx0044.pdf",
       "expected_correspondent": "Council For Tobacco Research-U.S.A., Inc.",
       "expected_date": "1990-09-28",
-      "original_key": "fmnx0044"
+      "original_key": "fmnx0044",
+      "split": "test"
     },
     {
       "file_path": "/app/eval/data/idl/kjbn0041.pdf",
       "expected_correspondent": "Douglas H. Sprunt",
       "expected_date": "1971-03-02",
-      "original_key": "kjbn0041"
+      "original_key": "kjbn0041",
+      "split": "test"
     },
     {
       "file_path": "/app/eval/data/idl/ktnp0106.pdf",
       "expected_correspondent": "Philip Morris U.S.A.",
       "expected_date": "1992-10-25",
-      "original_key": "ktnp0106"
+      "original_key": "ktnp0106",
+      "split": "test"
     },
     {
       "file_path": "/app/eval/data/idl/fyfb0144.pdf",
       "expected_correspondent": "Lorillard",
       "expected_date": "1987-08-21",
-      "original_key": "fyfb0144"
+      "original_key": "fyfb0144",
+      "split": "test"
     },
     {
       "file_path": "/app/eval/data/idl/khhf0082.pdf",
       "expected_correspondent": "David (RJR)",
       "expected_date": "1985-01-10",
-      "original_key": "khhf0082"
+      "original_key": "khhf0082",
+      "split": "test"
     },
     {
       "file_path": "/app/eval/data/idl/fqmc0089.pdf",
       "expected_correspondent": "Art West (W-E-S-T)",
       "expected_date": "1995-05-04",
-      "original_key": "fqmc0089"
+      "original_key": "fqmc0089",
+      "split": "test"
     },
     {
       "file_path": "/app/eval/data/idl/jkbg0082.pdf",
       "expected_correspondent": null,
       "expected_date": null,
-      "original_key": "jkbg0082"
+      "original_key": "jkbg0082",
+      "split": "test"
     },
     {
       "file_path": "/app/eval/data/idl/jtgg0239.pdf",
       "expected_correspondent": "Tyco / Healthcare / Mallinckrodt",
       "expected_date": "2003-03-26",
-      "original_key": "jtgg0239"
+      "original_key": "jtgg0239",
+      "split": "test"
     },
     {
       "file_path": "/app/eval/data/idl/fsxh0052.pdf",
       "expected_correspondent": "Philip Morris U.S.A.",
       "expected_date": "1999-01-18",
-      "original_key": "fsxh0052"
+      "original_key": "fsxh0052",
+      "split": "test"
     },
     {
       "file_path": "/app/eval/data/idl/gfbx0146.pdf",
       "expected_correspondent": "Philip Morris Companies Inc.",
       "expected_date": null,
-      "original_key": "gfbx0146"
+      "original_key": "gfbx0146",
+      "split": "test"
     },
     {
       "file_path": "/app/eval/data/idl/hhmx0206.pdf",
       "expected_correspondent": "Henri (BATCo/Southampton)",
       "expected_date": "1980-08-26",
-      "original_key": "hhmx0206"
+      "original_key": "hhmx0206",
+      "split": "test"
     },
     {
       "file_path": "/app/eval/data/idl/frvb0205.pdf",
       "expected_correspondent": "British-American Tobacco Company Limited",
       "expected_date": "1976-02-19",
-      "original_key": "frvb0205"
+      "original_key": "frvb0205",
+      "split": "validation"
     },
     {
       "file_path": "/app/eval/data/idl/jjkw0138.pdf",
       "expected_correspondent": null,
       "expected_date": null,
-      "original_key": "jjkw0138"
+      "original_key": "jjkw0138",
+      "split": "test"
     },
     {
       "file_path": "/app/eval/data/idl/krfb0229.pdf",
       "expected_correspondent": null,
       "expected_date": null,
-      "original_key": "krfb0229"
+      "original_key": "krfb0229",
+      "split": "test"
     },
     {
       "file_path": "/app/eval/data/idl/kmll0169.pdf",
       "expected_correspondent": "Philip Morris U.S.A.",
       "expected_date": "1994-08-24",
-      "original_key": "kmll0169"
+      "original_key": "kmll0169",
+      "split": "test"
     },
     {
       "file_path": "/app/eval/data/idl/jmyg0244.pdf",
       "expected_correspondent": "Ronald D Shamel (Covidien)",
       "expected_date": "2012-06-25",
-      "original_key": "jmyg0244"
+      "original_key": "jmyg0244",
+      "split": "validation"
     },
     {
       "file_path": "/app/eval/data/idl/gybh0219.pdf",
       "expected_correspondent": "Richard Carchman",
       "expected_date": "2007-10-10",
-      "original_key": "gybh0219"
+      "original_key": "gybh0219",
+      "split": "test"
     },
     {
       "file_path": "/app/eval/data/idl/fkhg0105.pdf",
       "expected_correspondent": "Lorillard",
       "expected_date": null,
-      "original_key": "fkhg0105"
+      "original_key": "fkhg0105",
+      "split": "validation"
     },
     {
       "file_path": "/app/eval/data/idl/fkff0016.pdf",
       "expected_correspondent": "Carla C. Davis (RJR)",
       "expected_date": "1997-10-09",
-      "original_key": "fkff0016"
+      "original_key": "fkff0016",
+      "split": "validation"
     },
     {
       "file_path": "/app/eval/data/idl/jqmy0206.pdf",
       "expected_correspondent": "British-American Tobacco Company Limited",
       "expected_date": "1967-01-31",
-      "original_key": "jqmy0206"
+      "original_key": "jqmy0206",
+      "split": "test"
     },
     {
       "file_path": "/app/eval/data/idl/fkhj0197.pdf",
       "expected_correspondent": null,
       "expected_date": null,
-      "original_key": "fkhj0197"
+      "original_key": "fkhj0197",
+      "split": "test"
     },
     {
       "file_path": "/app/eval/data/idl/gjfm0010.pdf",
       "expected_correspondent": "U.S. Senate (Sen Harkin)",
       "expected_date": "2000-04-06",
-      "original_key": "gjfm0010"
+      "original_key": "gjfm0010",
+      "split": "test"
     },
     {
       "file_path": "/app/eval/data/idl/jjcj0064.pdf",
       "expected_correspondent": "Margaret Yates",
       "expected_date": "1996-09-23",
-      "original_key": "jjcj0064"
+      "original_key": "jjcj0064",
+      "split": "validation"
     },
     {
       "file_path": "/app/eval/data/idl/jjcc0198.pdf",
       "expected_correspondent": "P.K. Shillabeer (British-American Tobacco)",
       "expected_date": "1992-04-13",
-      "original_key": "jjcc0198"
+      "original_key": "jjcc0198",
+      "split": "test"
     },
     {
       "file_path": "/app/eval/data/idl/gjjl0087.pdf",
       "expected_correspondent": "J.P. Wheeler (RJR)",
       "expected_date": "1983-08-24",
-      "original_key": "gjjl0087"
+      "original_key": "gjjl0087",
+      "split": "test"
     },
     {
       "file_path": "/app/eval/data/idl/gqhb0141.pdf",
       "expected_correspondent": null,
       "expected_date": null,
-      "original_key": "gqhb0141"
+      "original_key": "gqhb0141",
+      "split": "validation"
     }
   ]
 }

@@ -42,15 +42,11 @@ def _write_heartbeat() -> None:
 
 
 def _build_agent(config):
-    """Instantiate the appropriate agent based on availability."""
-    try:
-        from agents.smart_graph_agent import SmartDocumentAgent
-        log.info("Using SmartDocumentAgent (LangGraph)")
-        return SmartDocumentAgent(config)
-    except ImportError:
-        from agents.legacy_agent import SeparatePipelineAgent
-        log.info("LangGraph not available — falling back to SeparatePipelineAgent")
-        return SeparatePipelineAgent(config)
+    from agents.smart_graph_agent import SmartDocumentAgent, _select_extraction_strategy
+
+    strategy = _select_extraction_strategy(config)
+    log.info("Using %s for metadata extraction", strategy.__class__.__name__)
+    return SmartDocumentAgent(config, extraction_strategy=strategy)
 
 
 async def main_async(args: argparse.Namespace) -> None:
@@ -71,7 +67,10 @@ async def main_async(args: argparse.Namespace) -> None:
         log.error("PAPERLESS_TOKEN (or PAPERLESS_TOKEN_FILE) is not set")
         sys.exit(1)
 
-    setup_telemetry()
+    # In eval mode, telemetry is set up after Phoenix connectivity is confirmed
+    # (inside run_scientific_evaluation) so LiteLLM spans carry token/cost data.
+    if not args.eval:
+        setup_telemetry()
 
     log.info("Paperless URL: %s", config.paperless_url)
     log.info(
@@ -223,9 +222,9 @@ def main() -> None:
     )
     parser.add_argument(
         "--split",
-        choices=["test", "validation", "all"],
+        choices=["test", "validation", "all", "code-test"],
         default="test",
-        help="Dataset split to evaluate (default: test)",
+        help="Dataset split to evaluate (default: test). 'code-test' runs a single tagged entry for quick pipeline verification.",
     )
     parser.add_argument(
         "--dry-run",

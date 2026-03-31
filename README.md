@@ -261,9 +261,12 @@ This writes a `"split": "test" | "validation"` field to each entry in `golden_da
 
 #### Running evaluations
 
-Evaluations run all experiments defined in `ai/eval/experiments.yaml` and report metrics for each. Results are also logged to Arize Phoenix (`http://localhost:6006`).
+Evaluations run all experiments defined in `ai/eval/experiments.yaml` and log results to Arize Phoenix (start it first with `docker compose up -d phoenix`).
 
 ```bash
+# Smoke test — single tagged document, verifies the pipeline works end-to-end
+docker compose run --rm ai --eval --split code-test
+
 # Run against the test set (default)
 docker compose run --rm ai --eval
 
@@ -273,6 +276,10 @@ docker compose run --rm ai --eval --split validation
 # Run against all documents
 docker compose run --rm ai --eval --split all
 ```
+
+Each `--split` value maps to a separate named dataset in Phoenix (`paperless-golden-test`, `paperless-golden-validation`, `paperless-golden-code-test`, …), so experiments from different splits are never mixed in the comparison view.
+
+The `code-test` split contains a single entry tagged `"tags": ["code-test"]` in `golden_dataset.json`. It is not filtered by the `"split"` field — any entry can carry the tag regardless of its train/validation assignment. To add more entries to the smoke test, add `"tags": ["code-test"]` to their entry.
 
 #### Metrics
 

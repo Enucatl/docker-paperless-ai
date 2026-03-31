@@ -154,9 +154,12 @@ async def main():
     log.info("Loading agent...")
 
     from core.config import AgentConfig
-    from agents.smart_graph_agent import SmartDocumentAgent
+    from agents.smart_graph_agent import SmartDocumentAgent, _select_extraction_strategy
+
     config = AgentConfig.from_env()
-    agent = SmartDocumentAgent(config)
+    strategy = _select_extraction_strategy(config)
+    log.info("Using %s for metadata extraction", strategy.__class__.__name__)
+    agent = SmartDocumentAgent(config, extraction_strategy=strategy)
 
     log.info("Starting interactive review. Press Ctrl+C to exit at any time.\n")
 

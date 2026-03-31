@@ -10,9 +10,15 @@ import os
 
 log = logging.getLogger(__name__)
 
+_configured = False
+
 
 def setup_telemetry() -> None:
     """Configure OTEL tracing to export to Arize Phoenix."""
+    global _configured
+    if _configured:
+        return
+
     endpoint = os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT")
     if not endpoint:
         log.info("OTEL_EXPORTER_OTLP_ENDPOINT not set — telemetry disabled")
@@ -36,4 +42,5 @@ def setup_telemetry() -> None:
 
     LiteLLMInstrumentor().instrument(tracer_provider=tracer_provider)
     LangChainInstrumentor().instrument(tracer_provider=tracer_provider)
+    _configured = True
     log.info("Telemetry configured → %s", endpoint)

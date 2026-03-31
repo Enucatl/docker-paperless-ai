@@ -2,7 +2,6 @@
 name = "paperless-ai"
 version = "0.1.0"
 description = "AI batch post-processing for Paperless-ngx"
-readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
     "litellm>=1.50",
@@ -12,13 +11,18 @@ dependencies = [
     "langgraph>=0.2",
     "openinference-instrumentation-litellm",
     "openinference-instrumentation-langchain",
+    "openinference-instrumentation",
     "opentelemetry-sdk",
     "opentelemetry-exporter-otlp",
-    "arize-phoenix[evals]",
+    "arize-phoenix-client",
+    "arize-phoenix-otel",
+    "arize-phoenix-evals",
+    "nest_asyncio",
     "pandas",
     "pydantic>=2.0",
     "PyYAML>=6.0",
     "datasets",
+    "click>=8.0",
 ]
 
 [project.optional-dependencies]
@@ -30,3 +34,6 @@ test = [
 [build-system]
 requires = ["setuptools>=61.0"]
 build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["agents*", "core*", "eval*"]

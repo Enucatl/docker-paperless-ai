@@ -20,18 +20,18 @@ Key design decisions:
 import asyncio
 import base64
 import gc
-import io
 import json
 import logging
 import re
 import time
+from abc import ABC, abstractmethod
 from typing import Optional
 
 from datetime import datetime
 
 import fitz  # PyMuPDF
 import litellm
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, Field, field_validator
 
 from agents.base import AgentResult, BaseDocumentAgent, DocumentMetadata
 from agents.state import AgentState
@@ -45,13 +45,73 @@ log = logging.getLogger(__name__)
 # original routing logic in case the fast path is ever re-enabled.
 _DIGITAL_TEXT_THRESHOLD = 50
 
+# Regex patterns for thinking tags emitted by some reasoning models
+# (DeepSeek-R1, Qwen-QwQ, etc.) when thinking is not separated into
+# reasoning_content by the provider/LiteLLM.
+_THINK_TAG_RE = re.compile(r"<think>.*?</think>", re.DOTALL | re.IGNORECASE)
+_THINKING_TAG_RE = re.compile(r"<thinking>.*?</thinking>", re.DOTALL | re.IGNORECASE)
+
+
+def _get_completion_text(response) -> str:
+    """Return only the final answer text from a LiteLLM completion response.
+
+    LiteLLM normalises reasoning providers so that:
+      - ``message.reasoning_content`` holds the thinking trace (string).
+      - ``message.content`` holds only the final answer.
+
+    Two edge cases still need handling:
+
+    1. **Block-list content** – Anthropic passes thinking as typed content
+       blocks (``{"type": "thinking", ...}``).  When LiteLLM surfaces this as
+       a list we filter to ``type == "text"`` blocks only.
+
+    2. **Inline tags** – Older LiteLLM versions or models not yet normalised
+       (DeepSeek-R1, Qwen-QwQ via Ollama, …) may prepend the thinking wrapped
+       in ``<think>…</think>`` inside the content string.  We strip those.
+    """
+    message = response.choices[0].message
+    content = message.content
+
+    # Case 1: content is a list of typed blocks (Anthropic extended thinking).
+    # Keep only text blocks; discard thinking blocks.
+    if isinstance(content, list):
+        content = "".join(
+            block.get("text", "") if isinstance(block, dict) else str(block)
+            for block in content
+            if not (isinstance(block, dict) and block.get("type") == "thinking")
+        )
+
+    content = content or ""
+
+    # If LiteLLM already separated thinking into reasoning_content the content
+    # string is clean — return it directly.
+    if getattr(message, "reasoning_content", None):
+        return content
+
+    # Case 2: strip inline thinking tags for providers not yet normalised.
+    content = _THINK_TAG_RE.sub("", content)
+    content = _THINKING_TAG_RE.sub("", content)
+    return content.strip()
+
 
 class _ExtractedMetadata(BaseModel):
-    title: Optional[str] = None
-    document_date: Optional[str] = None
-    correspondent: Optional[str] = None
+    title: Optional[str] = Field(
+        default=None,
+        description=(
+            "A clear, concise, and descriptive title summarizing the document's core subject "
+            "or purpose for future retrieval. Maximum 100 characters. Use Title Case. "
+            "Do NOT include full sentences, conversational text, disclaimers, or notes about the extraction process."
+        ),
+    )
+    date: Optional[str] = Field(
+        default=None, description="Primary document date as YYYY-MM-DD."
+    )
+    correspondent: Optional[str] = Field(
+        default=None,
+        description="Name of the issuing organisation — not the recipient.",
+    )
 
-    @field_validator("document_date", mode="before")
+    @field_validator("date", mode="before")
     @classmethod
     def strip_time(cls, v):
         if not isinstance(v, str):
@@ -60,6 +120,152 @@ class _ExtractedMetadata(BaseModel):
             return datetime.fromisoformat(v).date().isoformat()
         except ValueError:
             return v
+
+
+# ---------------------------------------------------------------------------
+# Extraction Strategy Pattern: separate LLM extraction from orchestration
+# ---------------------------------------------------------------------------
+
+
+class BaseExtractionStrategy(ABC):
+    """Abstract base for metadata extraction strategies."""
+
+    def _fallback_parse(self, raw: str) -> dict:
+        """Robust fallback parser for handling free-form or incomplete JSON output.
+
+        Attempts multiple strategies to extract valid JSON:
+        1. Try to parse the raw text as-is (clean JSON).
+        2. Search for a JSON object within the text using regex.
+        3. If found, try to parse the extracted object.
+        4. Fall back to loose key mapping from the result.
+        5. Return an empty dict as last resort.
+        """
+        try:
+            return json.loads(raw)
+        except Exception:
+            pass
+
+        # Try to extract a JSON object from within the text
+        match = re.search(r"\{.*\}", raw, re.DOTALL)
+        try:
+            return json.loads(match.group() if match else "{}")
+        except Exception:
+            pass
+
+        # Loose parsing: try to extract from raw or regex-matched text
+        try:
+            data = json.loads(match.group() if match else raw)
+            return data
+        except Exception:
+            return {}
+
+    @abstractmethod
+    async def extract(self, text: str, config: AgentConfig) -> _ExtractedMetadata:
+        """Extract metadata from text using this strategy."""
+        pass
+
+
+class StructuredOutputStrategy(BaseExtractionStrategy):
+    """Standard LLM extraction using JSON schema / response_format."""
+
+    async def extract(self, text: str, config: AgentConfig) -> _ExtractedMetadata:
+        """Use standard LLM with response_format tiering."""
+        messages = [
+            {"role": "system", "content": config.metadata_prompt},
+            {"role": "user", "content": text},
+        ]
+        kwargs: dict = {
+            "model": config.effective_metadata_model,
+            "messages": messages,
+            "num_retries": config.llm_retries,
+            **config.get_metadata_litellm_kwargs(),
+        }
+        if "temperature" not in kwargs:
+            kwargs["temperature"] = 0
+
+        # Tier response_format by what the model actually supports
+        if litellm.supports_response_schema(model=config.effective_metadata_model):
+            kwargs["response_format"] = _ExtractedMetadata
+        elif "response_format" in (
+            litellm.get_supported_openai_params(model=config.effective_metadata_model)
+            or []
+        ):
+            kwargs["response_format"] = {"type": "json_object"}
+
+        if config.metadata_api_base:
+            kwargs["api_base"] = config.metadata_api_base
+
+        response = await litellm.acompletion(**kwargs)
+        raw = _get_completion_text(response) or "{}"
+        log.info("Smart agent: metadata raw response: %s", raw)
+
+        # Try strict Pydantic validation first, then fall back to loose parsing
+        try:
+            return _ExtractedMetadata.model_validate_json(raw)
+        except Exception:
+            data = self._fallback_parse(raw)
+            return _ExtractedMetadata(
+                title=data.get("title"),
+                date=data.get("date"),
+                correspondent=data.get("correspondent"),
+            )
+
+
+def _select_extraction_strategy(config: AgentConfig) -> BaseExtractionStrategy:
+    """Select the appropriate extraction strategy based on the configured metadata model."""
+    if "nuextract" in config.effective_metadata_model.lower():
+        return NuExtractStrategy()
+    return StructuredOutputStrategy()
+
+
+class NuExtractStrategy(BaseExtractionStrategy):
+    """NuExtract template-based extraction using extra_body."""
+
+    # NuExtract template with highly descriptive keys
+    _NUEXTRACT_TEMPLATE = json.dumps(
+        {
+            "document_title": "string",
+            "document_date": "date-time",
+            "issuing_organization_or_sender": "string",
+        },
+        indent=4,
+    )
+
+    async def extract(self, text: str, config: AgentConfig) -> _ExtractedMetadata:
+        """Use NuExtract template passed via extra_body."""
+        messages = [
+            {
+                "role": "user",
+                "content": [{"type": "text", "text": text}],
+            }
+        ]
+        template_str = json.dumps(json.loads(self._NUEXTRACT_TEMPLATE), indent=4)
+        kwargs: dict = {
+            "model": config.effective_metadata_model,
+            "messages": messages,
+            "extra_body": {
+                "chat_template_kwargs": {
+                    "template": template_str
+                }
+            },
+            "num_retries": config.llm_retries,
+            "temperature": 0,
+        }
+
+        if config.metadata_api_base:
+            kwargs["api_base"] = config.metadata_api_base
+
+        response = await litellm.acompletion(**kwargs)
+        raw = _get_completion_text(response) or "{}"
+        log.info("Smart agent: metadata raw response: %s", raw)
+
+        # Parse using fallback chain and map custom keys back to standard schema
+        data = self._fallback_parse(raw)
+        return _ExtractedMetadata(
+            title=data.get("document_title"),
+            date=data.get("document_date"),
+            correspondent=data.get("issuing_organization_or_sender"),
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -148,7 +354,17 @@ async def _batched_vision_ocr(state: AgentState, config: AgentConfig) -> dict:
 
     for page_idx in range(current_page, end_page):
         page = doc[page_idx]
-        mat = fitz.Matrix(300 / 72, 300 / 72)
+        # Cap render DPI so the longest image dimension stays within the model's
+        # context budget (e.g. nanonets max-model-len=16128). Computing DPI
+        # upfront avoids rendering at full resolution only to discard it.
+        dpi = 300
+        max_dim = config.ocr_max_image_dimension
+        if max_dim:
+            w_px = page.rect.width * dpi / 72
+            h_px = page.rect.height * dpi / 72
+            if max(w_px, h_px) > max_dim:
+                dpi = int(dpi * max_dim / max(w_px, h_px))
+        mat = fitz.Matrix(dpi / 72, dpi / 72)
         pix = page.get_pixmap(matrix=mat, alpha=False)
         # Encode to PNG bytes and release the pixmap immediately
         png_bytes = pix.tobytes("png")
@@ -163,7 +379,10 @@ async def _batched_vision_ocr(state: AgentState, config: AgentConfig) -> dict:
             {
                 "role": "user",
                 "content": [
-                    {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{b64}"}},
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": f"data:image/png;base64,{b64}"},
+                    },
                     {"type": "text", "text": prompt},
                 ],
             }
@@ -172,7 +391,7 @@ async def _batched_vision_ocr(state: AgentState, config: AgentConfig) -> dict:
             "model": config.ocr_model,
             "messages": messages,
             "num_retries": config.llm_retries,
-            **config.get_litellm_kwargs(),
+            **config.get_ocr_litellm_kwargs(),
         }
         if config.ocr_api_base:
             kwargs["api_base"] = config.ocr_api_base
@@ -182,7 +401,7 @@ async def _batched_vision_ocr(state: AgentState, config: AgentConfig) -> dict:
     doc.close()
 
     responses = await asyncio.gather(*tasks)
-    chunks = [r.choices[0].message.content or "" for r in responses]
+    chunks = [_get_completion_text(r) for r in responses]
 
     # Force GC to reclaim any remaining image buffers from the event loop
     gc.collect()
@@ -193,22 +412,10 @@ async def _batched_vision_ocr(state: AgentState, config: AgentConfig) -> dict:
     }
 
 
-_NUEXTRACT_TEMPLATE = json.dumps(
-    {
-        "title": "string",
-        "document_date": "date-time",
-        "correspondent": "string",
-    },
-    indent=4,
-)
-
-
-def _is_nuextract(model: str) -> bool:
-    return "nuextract" in model.lower()
-
-
-async def _extract_metadata(state: AgentState, config: AgentConfig) -> dict:
-    """Node 4: Join all text chunks and call the text LLM for structured metadata."""
+async def _extract_metadata(
+    state: AgentState, config: AgentConfig, strategy: BaseExtractionStrategy
+) -> dict:
+    """Node 4: Join all text chunks and extract metadata using the provided strategy."""
     chunks = state["extracted_text_chunks"]
     full_text = "\n\n".join(chunks)
 
@@ -218,61 +425,8 @@ async def _extract_metadata(state: AgentState, config: AgentConfig) -> dict:
     else:
         snippet = full_text
 
-    model = config.effective_metadata_model
-
-    if _is_nuextract(model):
-        # NuExtract uses a template in extra_body rather than response_format.
-        # The schema is passed as a JSON template with placeholder type strings;
-        # the model fills in the values. No system message — schema is in the template.
-        messages = [{"role": "user", "content": snippet}]
-        kwargs: dict = {
-            "model": model,
-            "messages": messages,
-            "extra_body": {
-                "chat_template_kwargs": {"template": _NUEXTRACT_TEMPLATE}
-            },
-            "num_retries": config.llm_retries,
-            "temperature": 0,
-        }
-    else:
-        messages = [
-            {"role": "system", "content": config.metadata_prompt},
-            {"role": "user", "content": snippet},
-        ]
-        kwargs = {
-            "model": model,
-            "messages": messages,
-            "response_format": _ExtractedMetadata,
-            "num_retries": config.llm_retries,
-            **config.get_litellm_kwargs(),
-        }
-        if "temperature" not in kwargs:
-            kwargs["temperature"] = 0
-
-    if config.metadata_api_base:
-        kwargs["api_base"] = config.metadata_api_base
-
-    response = await litellm.acompletion(**kwargs)
-    raw = response.choices[0].message.content or "{}"
-    log.info("Smart agent: metadata raw response: %s", raw)
-
-    try:
-        extracted = _ExtractedMetadata.model_validate_json(raw)
-    except Exception:
-        match = re.search(r"\{.*\}", raw, re.DOTALL)
-        try:
-            extracted = _ExtractedMetadata.model_validate_json(match.group() if match else "{}")
-        except Exception:
-            try:
-                data = json.loads(match.group() if match else raw)
-                extracted = _ExtractedMetadata(
-                    title=data.get("title") or data.get("oneline_short_summary"),
-                    document_date=data.get("document_date") or data.get("date"),
-                    correspondent=data.get("correspondent")
-                    or data.get("correspondent_institution_or_individual"),
-                )
-            except Exception:
-                extracted = _ExtractedMetadata()
+    # Use the strategy to extract metadata
+    extracted = await strategy.extract(snippet, config)
 
     # Store final metadata back into state for the agent to read after graph completion
     return {"_extracted_metadata": extracted.model_dump(), "_full_text": full_text}
@@ -292,8 +446,13 @@ class SmartDocumentAgent(BaseDocumentAgent):
     batches so only `batch_size` pages are held in memory at any time.
     """
 
-    def __init__(self, config: AgentConfig):
+    def __init__(
+        self,
+        config: AgentConfig,
+        extraction_strategy: Optional[BaseExtractionStrategy] = None,
+    ):
         self._config = config
+        self._strategy = extraction_strategy or StructuredOutputStrategy()
         self._graph = self._build_graph()
 
     def _build_graph(self):
@@ -305,8 +464,9 @@ class SmartDocumentAgent(BaseDocumentAgent):
             ) from e
 
         config = self._config
+        strategy = self._strategy
 
-        # Bind config into each node via closures
+        # Bind config and strategy into each node via closures
         async def analyze_pdf(state: AgentState) -> dict:
             return await _analyze_pdf(state, config)
 
@@ -317,10 +477,14 @@ class SmartDocumentAgent(BaseDocumentAgent):
             return await _batched_vision_ocr(state, config)
 
         async def extract_metadata(state: AgentState) -> dict:
-            return await _extract_metadata(state, config)
+            return await _extract_metadata(state, config, strategy)
 
         def route_after_analyze(state: AgentState) -> str:
-            return "native_text_extraction" if state["is_digital_text"] else "batched_vision_ocr"
+            return (
+                "native_text_extraction"
+                if state["is_digital_text"]
+                else "batched_vision_ocr"
+            )
 
         def route_after_vision_ocr(state: AgentState) -> str:
             return (
@@ -375,20 +539,22 @@ class SmartDocumentAgent(BaseDocumentAgent):
 
         # Retrieve results stored by extract_metadata node
         extracted_dict = final_state.get("_extracted_metadata", {})
-        full_text = final_state.get("_full_text", "\n\n".join(final_state.get("extracted_text_chunks", [])))
+        full_text = final_state.get(
+            "_full_text", "\n\n".join(final_state.get("extracted_text_chunks", []))
+        )
         ocr_method = "native" if final_state.get("is_digital_text") else "vision"
 
         log.info(
-            "Smart agent: done — title=%r date=%r correspondent=%r method=%s",
+            "Smart agent: done — title=%r date=%r correspondent=%r ocr=%s metadata=text",
             extracted_dict.get("title"),
-            extracted_dict.get("document_date"),
+            extracted_dict.get("date"),
             extracted_dict.get("correspondent"),
             ocr_method,
         )
 
         metadata = DocumentMetadata(
             title=extracted_dict.get("title"),
-            document_date=extracted_dict.get("document_date"),
+            document_date=extracted_dict.get("date"),
             correspondent=extracted_dict.get("correspondent"),
             full_ocr_transcript=full_text,
         )

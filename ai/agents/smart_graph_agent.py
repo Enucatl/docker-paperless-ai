@@ -232,7 +232,12 @@ class NuExtractStrategy(BaseExtractionStrategy):
     )
 
     async def extract(self, text: str, config: AgentConfig) -> _ExtractedMetadata:
-        """Use NuExtract template passed via extra_body."""
+        """Use NuExtract template passed via extra_body.
+
+        Retries up to ``config.nuextract_json_retries`` times when the model
+        returns invalid JSON before falling back to heuristic parsing.
+        Temperature increases from 0 to 0.1 on retries to encourage variation.
+        """
         messages = [
             {
                 "role": "user",
@@ -240,22 +245,52 @@ class NuExtractStrategy(BaseExtractionStrategy):
             }
         ]
         template_str = json.dumps(json.loads(self._NUEXTRACT_TEMPLATE), indent=4)
-        kwargs: dict = {
+        base_kwargs: dict = {
             "model": config.effective_metadata_model,
             "messages": messages,
             "extra_body": {"chat_template_kwargs": {"template": template_str}},
             "num_retries": config.llm_retries,
-            "temperature": 0,
         }
 
         if config.metadata_api_base:
-            kwargs["api_base"] = config.metadata_api_base
+            base_kwargs["api_base"] = config.metadata_api_base
 
-        response = await litellm.acompletion(**kwargs)
-        raw = _get_completion_text(response) or "{}"
-        log.info("Smart agent: metadata raw response: %s", raw)
+        max_attempts = max(1, config.nuextract_json_retries)
+        raw = "{}"
+        for attempt in range(1, max_attempts + 1):
+            # Increase temperature on retries to encourage variation.
+            # Without this, temperature=0 would produce identical output on every attempt,
+            # making retries useless. Temperature=0.1 adds just enough stochasticity
+            # to get different outputs while still keeping them constrained.
+            kwargs = {**base_kwargs, "temperature": 0 if attempt == 1 else 0.1}
+            response = await litellm.acompletion(**kwargs)
+            raw = _get_completion_text(response) or "{}"
+            log.info(
+                "Smart agent: metadata raw response (attempt %d/%d): %s",
+                attempt,
+                max_attempts,
+                raw,
+            )
+            try:
+                data = json.loads(raw)
+                return _ExtractedMetadata(
+                    title=data.get(self.document_title_key),
+                    date=data.get(self.date_key),
+                    correspondent=data.get(self.correspondent_key),
+                )
+            except json.JSONDecodeError:
+                if attempt < max_attempts:
+                    log.warning(
+                        "Smart agent: NuExtract returned invalid JSON on attempt %d/%d, retrying…",
+                        attempt,
+                        max_attempts,
+                    )
 
-        # Parse using fallback chain and map custom keys back to standard schema
+        # All retries exhausted — fall back to heuristic parsing
+        log.warning(
+            "Smart agent: NuExtract returned invalid JSON after %d attempts, using heuristic fallback",
+            max_attempts,
+        )
         data = self._fallback_parse(raw)
         return _ExtractedMetadata(
             title=data.get(self.document_title_key),

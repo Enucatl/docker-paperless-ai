@@ -87,6 +87,19 @@ class PaperlessClient:
             url = data.get("next") or None
             params = {}  # next URL already has params baked in
 
+    def get_document(self, doc_id: int) -> dict | None:
+        """Fetch a single document by ID.  Returns None if not found."""
+        r = self._client.get(
+            f"/api/documents/{doc_id}/",
+            params={
+                "fields": "id,title,correspondent,created_date,custom_fields,tags,language"
+            },
+        )
+        if r.status_code == 404:
+            return None
+        _raise_for_status(r)
+        return r.json()
+
     def download_original(self, doc_id: int) -> bytes:
         """Download the original (pre-OCR) file for a document."""
         r = self._client.get(

@@ -110,6 +110,23 @@ class AgentConfig(BaseModel):
     ocr_prompt: str = _OCR_PROMPT_DEFAULT
     metadata_prompt: str = _METADATA_PROMPT_DEFAULT
 
+    # Maximum number of retries when NuExtract returns invalid JSON.
+    nuextract_json_retries: int = 5
+
+    # Redis queue (DB 1, isolated from Paperless DB 0)
+    redis_url: str = "redis://broker:6379/1"
+
+    # Qdrant vector store
+    qdrant_url: str = "http://qdrant:6333"
+
+    # Infinity embedding server (bge-m3, dense + sparse)
+    infinity_url: str = "http://complex.home.arpa:8102"
+    embedding_model: str = "BAAI/bge-m3"
+
+    # Text chunking for embedding
+    chunk_max_chars: int = 2048   # ≈ 512 tokens
+    chunk_overlap: int = 256
+
     # Smart agent batch size for memory-safe vision OCR loops
     vision_batch_size: int = 5
     # Cap the longest image dimension (px) before encoding for vision OCR.
@@ -184,4 +201,11 @@ class AgentConfig(BaseModel):
             ocr_prompt=_load_prompt("/app/prompt.txt") or _OCR_PROMPT_DEFAULT,
             metadata_prompt=_load_prompt("/app/metadata_prompt.txt") or _METADATA_PROMPT_DEFAULT,
             metadata_max_tokens=int(os.environ.get("METADATA_MAX_TOKENS", "1000")),
+            nuextract_json_retries=int(os.environ.get("NUEXTRACT_JSON_RETRIES", "5")),
+            redis_url=os.environ.get("REDIS_URL", "redis://broker:6379/1"),
+            qdrant_url=os.environ.get("QDRANT_URL", "http://qdrant:6333"),
+            infinity_url=os.environ.get("INFINITY_URL", "http://complex.home.arpa:8102"),
+            embedding_model=os.environ.get("EMBEDDING_MODEL", "BAAI/bge-m3"),
+            chunk_max_chars=int(os.environ.get("CHUNK_MAX_CHARS", "2048")),
+            chunk_overlap=int(os.environ.get("CHUNK_OVERLAP", "256")),
         )

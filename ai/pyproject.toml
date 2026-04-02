@@ -23,6 +23,10 @@ dependencies = [
     "PyYAML>=6.0",
     "datasets",
     "click>=8.0",
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.30",
+    "redis[hiredis]>=5.0",
+    "qdrant-client[async]>=1.12",
 ]
 
 [project.optional-dependencies]
@@ -31,9 +35,12 @@ test = [
     "pytest-asyncio>=0.23",
 ]
 
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+
 [build-system]
 requires = ["setuptools>=61.0"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
-include = ["agents*", "core*", "eval*"]
+include = ["agents*", "core*", "eval*", "search*"]

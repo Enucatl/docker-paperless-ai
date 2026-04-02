@@ -1,12 +1,17 @@
 """
-Batch runner: orchestrates the Paperless polling loop and document processing.
+Batch runner: orchestrates the Redis-driven document processing pipeline.
 
-Responsibilities:
-- Poll for pending documents
-- Download each document to a temp file (memory-safe)
-- Pass the temp file path to the configured agent
-- Apply the AgentResult metadata via the Paperless PATCH API
-- Clean up temp files in finally blocks
+Flow per document:
+  1. Fetch document metadata from Paperless API
+  2. Download original PDF to a temp file
+  3. Run SmartDocumentAgent (vision OCR + metadata extraction)
+  4. Chunk OCR text → embed via Infinity → upsert into Qdrant
+  5. PATCH Paperless (title, date, correspondent, content, custom fields)
+  6. SREM doc_id from Redis queue (only on full success)
+
+If any step fails the doc_id remains in the Redis queue and will be retried
+on the next run.  The embedding step is skipped gracefully when the store or
+embedder are not provided (useful for tests and eval mode).
 """
 
 import json
@@ -15,10 +20,16 @@ import os
 import tempfile
 import time
 from datetime import date, datetime, timezone
+from typing import TYPE_CHECKING, Optional
 
 from agents.base import AgentResult, BaseDocumentAgent
 from core.config import AgentConfig
 from core.paperless import PaperlessClient
+
+if TYPE_CHECKING:
+    from search.embedder import InfinityEmbedder
+    from search.queue import DocumentQueue
+    from search.qdrant_store import QdrantDocumentStore
 
 log = logging.getLogger(__name__)
 
@@ -35,16 +46,61 @@ def is_shutdown_requested() -> bool:
     return _shutdown_requested
 
 
+async def _embed_and_store(
+    doc_id: int,
+    full_text: str,
+    meta,
+    config: AgentConfig,
+    store: "QdrantDocumentStore",
+    embedder: "InfinityEmbedder",
+) -> None:
+    """Chunk text, embed via Infinity, and upsert vectors into Qdrant."""
+    from search.chunker import chunk_text
+    from search.qdrant_store import ChunkPayload
+
+    chunks = chunk_text(full_text, config.chunk_max_chars, config.chunk_overlap)
+    if not chunks:
+        log.info("Document %d: no text to embed, skipping Qdrant upsert", doc_id)
+        return
+
+    log.info("Document %d: embedding %d chunk(s)…", doc_id, len(chunks))
+    embeddings = await embedder.embed(chunks)
+
+    # Delete old vectors first so re-processing a document is idempotent
+    await store.delete_document(doc_id)
+
+    payloads = [
+        ChunkPayload(
+            doc_id=doc_id,
+            chunk_index=i,
+            title=meta.title,
+            correspondent=meta.correspondent,
+            date=meta.document_date,
+            text=chunk,
+        )
+        for i, chunk in enumerate(chunks)
+    ]
+    await store.upsert_chunks(
+        payloads,
+        dense_vecs=[e.dense for e in embeddings],
+        sparse_indices=[e.sparse_indices for e in embeddings],
+        sparse_values=[e.sparse_values for e in embeddings],
+    )
+    log.info("Document %d: upserted %d vector(s) into Qdrant", doc_id, len(chunks))
+
+
 async def process_document(
     doc: dict,
     client: PaperlessClient,
     agent: BaseDocumentAgent,
     config: AgentConfig,
-    pending_id: int,
     custom_field_id: int,
     ai_result_field_id: int,
+    queue: "DocumentQueue",
+    store: "Optional[QdrantDocumentStore]" = None,
+    embedder: "Optional[InfinityEmbedder]" = None,
 ) -> bool:
-    """Download, process, and patch a single document. Returns True on success."""
+    """Download, process, embed, and patch a single document. Returns True on success."""
     doc_id = doc["id"]
     log.info("Processing document %d: %s", doc_id, doc.get("title", "(no title)"))
 
@@ -76,7 +132,7 @@ async def process_document(
         if doc.get("language"):
             existing_hints["language"] = doc["language"]
 
-        # Run the agent
+        # Run the agent (OCR + metadata extraction)
         try:
             result: AgentResult = await agent.process(tmp_path, existing_hints)
         except ValueError as e:
@@ -87,7 +143,6 @@ async def process_document(
             return False
 
     finally:
-        # Always delete the temp file
         if tmp_fd != -1:
             try:
                 os.close(tmp_fd)
@@ -108,6 +163,14 @@ async def process_document(
         meta.document_date,
         meta.correspondent,
     )
+
+    # Embed and store vectors (skipped gracefully if store/embedder not configured)
+    if store is not None and embedder is not None:
+        try:
+            await _embed_and_store(doc_id, full_text, meta, config, store, embedder)
+        except Exception as e:
+            log.error("Document %d: embedding failed: %s", doc_id, e)
+            return False
 
     # Build PATCH payload
     today = datetime.now(timezone.utc).date().isoformat()
@@ -189,14 +252,14 @@ async def process_document(
             doc_id,
             sorted(payload.keys()),
         )
-        log.info("Document %d: [dry-run] would remove tag %d", doc_id, pending_id)
+        log.info("Document %d: [dry-run] would remove from Redis queue", doc_id)
         return True
 
     log.info("Document %d: PATCHing fields: %s", doc_id, sorted(payload.keys()))
     try:
         client.patch_document(doc_id, payload)
-        log.info("Document %d: PATCH OK, removing pending tag", doc_id)
-        client.update_tags(doc, remove_id=pending_id, add_id=None)
+        log.info("Document %d: PATCH OK, removing from queue", doc_id)
+        await queue.remove(doc_id)
         log.info("Document %d: done", doc_id)
         return True
     except Exception as e:
@@ -208,28 +271,39 @@ async def run_batch(
     client: PaperlessClient,
     agent: BaseDocumentAgent,
     config: AgentConfig,
-    pending_id: int,
     custom_field_id: int,
     ai_result_field_id: int,
+    queue: "DocumentQueue",
+    store: "Optional[QdrantDocumentStore]" = None,
+    embedder: "Optional[InfinityEmbedder]" = None,
 ) -> tuple[int, int]:
-    """Process all pending documents. Returns (success_count, failure_count)."""
-    total = client.count_pending_documents(pending_id)
-    if total == 0:
-        log.info("No documents tagged '%s'", config.tag_pending)
+    """Process all documents in the Redis queue. Returns (success_count, failure_count)."""
+    pending_ids = await queue.peek_all()
+    if not pending_ids:
+        log.info("No documents pending in queue")
         return 0, 0
 
-    log.info("Found %d document(s) to process", total)
+    log.info("Found %d document(s) to process", len(pending_ids))
     success, failure = 0, 0
-    for doc in client.iter_pending_documents(pending_id):
+
+    for doc_id in sorted(pending_ids):
         if _shutdown_requested:
             log.info(
                 "Shutdown requested — stopping batch after %d/%d documents",
                 success + failure,
-                total,
+                len(pending_ids),
             )
             break
+
+        doc = client.get_document(doc_id)
+        if doc is None:
+            log.warning("Document %d not found in Paperless — removing from queue", doc_id)
+            await queue.remove(doc_id)
+            continue
+
         ok = await process_document(
-            doc, client, agent, config, pending_id, custom_field_id, ai_result_field_id
+            doc, client, agent, config, custom_field_id, ai_result_field_id,
+            queue, store, embedder,
         )
         if ok:
             success += 1

@@ -36,6 +36,10 @@ services:
     volumes:
       - ./ai/eval:/app/eval
 
+  qdrant:
+    volumes:
+      - qdrantdata:/qdrant/storage
+
 volumes:
   data:
     external: true
@@ -46,6 +50,7 @@ volumes:
   export:
   pgdata:
   redisdata:
+  qdrantdata:
 
 secrets:
   paperless_token:

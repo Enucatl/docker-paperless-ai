@@ -41,7 +41,7 @@ experiments:
     ocr_model: "openai/nanonets/Nanonets-OCR2-3B"
     ocr_api_base: "http://complex.home.arpa:8100/v1"
     ocr_max_image_dimension: 1920
-    metadata_model: "openai/numind/NuExtract-2.0-4B"
+    metadata_model: "openai/numind/NuExtract-2.0-8B-GPTQ"
     metadata_api_base: "http://complex.home.arpa:8103/v1"
     temperature: 0.0
     jury:

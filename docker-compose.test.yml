@@ -6,10 +6,10 @@
 # Ephemeral strategy:
 #   - db and broker use tmpfs (RAM-disk) — disappears the instant the container stops,
 #     no named volumes to clean up even if the script is Ctrl+C'd.
-#   - webserver uses anonymous volumes — Docker auto-creates and auto-wipes them on
-#     `docker compose down -v`.
-#   - No volumes: block needed because no named volumes are created.
+#   - webserver, qdrant use anonymous volumes — Docker auto-wipes them on `down -v`.
 #   - Dummy LLM keys prevent real API calls even if a mock is accidentally skipped.
+#   - Infinity (GPU embedder) is NOT available in tests; the mock_embedder fixture
+#     provides deterministic fake vectors directly to run_batch instead.
 
 services:
   db:
@@ -37,6 +37,31 @@ services:
       - PAPERLESS_URL=http://webserver:8000
       - PAPERLESS_OCR_LANGUAGE=eng
 
+  # Qdrant vector DB — anonymous volume so `down -v` leaves no residue.
+  qdrant:
+    volumes:
+      - /qdrant/storage
+    healthcheck:
+      # Bash TCP pseudo-device: fast, no external tooling needed.
+      test: ["CMD", "bash", "-c", ":> /dev/tcp/127.0.0.1/6333"]
+      interval: 3s
+      timeout: 5s
+      retries: 15
+
+  # Webhook listener — receives document events and pushes to Redis DB 1.
+  webhook-listener:
+    environment:
+      - REDIS_URL=redis://broker:6379/1
+    healthcheck:
+      test: ["CMD", "python", "-c",
+             "import urllib.request; urllib.request.urlopen('http://localhost:8001/health')"]
+      interval: 3s
+      timeout: 5s
+      retries: 15
+    depends_on:
+      broker:
+        condition: service_healthy
+
   ai:
     # Override entrypoint+command to install test deps then run pytest.
     entrypoint: []
@@ -49,10 +74,22 @@ services:
       - ANTHROPIC_API_KEY=dummy-test-key
       - OPENAI_API_KEY=dummy-test-key
       - OCR_MODEL=gemini/gemini-2.5-flash
+      # Redis queue (DB 1)
+      - REDIS_URL=redis://broker:6379/1
+      # Qdrant vector store
+      - QDRANT_URL=http://qdrant:6333
+      # Infinity is not available in tests; connectivity check will fail gracefully.
+      - INFINITY_URL=http://nonexistent-infinity:8102
+      # Webhook listener endpoint (for webhook integration tests)
+      - WEBHOOK_URL=http://webhook-listener:8001
       # Used by conftest.py to fetch an ephemeral API token at test startup.
       - TEST_PAPERLESS_USER=admin
       - TEST_PAPERLESS_PASS=admin
     # secrets: [] moved to override if needed, but not needed in tests
     depends_on:
       webserver:
+        condition: service_healthy
+      qdrant:
+        condition: service_healthy
+      webhook-listener:
         condition: service_healthy

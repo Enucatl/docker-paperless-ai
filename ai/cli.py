@@ -54,6 +54,9 @@ async def main_async(args: argparse.Namespace) -> None:
     from core.paperless import PaperlessClient
     from core.runner import purge_ai_notes, request_shutdown, run_batch
     from core.telemetry import setup_telemetry
+    from search.embedder import InfinityEmbedder
+    from search.queue import DocumentQueue
+    from search.qdrant_store import QdrantDocumentStore
 
     config = AgentConfig.from_env()
 
@@ -83,6 +86,9 @@ async def main_async(args: argparse.Namespace) -> None:
         config.effective_metadata_model,
         f" (api_base={config.metadata_api_base})" if config.metadata_api_base else "",
     )
+    log.info(
+        "Embedding: %s @ %s", config.embedding_model, config.infinity_url
+    )
     if config.dry_run:
         log.info("DRY RUN mode — no documents will be modified")
 
@@ -90,7 +96,6 @@ async def main_async(args: argparse.Namespace) -> None:
         # Verify Paperless connectivity
         log.info("Checking Paperless API connectivity...")
         try:
-            import httpx
             from core.paperless import _raise_for_status
             r = client._client.get("/api/", follow_redirects=True)
             _raise_for_status(r)
@@ -130,13 +135,7 @@ async def main_async(args: argparse.Namespace) -> None:
             await run_evals(agent, config, split=args.split)
             return
 
-        log.info("Resolving tag: '%s'", config.tag_pending)
-        try:
-            pending_id = client.get_tag_id(config.tag_pending, create=True)
-        except Exception as e:
-            log.error("Failed to resolve tag: %s", e)
-            sys.exit(1)
-
+        # Set up custom fields
         try:
             custom_field_id = client.get_or_create_custom_field(
                 "ai_processed", data_type="date"
@@ -149,17 +148,38 @@ async def main_async(args: argparse.Namespace) -> None:
             sys.exit(1)
 
         log.info(
-            "Tag ID: pending=%d | custom fields: ai_processed=%d ai_result=%d",
-            pending_id,
+            "Custom fields: ai_processed=%d ai_result=%d",
             custom_field_id,
             ai_result_field_id,
         )
+
+        # Set up Redis queue
+        queue = DocumentQueue(config.redis_url)
+        log.info("Redis queue: %s", config.redis_url)
+
+        # Set up Qdrant store (connectivity warning only — may be starting up)
+        store = QdrantDocumentStore(config.qdrant_url)
+        try:
+            await store.ensure_collection()
+            log.info("Qdrant collection ready (%s)", config.qdrant_url)
+        except Exception as e:
+            log.warning("Qdrant not reachable: %s — embedding will be skipped", e)
+            store = None
+
+        # Set up Infinity embedder (warning only — GPU may be off)
+        embedder = InfinityEmbedder(config.infinity_url, config.embedding_model)
+        if not await embedder.check_connectivity():
+            log.warning(
+                "Infinity not reachable at %s — embedding will be skipped", config.infinity_url
+            )
+            embedder = None
 
         agent = _build_agent(config)
 
         if args.once:
             success, failure = await run_batch(
-                client, agent, config, pending_id, custom_field_id, ai_result_field_id
+                client, agent, config, custom_field_id, ai_result_field_id,
+                queue, store, embedder,
             )
             _write_heartbeat()
             log.info("Done. Success: %d, Failed: %d", success, failure)
@@ -183,7 +203,8 @@ async def main_async(args: argparse.Namespace) -> None:
             while not is_shutdown_requested():
                 try:
                     success, failure = await run_batch(
-                        client, agent, config, pending_id, custom_field_id, ai_result_field_id
+                        client, agent, config, custom_field_id, ai_result_field_id,
+                        queue, store, embedder,
                     )
                     if success or failure:
                         log.info("Batch done. Success: %d, Failed: %d", success, failure)
@@ -198,6 +219,8 @@ async def main_async(args: argparse.Namespace) -> None:
                 except asyncio.CancelledError:
                     break
             log.info("Shutdown complete.")
+
+        await queue.close()
 
 
 def main() -> None:

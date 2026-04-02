@@ -40,6 +40,8 @@ services:
         condition: service_started
       tika:
         condition: service_started
+      qdrant:
+        condition: service_started
     healthcheck:
       test: ["CMD", "curl", "-fs", "-S", "--max-time", "2", "http://localhost:8000"]
       interval: 120s
@@ -103,6 +105,32 @@ services:
       - "traefik.http.routers.phoenix.service=phoenix"
       - "traefik.http.services.phoenix.loadbalancer.server.port=6006"
 
+  # Qdrant vector database — stores document chunk embeddings for hybrid search.
+  # Always-on, lightweight (~50 MB RAM, written in Rust).
+  qdrant:
+    image: qdrant/qdrant:latest
+    restart: unless-stopped
+    volumes: [] # storage volume added in docker-compose.override.yml
+    networks:
+      - internal
+
+  # Webhook listener — receives document events from Paperless and enqueues
+  # doc IDs in Redis DB 1 for the AI worker to pick up.
+  # Configure in Paperless: Settings → Workflows → Action: Webhook
+  #   URL: http://webhook-listener:8001/webhook/document
+  webhook-listener:
+    build:
+      context: ./ai
+    restart: unless-stopped
+    command: uvicorn search.webhook:app --host 0.0.0.0 --port 8001
+    environment:
+      - REDIS_URL=redis://broker:6379/1
+    networks:
+      - internal
+    depends_on:
+      broker:
+        condition: service_healthy
+
   # AI batch post-processing — runs permanently alongside paperless.
   # Polls for documents tagged "ai-review-pending", re-OCRs them with a vision
   # LLM, extracts metadata (title, date, correspondent) with a text LLM, and
@@ -162,6 +190,12 @@ services:
       - GOOGLE_API_KEY_FILE=/run/secrets/google_api_key
       - ANTHROPIC_API_KEY_FILE=/run/secrets/anthropic_api_key
       - OPENAI_API_KEY_FILE=/run/secrets/openai_api_key
+
+      # Redis queue + Qdrant + Infinity embedding
+      - REDIS_URL=redis://broker:6379/1
+      - QDRANT_URL=http://qdrant:6333
+      - INFINITY_URL
+      - EMBEDDING_MODEL
 
       # Behaviour tuning (all optional)
       - POLL_INTERVAL

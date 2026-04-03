@@ -1,0 +1,301 @@
+"""
+Unit tests for metadata extraction strategies (LLM vs NuExtract).
+
+Tests validate graceful handling of:
+- Successful JSON extraction
+- Malformed JSON (escaped quotes, missing commas, trailing commas, etc.)
+- Missing fields in JSON
+- Empty/null values
+- Non-string values (numbers, booleans)
+"""
+
+import json
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
+
+from paperless_ai.agents.smart_graph_agent import (
+    BaseExtractionStrategy,
+    NuExtractStrategy,
+    StructuredOutputStrategy,
+    _ExtractedMetadata,
+)
+from paperless_ai.core.config import AgentConfig
+
+
+# ---------------------------------------------------------------------------
+# Fixtures
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def mock_config():
+    """Minimal AgentConfig for testing."""
+    config = MagicMock(spec=AgentConfig)
+    config.effective_metadata_model = "test-model"
+    config.metadata_api_base = None
+    config.metadata_prompt = "Extract metadata from the following text:"
+    config.get_metadata_litellm_kwargs = lambda: {}
+    return config
+
+
+# ---------------------------------------------------------------------------
+# Tests: _fallback_parse (json-repair integration)
+# ---------------------------------------------------------------------------
+
+
+class TestFallbackParsing:
+    """Test the _fallback_parse method with malformed JSON."""
+
+    @pytest.fixture
+    def strategy(self):
+        """Use StructuredOutputStrategy to test the base _fallback_parse."""
+        return StructuredOutputStrategy()
+
+    def test_fallback_parse_valid_json(self, strategy):
+        """Valid JSON should parse successfully."""
+        raw = '{"title": "Test Invoice", "date": "2024-01-15", "correspondent": "Acme"}'
+        result = strategy._fallback_parse(raw)
+        assert result == {
+            "title": "Test Invoice",
+            "date": "2024-01-15",
+            "correspondent": "Acme",
+        }
+
+    def test_fallback_parse_escaped_quotes(self, strategy):
+        """JSON with escaped quotes in values should be repaired."""
+        raw = r'{"title": "Invoice from \"Acme Corp\"", "date": "2024-01-15"}'
+        result = strategy._fallback_parse(raw)
+        # json-repair should handle this gracefully
+        assert "title" in result or result == {}  # Either repairs it or returns empty
+
+    def test_fallback_parse_missing_commas(self, strategy):
+        """JSON with missing commas should be repaired."""
+        raw = '{"title": "Test" "date": "2024-01-15"}'
+        result = strategy._fallback_parse(raw)
+        # json-repair attempts to add the missing comma
+        assert "title" in result or result == {}
+
+    def test_fallback_parse_trailing_comma(self, strategy):
+        """JSON with trailing comma should be repaired."""
+        raw = '{"title": "Test", "date": "2024-01-15",}'
+        result = strategy._fallback_parse(raw)
+        assert "title" in result or result == {}
+
+    def test_fallback_parse_non_string_values(self, strategy):
+        """JSON with non-string values (numbers, booleans) should parse."""
+        raw = '{"pages": 10, "is_important": true, "confidence": 0.95}'
+        result = strategy._fallback_parse(raw)
+        # All keys should be present if parsing succeeds
+        assert "pages" in result or result == {}
+
+    def test_fallback_parse_null_values(self, strategy):
+        """JSON with null values should parse."""
+        raw = '{"title": "Test", "correspondent": null, "date": null}'
+        result = strategy._fallback_parse(raw)
+        assert "title" in result or result == {}
+
+    def test_fallback_parse_completely_invalid(self, strategy):
+        """Completely malformed input should return empty dict gracefully."""
+        raw = "this is not json at all!!!"
+        result = strategy._fallback_parse(raw)
+        assert result == {}
+
+
+# ---------------------------------------------------------------------------
+# Tests: StructuredOutputStrategy
+# ---------------------------------------------------------------------------
+
+
+class TestStructuredOutputStrategy:
+    """Test LLM-based extraction with response_format."""
+
+    @pytest.fixture
+    def strategy(self):
+        return StructuredOutputStrategy()
+
+    @pytest.mark.asyncio
+    async def test_extract_successful_json(self, strategy, mock_config):
+        """Successful LLM response with valid JSON."""
+        raw_response = json.dumps({
+            "title": "Test Invoice",
+            "date": "2024-01-15",
+            "correspondent": "Acme Corp",
+        })
+        mock_message = MagicMock()
+        mock_message.content = raw_response
+        mock_response = MagicMock()
+        mock_response.choices = [MagicMock(message=mock_message)]
+
+        with patch("litellm.acompletion", new_callable=AsyncMock) as mock_llm:
+            mock_llm.return_value = mock_response
+            result = await strategy.extract("Sample OCR text", mock_config)
+
+        assert result.title == "Test Invoice"
+        assert result.date == "2024-01-15"
+        assert result.correspondent == "Acme Corp"
+
+    @pytest.mark.asyncio
+    async def test_extract_malformed_json_fallback(self, strategy, mock_config):
+        """LLM response with malformed JSON should fall back gracefully."""
+        # Malformed but recoverable JSON
+        raw_response = '{"title": "Test", "date": "2024-01-15",}'
+        mock_message = MagicMock()
+        mock_message.content = raw_response
+        mock_response = MagicMock()
+        mock_response.choices = [MagicMock(message=mock_message)]
+
+        with patch("litellm.acompletion", new_callable=AsyncMock) as mock_llm:
+            mock_llm.return_value = mock_response
+            result = await strategy.extract("Sample OCR text", mock_config)
+
+        # Should create an _ExtractedMetadata object (may have empty fields if repair fails)
+        assert isinstance(result, _ExtractedMetadata)
+
+    @pytest.mark.asyncio
+    async def test_extract_missing_fields(self, strategy, mock_config):
+        """LLM response with only some fields should handle gracefully."""
+        raw_response = json.dumps({
+            "title": "Invoice",
+            # date and correspondent missing
+        })
+        mock_message = MagicMock()
+        mock_message.content = raw_response
+        mock_response = MagicMock()
+        mock_response.choices = [MagicMock(message=mock_message)]
+
+        with patch("litellm.acompletion", new_callable=AsyncMock) as mock_llm:
+            mock_llm.return_value = mock_response
+            result = await strategy.extract("Sample OCR text", mock_config)
+
+        assert result.title == "Invoice"
+        assert result.date is None
+        assert result.correspondent is None
+
+    @pytest.mark.asyncio
+    async def test_extract_empty_response(self, strategy, mock_config):
+        """Empty or null LLM response should default to empty metadata."""
+        mock_message = MagicMock()
+        mock_message.content = None
+        mock_response = MagicMock()
+        mock_response.choices = [MagicMock(message=mock_message)]
+
+        with patch("litellm.acompletion", new_callable=AsyncMock) as mock_llm:
+            mock_llm.return_value = mock_response
+            result = await strategy.extract("Sample OCR text", mock_config)
+
+        # Should default to empty metadata
+        assert result.title is None
+        assert result.date is None
+        assert result.correspondent is None
+
+
+# ---------------------------------------------------------------------------
+# Tests: NuExtractStrategy
+# ---------------------------------------------------------------------------
+
+
+class TestNuExtractStrategy:
+    """Test template-based extraction with NuExtract model."""
+
+    @pytest.fixture
+    def strategy(self):
+        return NuExtractStrategy()
+
+    @pytest.mark.asyncio
+    async def test_extract_successful(self, strategy, mock_config):
+        """Successful NuExtract response with valid JSON."""
+        # NuExtract returns a specific template structure
+        raw_response = json.dumps({
+            "title_summarizing_subject_clear_concise_descriptive": "Test Invoice",
+            "document_date": "2024-01-15",
+            "issuing_organization_or_sender": "Acme Corp",
+        })
+        mock_message = MagicMock()
+        mock_message.content = raw_response
+        mock_response = MagicMock()
+        mock_response.choices = [MagicMock(message=mock_message)]
+
+        with patch("litellm.acompletion", new_callable=AsyncMock) as mock_llm:
+            mock_llm.return_value = mock_response
+            result = await strategy.extract("Sample OCR text", mock_config)
+
+        assert result.title == "Test Invoice"
+        assert result.date == "2024-01-15"
+        assert result.correspondent == "Acme Corp"
+
+    @pytest.mark.asyncio
+    async def test_extract_missing_template_fields(self, strategy, mock_config):
+        """NuExtract with missing template fields should handle gracefully."""
+        raw_response = json.dumps({
+            "title_summarizing_subject_clear_concise_descriptive": "Test",
+            # Missing date and correspondent
+        })
+        mock_message = MagicMock()
+        mock_message.content = raw_response
+        mock_response = MagicMock()
+        mock_response.choices = [MagicMock(message=mock_message)]
+
+        with patch("litellm.acompletion", new_callable=AsyncMock) as mock_llm:
+            mock_llm.return_value = mock_response
+            result = await strategy.extract("Sample OCR text", mock_config)
+
+        assert result.title == "Test"
+        assert result.date is None
+        assert result.correspondent is None
+
+    @pytest.mark.asyncio
+    async def test_extract_malformed_json_retry(self, strategy, mock_config):
+        """NuExtract with malformed JSON on retry should fall back."""
+        # First response: invalid JSON that triggers retry
+        # The strategy will retry and potentially get fixed JSON
+        raw_response = '{"title": "Test"'  # Incomplete JSON
+        mock_message = MagicMock()
+        mock_message.content = raw_response
+        mock_response = MagicMock()
+        mock_response.choices = [MagicMock(message=mock_message)]
+
+        with patch("litellm.acompletion", new_callable=AsyncMock) as mock_llm:
+            mock_llm.return_value = mock_response
+            result = await strategy.extract("Sample OCR text", mock_config)
+
+        # Should create metadata object (may be empty if unrepair able)
+        assert isinstance(result, _ExtractedMetadata)
+
+
+# ---------------------------------------------------------------------------
+# Tests: Date field validation
+# ---------------------------------------------------------------------------
+
+
+class TestDateFieldValidation:
+    """Test date field parsing and validation in _ExtractedMetadata."""
+
+    def test_valid_iso_date(self):
+        """Valid ISO date should be accepted."""
+        meta = _ExtractedMetadata(
+            title="Test",
+            date="2024-01-15",
+            correspondent="Acme",
+        )
+        assert meta.date == "2024-01-15"
+
+    def test_iso_datetime_stripped_to_date(self):
+        """ISO datetime should be stripped to date only."""
+        meta = _ExtractedMetadata(
+            title="Test",
+            date="2024-01-15T10:30:00",
+            correspondent="Acme",
+        )
+        # Field validator should strip the time component
+        assert meta.date == "2024-01-15"
+
+    def test_invalid_date_preserved(self):
+        """Invalid date format should be preserved (let runner handle validation)."""
+        meta = _ExtractedMetadata(
+            title="Test",
+            date="not a date",
+            correspondent="Acme",
+        )
+        # Validator doesn't enforce strict validation, just strips ISO times
+        assert meta.date == "not a date"

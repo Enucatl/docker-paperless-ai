@@ -29,6 +29,8 @@ def chunk_text(
         chunks.append(text[start:end])
         if end == len(text):
             break
-        start = end - overlap
+        # Calculate next start position: end - overlap, but ensure we advance at least 1 char.
+        # This prevents infinite loops when overlap >= max_chars.
+        start = max(end - overlap, start + 1)
 
     return chunks

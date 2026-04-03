@@ -1,0 +1,120 @@
+
+=== Starting test infrastructure ===
+ Container paperless-ai-gotenberg-1 Creating 
+ Container paperless-ai-tika-1 Creating 
+ Container paperless-ai-broker-1 Creating 
+ Container paperless-ai-db-1 Creating 
+ Container paperless-ai-qdrant-1 Creating 
+ Container paperless-ai-gotenberg-1 Created 
+ Container paperless-ai-broker-1 Created 
+ Container paperless-ai-webhook-listener-1 Creating 
+ Container paperless-ai-db-1 Created 
+ Container paperless-ai-tika-1 Created 
+ Container paperless-ai-qdrant-1 Created 
+ Container paperless-ai-webserver-1 Creating 
+ Container paperless-ai-webhook-listener-1 Created 
+ Container paperless-ai-webserver-1 Created 
+ Container paperless-ai-db-1 Starting 
+ Container paperless-ai-broker-1 Starting 
+ Container paperless-ai-qdrant-1 Starting 
+ Container paperless-ai-gotenberg-1 Starting 
+ Container paperless-ai-tika-1 Starting 
+ Container paperless-ai-db-1 Started 
+ Container paperless-ai-tika-1 Started 
+ Container paperless-ai-gotenberg-1 Started 
+ Container paperless-ai-broker-1 Started 
+ Container paperless-ai-broker-1 Waiting 
+ Container paperless-ai-qdrant-1 Started 
+ Container paperless-ai-db-1 Waiting 
+ Container paperless-ai-broker-1 Waiting 
+ Container paperless-ai-db-1 Healthy 
+ Container paperless-ai-broker-1 Healthy 
+ Container paperless-ai-webhook-listener-1 Starting 
+ Container paperless-ai-broker-1 Healthy 
+ Container paperless-ai-webserver-1 Starting 
+ Container paperless-ai-webhook-listener-1 Started 
+ Container paperless-ai-webserver-1 Started 
+
+=== Waiting for Paperless webserver to become healthy ===
+  status=starting, elapsed=0s...
+  status=starting, elapsed=5s...
+  status=starting, elapsed=10s...
+  status=starting, elapsed=15s...
+  status=starting, elapsed=20s...
+  status=starting, elapsed=25s...
+  status=starting, elapsed=30s...
+  status=starting, elapsed=35s...
+  status=starting, elapsed=40s...
+  status=starting, elapsed=45s...
+  status=starting, elapsed=50s...
+  status=starting, elapsed=55s...
+  status=starting, elapsed=60s...
+  status=starting, elapsed=65s...
+  status=starting, elapsed=70s...
+  status=starting, elapsed=75s...
+  status=starting, elapsed=80s...
+  status=starting, elapsed=85s...
+  status=starting, elapsed=90s...
+  status=starting, elapsed=95s...
+  status=starting, elapsed=100s...
+  status=starting, elapsed=105s...
+  status=starting, elapsed=110s...
+  status=starting, elapsed=115s...
+Webserver is healthy!
+
+=== Running pytest ===
+ Container paperless-ai-gotenberg-1 Running 
+ Container paperless-ai-db-1 Running 
+ Container paperless-ai-broker-1 Running 
+ Container paperless-ai-tika-1 Running 
+ Container paperless-ai-webhook-listener-1 Running 
+ Container paperless-ai-qdrant-1 Running 
+ Container paperless-ai-webserver-1 Running 
+ Container paperless-ai-broker-1 Waiting 
+ Container paperless-ai-db-1 Waiting 
+ Container paperless-ai-broker-1 Waiting 
+ Container paperless-ai-broker-1 Healthy 
+ Container paperless-ai-broker-1 Healthy 
+ Container paperless-ai-db-1 Healthy 
+ Container paperless-ai-qdrant-1 Waiting 
+ Container paperless-ai-webhook-listener-1 Waiting 
+ Container paperless-ai-webserver-1 Waiting 
+ Container paperless-ai-webhook-listener-1 Healthy 
+ Container paperless-ai-webserver-1 Healthy 
+ Container paperless-ai-qdrant-1 Healthy 
+ Container paperless-ai-ai-run-237ccaa714ea Creating 
+ Container paperless-ai-ai-run-237ccaa714ea Created 
+Using Python 3.12.13 environment at: /usr/local
+Resolved 124 packages in 402ms
+   Building paperless-ai @ file:///app
+      Built paperless-ai @ file:///app
+Prepared 5 packages in 1.79s
+Uninstalled 1 package in 26ms
+Installed 5 packages in 7ms
+ + iniconfig==2.3.0
+ ~ paperless-ai==0.1.0 (from file:///app)
+ + pluggy==1.6.0
+ + pytest==9.0.2
+ + pytest-asyncio==1.3.0
+warning: The package `qdrant-client==1.17.1` does not have an extra named `async`
+============================= test session starts ==============================
+platform linux -- Python 3.12.13, pytest-9.0.2, pluggy-1.6.0 -- /usr/local/bin/python
+cachedir: .pytest_cache
+rootdir: /app
+configfile: pyproject.toml
+plugins: asyncio-1.3.0, anyio-4.13.0, langsmith-0.7.24
+asyncio: mode=Mode.AUTO, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+collecting ... collected 122 items
+
+tests/test_chunker.py::TestChunkerBasic::test_empty_string PASSED        [  0%]
+tests/test_chunker.py::TestChunkerBasic::test_whitespace_only PASSED     [  1%]
+tests/test_chunker.py::TestChunkerBasic::test_single_chunk_short_text PASSED [  2%]
+tests/test_chunker.py::TestChunkerBasic::test_single_chunk_exact_size PASSED [  3%]
+tests/test_chunker.py::TestChunkerBasic::test_exact_multiple_chunks PASSED [  4%]
+tests/test_chunker.py::TestChunkerOverlap::test_overlap_two_chunks PASSED [  4%]
+tests/test_chunker.py::TestChunkerOverlap::test_no_overlap PASSED        [  5%]
+tests/test_chunker.py::TestChunkerOverlap::test_small_overlap PASSED     [  6%]
+tests/test_chunker.py::TestChunkerEdgeCases::test_overlap_larger_than_max_chars 
+
+=== Tearing down test environment ===
+=== Teardown complete. All ephemeral storage wiped. ===

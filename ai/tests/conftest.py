@@ -16,16 +16,12 @@ Infrastructure available in the test environment (docker-compose.test.yml):
 import io
 import json
 import os
-import sys
 import time
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 
 import httpx
 import pytest
 import redis as _redis_sync
-
-# Ensure /app is importable regardless of the pytest working directory
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 PAPERLESS_URL = os.environ.get("PAPERLESS_URL", "http://webserver:8000")
 REDIS_URL = os.environ.get("REDIS_URL", "redis://broker:6379/1")
@@ -35,6 +31,15 @@ TEST_USER = os.environ.get("TEST_PAPERLESS_USER", "admin")
 TEST_PASS = os.environ.get("TEST_PAPERLESS_PASS", "admin")
 
 _QUEUE_KEY = "paperless-ai:pending"
+
+# Phase B: three-stage task queues
+_TASK_QUEUE_KEYS = [
+    "paperless-ai:queue:ocr",
+    "paperless-ai:queue:metadata",
+    "paperless-ai:queue:embed",
+]
+# All queue keys — old + new — used by aggregate helpers
+_ALL_QUEUE_KEYS = [_QUEUE_KEY] + _TASK_QUEUE_KEYS
 
 
 # ---------------------------------------------------------------------------
@@ -47,8 +52,10 @@ def _redis_client() -> _redis_sync.Redis:
 
 
 def _clear_redis_queue() -> None:
+    """Clear all queues (old single queue + three task queues)."""
     r = _redis_client()
-    r.delete(_QUEUE_KEY)
+    for key in _ALL_QUEUE_KEYS:
+        r.delete(key)
     r.close()
 
 
@@ -59,15 +66,27 @@ def _redis_enqueue(doc_id: int) -> None:
 
 
 def _redis_queue_size() -> int:
+    """Return total pending count across all queues."""
     r = _redis_client()
-    result = r.scard(_QUEUE_KEY)
+    total = sum(int(r.scard(key)) for key in _ALL_QUEUE_KEYS)
     r.close()
-    return int(result)
+    return total
 
 
 def _redis_queue_members() -> set[int]:
+    """Return all pending doc IDs across all queues."""
     r = _redis_client()
-    members = r.smembers(_QUEUE_KEY)
+    members: set[int] = set()
+    for key in _ALL_QUEUE_KEYS:
+        members.update(int(m) for m in r.smembers(key))
+    r.close()
+    return members
+
+
+def _redis_stage_members(stage: str) -> set[int]:
+    """Return pending doc IDs for a specific stage queue key."""
+    r = _redis_client()
+    members = r.smembers(stage)
     r.close()
     return {int(m) for m in members}
 
@@ -120,12 +139,11 @@ def paperless_token() -> str:
 
 
 @pytest.fixture(scope="session")
-def paperless_client(paperless_token: str):
-    from core.paperless import PaperlessClient
+async def paperless_client(paperless_token: str):
+    from paperless_ai.core.paperless import PaperlessClient
 
-    client = PaperlessClient(PAPERLESS_URL, paperless_token)
-    yield client
-    client.close()
+    async with PaperlessClient(PAPERLESS_URL, paperless_token) as client:
+        yield client
 
 
 # ---------------------------------------------------------------------------
@@ -184,10 +202,26 @@ async def document_queue():
     Clears the queue before the test starts so each test runs against a
     known-empty queue.  Cleans up afterwards regardless of test outcome.
     """
-    from search.queue import DocumentQueue
+    from paperless_ai.search.queue import DocumentQueue
 
     _clear_redis_queue()
     q = DocumentQueue(REDIS_URL)
+    yield q
+    await q.close()
+    _clear_redis_queue()
+
+
+@pytest.fixture
+async def task_queues():
+    """
+    A fresh TaskQueues backed by the real test Redis (DB 1).
+
+    Clears all three stage queues before and after each test.
+    """
+    from paperless_ai.search.queue import TaskQueues
+
+    _clear_redis_queue()
+    q = TaskQueues(REDIS_URL)
     yield q
     await q.close()
     _clear_redis_queue()
@@ -207,7 +241,7 @@ def mock_embedder():
     Pass this directly to run_batch() when testing the embedding pipeline.
     Infinity is not available in the test environment.
     """
-    from search.embedder import EmbeddingResult
+    from paperless_ai.search.embedder import EmbeddingResult
 
     class _MockEmbedder:
         async def embed(self, texts: list[str]) -> list[EmbeddingResult]:
@@ -220,12 +254,46 @@ def mock_embedder():
                 for i, _ in enumerate(texts)
             ]
 
+        async def aclose(self) -> None:
+            """No-op stub for compatibility with async context manager."""
+            pass
+
     return _MockEmbedder()
 
 
 # ---------------------------------------------------------------------------
 # Function-scoped: Qdrant store — real Qdrant, cleaned up per test
 # ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+async def uploaded_document(paperless_client):
+    """
+    Factory fixture: upload a fresh document for each call, delete all on teardown.
+
+    Unlike dummy_document, this fixture does NOT enqueue the document in Redis —
+    useful for tests that manage the queue themselves (e.g. webhook E2E tests).
+
+    Usage::
+
+        async def test_something(uploaded_document):
+            doc_id = await uploaded_document()
+            ...
+    """
+    doc_ids: list[int] = []
+
+    async def _upload() -> int:
+        doc_id = await _upload_document(paperless_client, _make_test_pdf())
+        doc_ids.append(doc_id)
+        return doc_id
+
+    yield _upload
+
+    for doc_id in doc_ids:
+        try:
+            await paperless_client._client.delete(f"/api/documents/{doc_id}/")
+        except Exception:
+            pass
 
 
 @pytest.fixture
@@ -236,7 +304,7 @@ async def qdrant_store():
     Creates the collection if it does not exist.  The collection persists
     within the test run (anonymous volume); `docker compose down -v` wipes it.
     """
-    from search.qdrant_store import QdrantDocumentStore
+    from paperless_ai.search.qdrant_store import QdrantDocumentStore
 
     store = QdrantDocumentStore(url=QDRANT_URL)
     await store.ensure_collection()
@@ -266,9 +334,9 @@ def _make_test_pdf() -> bytes:
     return buf.getvalue()
 
 
-def _upload_document(client, pdf_bytes: bytes) -> int:
+async def _upload_document(client, pdf_bytes: bytes) -> int:
     """Upload a PDF to Paperless and wait for it to be indexed. Returns doc_id."""
-    r = client._client.post(
+    r = await client._client.post(
         "/api/documents/post_document/",
         files={"document": ("dummy_invoice.pdf", pdf_bytes, "application/pdf")},
         timeout=30,
@@ -283,14 +351,21 @@ def _upload_document(client, pdf_bytes: bytes) -> int:
     doc_id = None
     for _ in range(60):
         time.sleep(2)
-        tasks_r = client._client.get("/api/tasks/", params={"task_id": task_uuid})
+        tasks_r = await client._client.get("/api/tasks/", params={"task_id": task_uuid})
         tasks_r.raise_for_status()
         tasks = tasks_r.json()
         if tasks:
             task = tasks[0]
             status = task.get("status", "")
             if status == "SUCCESS":
-                doc_id = task.get("result") or task.get("related_document")
+                # "related_document" is an integer id when available;
+                # "result" may be a string like "Success. New document id 4 created"
+                doc_id = task.get("related_document")
+                if doc_id is None:
+                    import re
+                    m = re.search(r"\b(\d+)\b", str(task.get("result", "")))
+                    if m:
+                        doc_id = int(m.group(1))
                 break
             if status == "FAILURE":
                 raise RuntimeError(f"Paperless task {task_uuid} failed: {task}")
@@ -299,7 +374,7 @@ def _upload_document(client, pdf_bytes: bytes) -> int:
         raise RuntimeError(
             f"Document not indexed after 120 s (task={task_uuid})"
         )
-    return int(doc_id)
+    return int(doc_id)  # may already be int if from related_document
 
 
 @pytest.fixture
@@ -312,7 +387,7 @@ async def dummy_document(paperless_client, document_queue):
     cleared before the document ID is enqueued.
     """
     pdf_bytes = _make_test_pdf()
-    doc_id = _upload_document(paperless_client, pdf_bytes)
+    doc_id = await _upload_document(paperless_client, pdf_bytes)
 
     # Enqueue the document ID so run_batch() will pick it up
     await document_queue.enqueue(doc_id)
@@ -321,6 +396,6 @@ async def dummy_document(paperless_client, document_queue):
 
     # Cleanup: delete the document so each test starts from a clean state
     try:
-        paperless_client._client.delete(f"/api/documents/{doc_id}/")
+        await paperless_client._client.delete(f"/api/documents/{doc_id}/")
     except Exception:
         pass

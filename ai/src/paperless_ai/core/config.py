@@ -6,7 +6,7 @@ and exposes a validated AgentConfig Pydantic model.
 """
 
 import os
-from pathlib import Path
+from importlib.resources import files as _pkg_files
 from typing import List, Optional
 
 import litellm
@@ -63,11 +63,9 @@ def _inject_secrets() -> None:
             os.environ[key] = val
 
 
-def _load_prompt(path: str) -> str | None:
-    p = Path(path)
-    if p.exists():
-        return p.read_text(encoding="utf-8").strip()
-    return None
+def _load_prompt(name: str) -> str:
+    """Load a prompt file bundled as package data."""
+    return _pkg_files("paperless_ai").joinpath(name).read_text(encoding="utf-8").strip()
 
 
 class JuryMemberConfig(BaseModel):
@@ -103,8 +101,15 @@ class AgentConfig(BaseModel):
     poll_interval: int = 300
     llm_retries: int = 3
     ocr_concurrency: int = 4
-    tag_pending: str = "ai-review-pending"
+    tag_ocr: str = "ai:run-ocr"
+    tag_metadata: str = "ai:run-metadata"
+    tag_embed: str = "ai:run-embed"
     dry_run: bool = False
+
+    @property
+    def tag_pending(self) -> str:
+        """Backward-compat alias — the OCR tag is the pipeline entry point."""
+        return self.tag_ocr
     temperature: Optional[float] = None
 
     ocr_prompt: str = _OCR_PROMPT_DEFAULT
@@ -136,7 +141,7 @@ class AgentConfig(BaseModel):
     metadata_max_tokens: int = 1000
 
     # Dotted import path to the agent class to use in eval experiments.
-    agent_class: str = "agents.smart_graph_agent.SmartDocumentAgent"
+    agent_class: str = "paperless_ai.agents.smart_graph_agent.SmartDocumentAgent"
 
     # Model used as LLM judge for title quality evaluation.
     # Should be a strong, fixed model independent of the experiment being
@@ -195,11 +200,13 @@ class AgentConfig(BaseModel):
             poll_interval=int(os.environ.get("POLL_INTERVAL", "300")),
             llm_retries=int(os.environ.get("LLM_RETRIES", "3")),
             ocr_concurrency=int(os.environ.get("OCR_CONCURRENCY", "4")),
-            tag_pending=os.environ.get("TAG_PENDING", "ai-review-pending"),
+            tag_ocr=os.environ.get("TAG_OCR", os.environ.get("TAG_PENDING", "ai:run-ocr")),
+            tag_metadata=os.environ.get("TAG_METADATA", "ai:run-metadata"),
+            tag_embed=os.environ.get("TAG_EMBED", "ai:run-embed"),
             dry_run=os.environ.get("DRY_RUN", "false").lower() in ("1", "true", "yes"),
             temperature=temperature,
-            ocr_prompt=_load_prompt("/app/prompt.txt") or _OCR_PROMPT_DEFAULT,
-            metadata_prompt=_load_prompt("/app/metadata_prompt.txt") or _METADATA_PROMPT_DEFAULT,
+            ocr_prompt=_load_prompt("prompt.txt"),
+            metadata_prompt=_load_prompt("metadata_prompt.txt"),
             metadata_max_tokens=int(os.environ.get("METADATA_MAX_TOKENS", "1000")),
             nuextract_json_retries=int(os.environ.get("NUEXTRACT_JSON_RETRIES", "5")),
             redis_url=os.environ.get("REDIS_URL", "redis://broker:6379/1"),

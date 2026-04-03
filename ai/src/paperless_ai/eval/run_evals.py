@@ -20,8 +20,8 @@ import nest_asyncio
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from core.config import AgentConfig
-from core.telemetry import setup_telemetry
+from paperless_ai.core.config import AgentConfig
+from paperless_ai.core.telemetry import setup_telemetry
 
 log = logging.getLogger(__name__)
 
@@ -132,7 +132,7 @@ async def run_scientific_evaluation(config: AgentConfig, split: str = "test") ->
     # from env so experiments benefit from the same runtime tuning.
     _reset_for_experiments = {
         "name": None,
-        "agent_class": "agents.smart_graph_agent.SmartDocumentAgent",
+        "agent_class": "paperless_ai.agents.smart_graph_agent.SmartDocumentAgent",
         "ocr_model": "gemini/gemini-2.5-flash",
         "metadata_model": None,
         "ocr_api_base": None,
@@ -158,7 +158,7 @@ async def run_scientific_evaluation(config: AgentConfig, split: str = "test") ->
     #   expected — dict of output_keys from the Phoenix dataset (ground truth)
     # Return value is a float in [0, 1] (or bool, which Phoenix coerces).
 
-    from eval.metrics import score_correspondent, score_date
+    from paperless_ai.eval.metrics import score_correspondent, score_date
 
     def _norm(v) -> str:
         return str(v or "").strip().lower()
@@ -246,7 +246,7 @@ Respond with exactly one word: "appropriate" or "inappropriate".
 
         # For SmartDocumentAgent, auto-detect and select extraction strategy
         if class_name == "SmartDocumentAgent":
-            from agents.smart_graph_agent import _select_extraction_strategy
+            from paperless_ai.agents.smart_graph_agent import _select_extraction_strategy
             strategy = _select_extraction_strategy(exp_config)
             log.info("Experiment %s: Using %s", exp_config.name, strategy.__class__.__name__)
             return agent_class(exp_config, extraction_strategy=strategy)
@@ -355,13 +355,6 @@ Respond with exactly one word: "appropriate" or "inappropriate".
     log.info("\nAll experiments complete! View results at %s", phoenix_endpoint)
 
 
-async def run_evals(agent, config, split: str = "test") -> None:
-    """
-    Wrapper to maintain CLI compatibility while enabling scientific mode.
-
-    Args:
-        agent: Document processing agent (unused but kept for CLI compat)
-        config: Agent configuration
-        split: Dataset split to evaluate ("test", "validation", or "all")
-    """
+async def run_evals(config, split: str = "test") -> None:
+    """Run the Phoenix-based scientific evaluation. Thin wrapper over run_scientific_evaluation."""
     await run_scientific_evaluation(config, split=split)

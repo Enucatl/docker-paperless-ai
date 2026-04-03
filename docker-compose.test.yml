@@ -36,6 +36,12 @@ services:
       - PAPERLESS_SECRET_KEY=test-secret-key-not-for-production
       - PAPERLESS_URL=http://webserver:8000
       - PAPERLESS_OCR_LANGUAGE=eng
+      # Allow Paperless to POST webhooks to internal Docker hostnames
+      # (webhook-listener is on the same Docker network as webserver).
+      - PAPERLESS_ALLOWED_HOSTS=*
+      - PAPERLESS_CORS_ALLOWED_HOSTS=http://webserver:8000
+      # Clear the production CA cert path — the file doesn't exist in the test environment.
+      - PAPERLESS_EMAIL_CERTIFICATE_LOCATION=
 
   # Qdrant vector DB — anonymous volume so `down -v` leaves no residue.
   qdrant:

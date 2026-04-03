@@ -9,6 +9,7 @@ dependencies = [
     "PyMuPDF>=1.25",
     "Pillow>=10.0",
     "langgraph>=0.2",
+    "json-repair>=0.25",
     "openinference-instrumentation-litellm",
     "openinference-instrumentation-langchain",
     "openinference-instrumentation",
@@ -43,4 +44,7 @@ requires = ["setuptools>=61.0"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
-include = ["agents*", "core*", "eval*", "search*"]
+where = ["src"]
+
+[tool.setuptools.package-data]
+"paperless_ai" = ["*.txt", "eval/*.json", "eval/*.yaml"]

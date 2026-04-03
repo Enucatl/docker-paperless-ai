@@ -3,8 +3,8 @@
 CLI entrypoint for the AI post-processing service.
 
 Modes:
-    --once       Process all pending documents once and exit
-    --watch      Poll continuously (default when run via Docker)
+    --once       Process all pending documents once (all three stages) and exit
+    --watch      Poll continuously with three concurrent workers (default via Docker)
     --eval       Run offline evaluation against eval/golden_dataset.json
     --dry-run    Log what would happen without modifying any documents
     --purge-notes  Delete all AI-generated notes from previous runs
@@ -14,6 +14,11 @@ Usage:
     python cli.py --watch
     python cli.py --eval
     python cli.py --once --dry-run
+
+Pipeline stages (tag-driven):
+    ai:run-ocr      → OCR worker: download PDF, run vision OCR, write content
+    ai:run-metadata → Metadata worker: read content, run LLM, write title/date/correspondent
+    ai:run-embed    → Embed worker: read content+metadata, embed, upsert Qdrant
 """
 
 import argparse
@@ -41,22 +46,21 @@ def _write_heartbeat() -> None:
         pass
 
 
-def _build_agent(config):
-    from agents.smart_graph_agent import SmartDocumentAgent, _select_extraction_strategy
-
-    strategy = _select_extraction_strategy(config)
-    log.info("Using %s for metadata extraction", strategy.__class__.__name__)
-    return SmartDocumentAgent(config, extraction_strategy=strategy)
-
-
 async def main_async(args: argparse.Namespace) -> None:
-    from core.config import AgentConfig
-    from core.paperless import PaperlessClient
-    from core.runner import purge_ai_notes, request_shutdown, run_batch
-    from core.telemetry import setup_telemetry
-    from search.embedder import InfinityEmbedder
-    from search.queue import DocumentQueue
-    from search.qdrant_store import QdrantDocumentStore
+    from paperless_ai.core.config import AgentConfig
+    from paperless_ai.core.paperless import PaperlessClient
+    from paperless_ai.core.runner import (
+        purge_ai_notes,
+        request_shutdown,
+        is_shutdown_requested,
+        run_ocr_batch,
+        run_metadata_batch,
+        run_embed_batch,
+    )
+    from paperless_ai.core.telemetry import setup_telemetry
+    from paperless_ai.search.embedder import InfinityEmbedder
+    from paperless_ai.search.queue import TaskQueues
+    from paperless_ai.search.qdrant_store import QdrantDocumentStore
 
     config = AgentConfig.from_env()
 
@@ -70,8 +74,6 @@ async def main_async(args: argparse.Namespace) -> None:
         log.error("PAPERLESS_TOKEN (or PAPERLESS_TOKEN_FILE) is not set")
         sys.exit(1)
 
-    # In eval mode, telemetry is set up after Phoenix connectivity is confirmed
-    # (inside run_scientific_evaluation) so LiteLLM spans carry token/cost data.
     if not args.eval:
         setup_telemetry()
 
@@ -86,18 +88,19 @@ async def main_async(args: argparse.Namespace) -> None:
         config.effective_metadata_model,
         f" (api_base={config.metadata_api_base})" if config.metadata_api_base else "",
     )
+    log.info("Embedding: %s @ %s", config.embedding_model, config.infinity_url)
     log.info(
-        "Embedding: %s @ %s", config.embedding_model, config.infinity_url
+        "Pipeline tags: ocr=%r metadata=%r embed=%r",
+        config.tag_ocr, config.tag_metadata, config.tag_embed,
     )
     if config.dry_run:
         log.info("DRY RUN mode — no documents will be modified")
 
-    with PaperlessClient(config.paperless_url, config.paperless_token) as client:
-        # Verify Paperless connectivity
+    async with PaperlessClient(config.paperless_url, config.paperless_token) as client:
         log.info("Checking Paperless API connectivity...")
         try:
-            from core.paperless import _raise_for_status
-            r = client._client.get("/api/", follow_redirects=True)
+            from paperless_ai.core.paperless import _raise_for_status
+            r = await client._client.get("/api/", follow_redirects=True)
             _raise_for_status(r)
             log.info(
                 "Paperless API reachable (version: %s)",
@@ -107,7 +110,6 @@ async def main_async(args: argparse.Namespace) -> None:
             log.error("Cannot reach Paperless API at %s: %s", config.paperless_url, e)
             sys.exit(1)
 
-        # Verify LLM connectivity (warning only — GPU workstation may be off)
         log.info("Checking LLM connectivity (model: %s)...", config.effective_metadata_model)
         try:
             import litellm
@@ -126,21 +128,20 @@ async def main_async(args: argparse.Namespace) -> None:
             )
 
         if args.purge_notes:
-            purge_ai_notes(client, config.dry_run)
+            await purge_ai_notes(client, config.dry_run)
             return
 
         if args.eval:
-            agent = _build_agent(config)
-            from eval.run_evals import run_evals
-            await run_evals(agent, config, split=args.split)
+            from paperless_ai.eval.run_evals import run_evals
+            await run_evals(config, split=args.split)
             return
 
         # Set up custom fields
         try:
-            custom_field_id = client.get_or_create_custom_field(
+            custom_field_id = await client.get_or_create_custom_field(
                 "ai_processed", data_type="date"
             )
-            ai_result_field_id = client.get_or_create_custom_field(
+            ai_result_field_id = await client.get_or_create_custom_field(
                 "ai_result", data_type="longtext"
             )
         except Exception as e:
@@ -153,11 +154,11 @@ async def main_async(args: argparse.Namespace) -> None:
             ai_result_field_id,
         )
 
-        # Set up Redis queue
-        queue = DocumentQueue(config.redis_url)
-        log.info("Redis queue: %s", config.redis_url)
+        # Set up three-stage Redis queues
+        queues = TaskQueues(config.redis_url)
+        log.info("Redis task queues: %s", config.redis_url)
 
-        # Set up Qdrant store (connectivity warning only — may be starting up)
+        # Set up Qdrant store (optional — embedding skipped if unavailable)
         store = QdrantDocumentStore(config.qdrant_url)
         try:
             await store.ensure_collection()
@@ -166,61 +167,101 @@ async def main_async(args: argparse.Namespace) -> None:
             log.warning("Qdrant not reachable: %s — embedding will be skipped", e)
             store = None
 
-        # Set up Infinity embedder (warning only — GPU may be off)
+        # Set up Infinity embedder (optional — embedding skipped if unavailable)
         embedder = InfinityEmbedder(config.infinity_url, config.embedding_model)
         if not await embedder.check_connectivity():
             log.warning(
                 "Infinity not reachable at %s — embedding will be skipped", config.infinity_url
             )
+            await embedder.aclose()
             embedder = None
 
-        agent = _build_agent(config)
-
-        if args.once:
-            success, failure = await run_batch(
-                client, agent, config, custom_field_id, ai_result_field_id,
-                queue, store, embedder,
-            )
-            _write_heartbeat()
-            log.info("Done. Success: %d, Failed: %d", success, failure)
-        else:
-            # Watch mode with graceful shutdown
-            def _request_shutdown(signum: int, frame: object) -> None:
-                log.info(
-                    "Received %s — will stop after current document completes",
-                    signal.Signals(signum).name,
+        try:
+            if args.once:
+                # Sequential: OCR → metadata → embed (docs flow through all stages in one run)
+                ocr_s, ocr_f = await run_ocr_batch(client, config, queues)
+                meta_s, meta_f = await run_metadata_batch(
+                    client, config, queues, custom_field_id, ai_result_field_id
                 )
-                request_shutdown()
-
-            signal.signal(signal.SIGTERM, _request_shutdown)
-            signal.signal(signal.SIGINT, _request_shutdown)
-
-            from core.runner import is_shutdown_requested
-            log.info(
-                "Watch mode: polling every %ds (SIGTERM/Ctrl+C to stop gracefully)",
-                config.poll_interval,
-            )
-            while not is_shutdown_requested():
-                try:
-                    success, failure = await run_batch(
-                        client, agent, config, custom_field_id, ai_result_field_id,
-                        queue, store, embedder,
-                    )
-                    if success or failure:
-                        log.info("Batch done. Success: %d, Failed: %d", success, failure)
-                except Exception as e:
-                    log.error("Batch error: %s", e)
+                embed_s, embed_f = await run_embed_batch(client, config, queues, store, embedder)
                 _write_heartbeat()
-                if is_shutdown_requested():
-                    break
-                log.info("Sleeping %ds...", config.poll_interval)
-                try:
-                    await asyncio.sleep(config.poll_interval)
-                except asyncio.CancelledError:
-                    break
-            log.info("Shutdown complete.")
+                log.info(
+                    "Done. OCR: %d/%d  Metadata: %d/%d  Embed: %d/%d",
+                    ocr_s, ocr_s + ocr_f,
+                    meta_s, meta_s + meta_f,
+                    embed_s, embed_s + embed_f,
+                )
+            else:
+                # Watch mode: three concurrent workers, each polling their queue
+                def _request_shutdown(signum: int, frame: object) -> None:
+                    log.info(
+                        "Received %s — will stop after current document completes",
+                        signal.Signals(signum).name,
+                    )
+                    request_shutdown()
 
-        await queue.close()
+                signal.signal(signal.SIGTERM, _request_shutdown)
+                signal.signal(signal.SIGINT, _request_shutdown)
+
+                log.info(
+                    "Watch mode: three workers polling every %ds (SIGTERM/Ctrl+C to stop)",
+                    config.poll_interval,
+                )
+
+                async def _ocr_worker() -> None:
+                    while not is_shutdown_requested():
+                        try:
+                            s, f = await run_ocr_batch(client, config, queues)
+                            if s or f:
+                                log.info("OCR worker: %d ok / %d failed", s, f)
+                        except Exception as e:
+                            log.error("OCR worker error: %s", e)
+                        _write_heartbeat()
+                        if is_shutdown_requested():
+                            break
+                        try:
+                            await asyncio.sleep(config.poll_interval)
+                        except asyncio.CancelledError:
+                            break
+
+                async def _metadata_worker() -> None:
+                    while not is_shutdown_requested():
+                        try:
+                            s, f = await run_metadata_batch(
+                                client, config, queues, custom_field_id, ai_result_field_id
+                            )
+                            if s or f:
+                                log.info("Metadata worker: %d ok / %d failed", s, f)
+                        except Exception as e:
+                            log.error("Metadata worker error: %s", e)
+                        if is_shutdown_requested():
+                            break
+                        try:
+                            await asyncio.sleep(config.poll_interval)
+                        except asyncio.CancelledError:
+                            break
+
+                async def _embed_worker() -> None:
+                    while not is_shutdown_requested():
+                        try:
+                            s, f = await run_embed_batch(client, config, queues, store, embedder)
+                            if s or f:
+                                log.info("Embed worker: %d ok / %d failed", s, f)
+                        except Exception as e:
+                            log.error("Embed worker error: %s", e)
+                        if is_shutdown_requested():
+                            break
+                        try:
+                            await asyncio.sleep(config.poll_interval)
+                        except asyncio.CancelledError:
+                            break
+
+                await asyncio.gather(_ocr_worker(), _metadata_worker(), _embed_worker())
+                log.info("Shutdown complete.")
+        finally:
+            await queues.close()
+            if embedder is not None:
+                await embedder.aclose()
 
 
 def main() -> None:
@@ -236,7 +277,7 @@ def main() -> None:
     mode.add_argument(
         "--watch",
         action="store_true",
-        help="Poll continuously (default when run via Docker)",
+        help="Poll continuously with three concurrent workers (default via Docker)",
     )
     mode.add_argument(
         "--eval",
@@ -247,7 +288,7 @@ def main() -> None:
         "--split",
         choices=["test", "validation", "all", "code-test"],
         default="test",
-        help="Dataset split to evaluate (default: test). 'code-test' runs a single tagged entry for quick pipeline verification.",
+        help="Dataset split to evaluate (default: test).",
     )
     parser.add_argument(
         "--dry-run",
@@ -261,7 +302,6 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    # Default to watch mode if neither flag is set
     if not args.once and not args.eval:
         args.once = False  # watch mode is the default
 

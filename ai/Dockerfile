@@ -5,17 +5,17 @@ COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
 
 WORKDIR /app
 
-# Install dependencies first for better caching
+# Install dependencies first (cached layer — only busts when pyproject.toml changes).
+# src/ must exist so setuptools doesn't reject the build; it's empty at this point
+# so no project packages are installed yet — only the declared dependencies.
 COPY pyproject.toml ./
-RUN uv pip install --system .
+RUN mkdir src && uv pip install --system .
 
-# Copy modular source tree
+# Copy source tree and reinstall just the project package into site-packages
 COPY cli.py .
-COPY core/ core/
-COPY agents/ agents/
-COPY eval/ eval/
+COPY src/ src/
 COPY tests/ tests/
-COPY prompt.txt metadata_prompt.txt ./
+RUN uv pip install --system --no-deps .
 
 # Liveness check for the watch-mode poll loop.
 # cli.py calls _write_heartbeat() after every batch cycle, writing the current

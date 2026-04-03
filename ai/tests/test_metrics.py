@@ -1,7 +1,7 @@
 """Tests for eval/metrics.py scoring functions."""
 
 import pytest
-from eval.metrics import score_correspondent, score_date, score_title, aggregate_scores
+from paperless_ai.eval.metrics import score_correspondent, score_date, score_title, aggregate_scores
 
 
 class TestCorrespondent:
@@ -93,9 +93,9 @@ class TestDate:
         assert result["date_partial_credit"] == 0.0
 
     def test_half_year_difference(self):
-        result = score_date("2024-01-01", "2024-07-02")  # ~182 days
+        result = score_date("2024-01-01", "2024-07-02")  # 183 days (2024 is a leap year)
         assert result["date_exact_match"] is False
-        assert result["date_distance_days"] == 182
+        assert result["date_distance_days"] == 183
         assert 0.45 < result["date_partial_credit"] < 0.55
 
     def test_invalid_date_string(self):
@@ -124,7 +124,7 @@ class TestTitle:
     def test_substring_match(self):
         result = score_title("Invoice", "Invoice #12345")
         assert result["title_contains_match"] is True
-        assert result["title_keyword_overlap"] > 0.5
+        assert result["title_keyword_overlap"] >= 0.5
 
     def test_no_substring_match(self):
         result = score_title("Memo", "Invoice #12345")

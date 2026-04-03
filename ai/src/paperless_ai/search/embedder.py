@@ -38,20 +38,30 @@ class EmbeddingResult:
 class InfinityEmbedder:
     def __init__(
         self,
-        base_url: str = "http://complex.home.arpa:8102",
+        base_url: str = "http://localhost:8102",
         model: str = "BAAI/bge-m3",
     ):
         self._base_url = base_url.rstrip("/")
         self._model = model
+        self._client = httpx.AsyncClient(timeout=120)
+
+    async def aclose(self) -> None:
+        """Close the underlying HTTP client connection pool."""
+        await self._client.aclose()
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *_):
+        await self.aclose()
 
     async def embed(self, texts: list[str]) -> list[EmbeddingResult]:
         """Embed *texts* and return dense + sparse vectors for each."""
-        async with httpx.AsyncClient(timeout=120) as client:
-            r = await client.post(
-                f"{self._base_url}/embeddings",
-                json={"input": texts, "model": self._model},
-            )
-            r.raise_for_status()
+        r = await self._client.post(
+            f"{self._base_url}/embeddings",
+            json={"input": texts, "model": self._model},
+        )
+        r.raise_for_status()
 
         results = []
         for item in r.json()["data"]:
@@ -69,8 +79,7 @@ class InfinityEmbedder:
     async def check_connectivity(self) -> bool:
         """Return True if the Infinity server is reachable."""
         try:
-            async with httpx.AsyncClient(timeout=5) as client:
-                r = await client.get(f"{self._base_url}/health")
-                return r.is_success
+            r = await self._client.get(f"{self._base_url}/health", timeout=5)
+            return r.is_success
         except Exception:
             return False

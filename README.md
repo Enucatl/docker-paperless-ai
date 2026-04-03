@@ -35,7 +35,7 @@ The worker runs permanently alongside paperless and idles when no documents are 
 ```
 docker-paperless-ai/
 ├── ai/
-│   ├── cli.py                      # Entry point (--once, --eval, --dry-run, …)
+│   ├── cli.py                      # Entry point (--once, --watch, --eval, --dry-run, …)
 │   ├── Dockerfile
 │   ├── pyproject.toml
 │   ├── prompt.txt                  # OCR instruction prompt (edit without rebuild)
@@ -46,8 +46,14 @@ docker-paperless-ai/
 │   ├── core/
 │   │   ├── config.py               # AgentConfig — all settings from env vars
 │   │   ├── paperless.py            # Paperless REST API client
-│   │   ├── runner.py               # Poll-and-process loop
+│   │   ├── runner.py               # Redis-driven processing loop
 │   │   └── telemetry.py            # OpenTelemetry → Arize Phoenix
+│   ├── search/
+│   │   ├── queue.py                # Redis Set queue (SADD/SMEMBERS/SREM, DB 1)
+│   │   ├── webhook.py              # FastAPI listener — enqueues doc IDs from Paperless
+│   │   ├── chunker.py              # Overlapping character-based text chunker
+│   │   ├── embedder.py             # Infinity bge-m3 client (dense + sparse vectors)
+│   │   └── qdrant_store.py         # Qdrant collection management
 │   ├── eval/
 │   │   ├── golden_dataset.json     # Ground truth for 50 IDL documents
 │   │   ├── experiments.yaml        # Experiment configurations to compare
@@ -56,9 +62,15 @@ docker-paperless-ai/
 │   │   ├── review_ground_truth.py  # Interactive annotation script
 │   │   └── assign_splits.py        # One-time train/validation split assignment
 │   └── tests/
+│       ├── conftest.py             # Shared fixtures (queue, embedder mock, Qdrant, …)
+│       ├── test_e2e_pipeline.py    # E2E: Redis queue → OCR → metadata → Paperless PATCH
+│       ├── test_webhook.py         # Webhook listener + Paperless workflow integration
 │       ├── test_metrics.py         # Unit tests for scoring functions
 │       └── test_evaluator.py       # Unit tests for evaluation runner
-├── docker-compose.yml              # Full server stack (paperless + AI worker)
+├── docker-compose.yml              # Full server stack
+├── docker-compose.override.yml     # Local volumes and secrets
+├── docker-compose.test.yml         # Ephemeral E2E test override
+├── run_tests.sh                    # One-command E2E test runner
 └── .env.example                    # All environment variables documented
 ```
 
@@ -223,15 +235,78 @@ To revert to Tesseract permanently, trigger a reprocess from the paperless UI (M
 
 ## Testing and evaluation
 
-### Unit tests
+### E2E test suite
 
-Run the full test suite inside the container:
+The test suite spins up a fully ephemeral stack (Paperless-ngx, Redis, Qdrant,
+webhook-listener) in Docker, runs pytest inside the AI container, then tears
+everything down — including all volumes.  No persistent state is left behind
+even if the run is interrupted.
 
 ```bash
-docker compose run --rm --entrypoint uv ai run pytest tests/
+./run_tests.sh
 ```
 
-Tests do not require a running Paperless or Phoenix instance — all external calls are mocked.
+On a warm Docker cache this takes roughly 2–3 minutes (dominated by Paperless
+Django migrations and document indexing).  A fresh pull adds image download time.
+
+#### What is tested
+
+| Test file | What it covers |
+|---|---|
+| `test_e2e_pipeline.py` | Redis queue → OCR → metadata extraction → Paperless PATCH → queue drained |
+| `test_e2e_pipeline.py` | Dry-run mode: Paperless unchanged, Redis queue intact |
+| `test_e2e_pipeline.py` | Embedding pipeline: mock vectors upserted into real Qdrant with correct payload |
+| `test_webhook.py` | Listener enqueues from `doc_url` field (Paperless `{{doc_url}}` placeholder) |
+| `test_webhook.py` | Listener enqueues from `document_id` / `id` fallback fields |
+| `test_webhook.py` | Redis SADD deduplication (same ID posted twice → one queue entry) |
+| `test_webhook.py` | Graceful handling: missing ID → 202, non-JSON body → 400 |
+| `test_webhook.py` | `/health` endpoint reflects live pending count |
+| `test_webhook.py` | **Full Paperless integration**: workflow created via API → document uploaded → Paperless fires `{{doc_url}}` webhook → doc ID lands in Redis |
+| `test_metrics.py` | Scoring function unit tests (correspondent, date, title) |
+| `test_evaluator.py` | Evaluation framework unit tests |
+
+#### Infrastructure used in tests
+
+| Service | Image | Role |
+|---|---|---|
+| `webserver` | paperless-ngx | Real Paperless instance (tmpfs DB, anon volumes) |
+| `broker` | redis:8 | Redis on tmpfs — DB 0 for Paperless, DB 1 for AI queue |
+| `qdrant` | qdrant/qdrant | Vector DB (anonymous volume) |
+| `webhook-listener` | *(this repo)* | Receives Paperless webhook events |
+| `db` | postgres:17 | Paperless DB on tmpfs |
+
+The Infinity embedding server is **not** available in the test environment (GPU
+not present in CI).  The `mock_embedder` fixture provides deterministic 1024-d
+fake vectors directly to `run_batch()` so the embedding code path is still
+exercised end-to-end against real Qdrant.
+
+#### Skip the build step (faster re-runs)
+
+```bash
+./run_tests.sh --no-build
+```
+
+#### Run a specific test file or test
+
+```bash
+# Run only the webhook tests
+docker compose -f docker-compose.yml -f docker-compose.test.yml \
+  run --rm ai bash -c \
+  "uv pip install --system -e .[test] && pytest -v tests/test_webhook.py"
+
+# Run a single test by name
+docker compose -f docker-compose.yml -f docker-compose.test.yml \
+  run --rm ai bash -c \
+  "uv pip install --system -e .[test] && \
+   pytest -v -k test_paperless_fires_webhook_on_document_added"
+```
+
+> These commands assume the infrastructure services (`webserver`, `qdrant`,
+> `webhook-listener`, etc.) are already running.  Start them first with:
+> ```bash
+> docker compose -f docker-compose.yml -f docker-compose.test.yml \
+>   up -d db broker gotenberg tika webserver qdrant webhook-listener
+> ```
 
 ### Evaluation framework
 

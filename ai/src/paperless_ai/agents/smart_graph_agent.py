@@ -3,14 +3,11 @@ SmartDocumentAgent: memory-safe LangGraph-based document processor.
 
 Graph topology:
 
-    analyze_pdf
-        |
-        ├─ is_digital_text=True  →  native_text_extraction  →  extract_metadata  →  END
-        │
-        └─ is_digital_text=False →  batched_vision_ocr (loop until all pages done)
-                                            └─ current_page >= total_pages → extract_metadata → END
+    analyze_pdf → batched_vision_ocr (loop until all pages done) → extract_metadata → END
 
 Key design decisions:
+- Vision OCR is always used (no native text extraction) for consistent quality
+  across all PDF types. PyMuPDF native text is unreliable for scanned/mixed PDFs.
 - PyMuPDF pixmaps are del'd immediately after base64 encoding to avoid leaks.
 - gc.collect() is called after each vision batch to release C-heap memory.
 - LangGraph annotated state uses operator.add to accumulate text chunks without
@@ -31,19 +28,14 @@ from datetime import datetime
 
 import fitz  # PyMuPDF
 import litellm
+from json_repair import repair_json
 from pydantic import BaseModel, Field, field_validator
 
-from agents.base import AgentResult, BaseDocumentAgent, DocumentMetadata
-from agents.state import AgentState
-from core.config import AgentConfig
+from paperless_ai.agents.base import AgentResult, BaseDocumentAgent, DocumentMetadata
+from paperless_ai.agents.state import AgentState
+from paperless_ai.core.config import AgentConfig
 
 log = logging.getLogger(__name__)
-
-# Minimum characters per page to consider a page "digital text".
-# NOTE: This threshold is currently unused — _analyze_pdf always routes to vision
-# OCR regardless of native text content. Kept here as documentation of the
-# original routing logic in case the fast path is ever re-enabled.
-_DIGITAL_TEXT_THRESHOLD = 50
 
 # Regex patterns for thinking tags emitted by some reasoning models
 # (DeepSeek-R1, Qwen-QwQ, etc.) when thinking is not separated into
@@ -131,30 +123,24 @@ class BaseExtractionStrategy(ABC):
     """Abstract base for metadata extraction strategies."""
 
     def _fallback_parse(self, raw: str) -> dict:
-        """Robust fallback parser for handling free-form or incomplete JSON output.
+        """Robust fallback parser for handling malformed JSON output.
 
-        For models that produce malformed JSON, extract key-value pairs directly
-        without relying on JSON parsing. Looks for patterns like:
-            "key": "value"
-        and extracts them regardless of surrounding syntax errors.
+        Uses json-repair library to salvage broken JSON from LLM outputs.
+        Handles escaped quotes, non-string values, missing commas, trailing commas, etc.
+        If json-repair fails, returns an empty dict rather than raising.
         """
         try:
             return json.loads(raw)
         except Exception:
             pass
 
-        # Fallback: extract key-value pairs directly using regex
-        # Pattern: "key_name": value_content (handles string values with trailing commas, etc.)
-        result = {}
-        pattern = r'"([^"]+)"\s*:\s*"([^"]*)(?:"|,|"\s*,)'
-        for match in re.finditer(pattern, raw):
-            key, value = match.groups()
-            result[key] = value
-
-        if result:
-            return result
-
-        return {}
+        # Use json-repair to salvage malformed JSON
+        try:
+            repaired = repair_json(raw)
+            return json.loads(repaired)
+        except Exception:
+            log.debug("Could not repair JSON output: %s", raw[:200])
+            return {}
 
     @abstractmethod
     async def extract(self, text: str, config: AgentConfig) -> _ExtractedMetadata:
@@ -305,32 +291,18 @@ class NuExtractStrategy(BaseExtractionStrategy):
 
 
 async def _analyze_pdf(state: AgentState, config: AgentConfig) -> dict:
-    """Node 1: Measure page count and log native text density.
+    """Node 1: Measure page count and prepare for vision OCR.
 
-    Always routes to vision OCR (is_digital_text=False) regardless of how much
-    native text the PDF contains. This ensures consistent extraction quality —
-    native PyMuPDF text is unreliable for scanned documents and some digital PDFs
-    where the embedded text is just metadata (e.g. a URL from a document library).
+    Always uses vision OCR for consistent extraction quality across all PDFs.
+    PyMuPDF native text extraction is unreliable for scanned documents and
+    many digital PDFs where the embedded text is just metadata.
     """
     file_path = state["file_path"]
     doc = fitz.open(file_path)
     total_pages = len(doc)
-
-    # Sample first 3 pages to log density (informational only — not used for routing)
-    sample_pages = min(3, total_pages)
-    total_chars = 0
-    for i in range(sample_pages):
-        total_chars += len(doc[i].get_text())
     doc.close()
 
-    avg_chars_per_page = total_chars / sample_pages if sample_pages else 0
-
-    log.info(
-        "Smart agent: %d pages, avg %.0f chars/page (sampled %d) → vision OCR",
-        total_pages,
-        avg_chars_per_page,
-        sample_pages,
-    )
+    log.info("Smart agent: %d pages → vision OCR", total_pages)
 
     return {
         "total_pages": total_pages,
@@ -338,25 +310,6 @@ async def _analyze_pdf(state: AgentState, config: AgentConfig) -> dict:
         "current_page": 0,
         "extracted_text_chunks": [],
     }
-
-
-async def _native_text_extraction(state: AgentState, config: AgentConfig) -> dict:
-    """Node 2 (fast path): Extract text directly from a digital PDF using fitz.
-
-    NOTE: This node is currently unreachable — _analyze_pdf always sets
-    is_digital_text=False, so the graph always routes to _batched_vision_ocr.
-    Kept in place in case native extraction is re-enabled in the future.
-    """
-    file_path = state["file_path"]
-    doc = fitz.open(file_path)
-    chunks = []
-    for page in doc:
-        text = page.get_text()
-        if text.strip():
-            chunks.append(text)
-    doc.close()
-    log.info("Smart agent: native text extraction — %d chunks", len(chunks))
-    return {"extracted_text_chunks": chunks}
 
 
 async def _batched_vision_ocr(state: AgentState, config: AgentConfig) -> dict:
@@ -464,6 +417,48 @@ async def _extract_metadata(
 
 
 # ---------------------------------------------------------------------------
+# OCR-only helper (no metadata extraction) for the decoupled pipeline
+# ---------------------------------------------------------------------------
+
+
+async def run_vision_ocr_only(
+    file_path: str, config: "AgentConfig"
+) -> tuple[str, int, float]:
+    """Run only the vision OCR stage — no metadata extraction.
+
+    Used by the OCR worker in the decoupled tag-driven pipeline.
+    Bypasses LangGraph to avoid building a full graph for a single stage.
+
+    Returns:
+        (full_text, page_count, elapsed_seconds)
+    """
+    t_start = time.time()
+
+    initial: AgentState = {
+        "file_path": file_path,
+        "language": None,
+        "total_pages": 0,
+        "is_digital_text": False,
+        "current_page": 0,
+        "batch_size": config.vision_batch_size,
+        "extracted_text_chunks": [],
+    }
+
+    analysis = await _analyze_pdf(initial, config)
+    total_pages = analysis["total_pages"]
+    state = {**initial, **analysis}
+    all_chunks: list[str] = []
+
+    while state["current_page"] < total_pages:
+        update = await _batched_vision_ocr(state, config)
+        all_chunks.extend(update["extracted_text_chunks"])
+        state = {**state, "current_page": update["current_page"]}
+
+    full_text = "\n\n".join(all_chunks)
+    return full_text, total_pages, round(time.time() - t_start, 1)
+
+
+# ---------------------------------------------------------------------------
 # SmartDocumentAgent: wires nodes into a LangGraph
 # ---------------------------------------------------------------------------
 
@@ -501,21 +496,11 @@ class SmartDocumentAgent(BaseDocumentAgent):
         async def analyze_pdf(state: AgentState) -> dict:
             return await _analyze_pdf(state, config)
 
-        async def native_text_extraction(state: AgentState) -> dict:
-            return await _native_text_extraction(state, config)
-
         async def batched_vision_ocr(state: AgentState) -> dict:
             return await _batched_vision_ocr(state, config)
 
         async def extract_metadata(state: AgentState) -> dict:
             return await _extract_metadata(state, config, strategy)
-
-        def route_after_analyze(state: AgentState) -> str:
-            return (
-                "native_text_extraction"
-                if state["is_digital_text"]
-                else "batched_vision_ocr"
-            )
 
         def route_after_vision_ocr(state: AgentState) -> str:
             return (
@@ -526,20 +511,11 @@ class SmartDocumentAgent(BaseDocumentAgent):
 
         workflow = StateGraph(AgentState)
         workflow.add_node("analyze_pdf", analyze_pdf)
-        workflow.add_node("native_text_extraction", native_text_extraction)
         workflow.add_node("batched_vision_ocr", batched_vision_ocr)
         workflow.add_node("extract_metadata", extract_metadata)
 
         workflow.set_entry_point("analyze_pdf")
-        workflow.add_conditional_edges(
-            "analyze_pdf",
-            route_after_analyze,
-            {
-                "native_text_extraction": "native_text_extraction",
-                "batched_vision_ocr": "batched_vision_ocr",
-            },
-        )
-        workflow.add_edge("native_text_extraction", "extract_metadata")
+        workflow.add_edge("analyze_pdf", "batched_vision_ocr")
         workflow.add_conditional_edges(
             "batched_vision_ocr",
             route_after_vision_ocr,
@@ -573,14 +549,12 @@ class SmartDocumentAgent(BaseDocumentAgent):
         full_text = final_state.get(
             "_full_text", "\n\n".join(final_state.get("extracted_text_chunks", []))
         )
-        ocr_method = "native" if final_state.get("is_digital_text") else "vision"
 
         log.info(
-            "Smart agent: done — title=%r date=%r correspondent=%r ocr=%s metadata=text",
+            "Smart agent: done — title=%r date=%r correspondent=%r",
             extracted_dict.get("title"),
             extracted_dict.get("date"),
             extracted_dict.get("correspondent"),
-            ocr_method,
         )
 
         metadata = DocumentMetadata(
@@ -595,5 +569,5 @@ class SmartDocumentAgent(BaseDocumentAgent):
             elapsed_s=round(time.time() - t_start, 1),
             pages=final_state.get("total_pages", 0),
             chars=len(full_text),
-            ocr_method=ocr_method,
+            ocr_method="vision",  # Always vision OCR (no native extraction)
         )

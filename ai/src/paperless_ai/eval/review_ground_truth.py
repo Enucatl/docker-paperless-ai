@@ -153,8 +153,8 @@ async def main():
     log.info(f"Found {len(to_review)} entries needing review")
     log.info("Loading agent...")
 
-    from core.config import AgentConfig
-    from agents.smart_graph_agent import SmartDocumentAgent, _select_extraction_strategy
+    from paperless_ai.core.config import AgentConfig
+    from paperless_ai.agents.smart_graph_agent import SmartDocumentAgent, _select_extraction_strategy
 
     config = AgentConfig.from_env()
     strategy = _select_extraction_strategy(config)

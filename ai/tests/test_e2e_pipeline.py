@@ -35,9 +35,9 @@ async def test_full_pipeline_patches_document_correctly(
     """
     from datetime import date
 
-    from agents.smart_graph_agent import SmartDocumentAgent, _select_extraction_strategy
-    from core.config import AgentConfig
-    from core.runner import run_batch
+    from paperless_ai.agents.smart_graph_agent import SmartDocumentAgent, _select_extraction_strategy
+    from paperless_ai.core.config import AgentConfig
+    from paperless_ai.core.runner import run_batch
 
     doc_id = dummy_document
 
@@ -50,10 +50,10 @@ async def test_full_pipeline_patches_document_correctly(
 
     agent = SmartDocumentAgent(config, extraction_strategy=_select_extraction_strategy(config))
 
-    custom_field_id = paperless_client.get_or_create_custom_field(
+    custom_field_id = await paperless_client.get_or_create_custom_field(
         "ai_processed", data_type="date"
     )
-    ai_result_field_id = paperless_client.get_or_create_custom_field(
+    ai_result_field_id = await paperless_client.get_or_create_custom_field(
         "ai_result", data_type="longtext"
     )
 
@@ -70,7 +70,7 @@ async def test_full_pipeline_patches_document_correctly(
     assert _redis_queue_size() == 0, "Queue should be drained after successful processing"
 
     # Fetch the updated document from Paperless
-    r = paperless_client._client.get(f"/api/documents/{doc_id}/")
+    r = await paperless_client._client.get(f"/api/documents/{doc_id}/")
     r.raise_for_status()
     doc = r.json()
 
@@ -88,7 +88,7 @@ async def test_full_pipeline_patches_document_correctly(
 
     # Correspondent was created and linked
     assert doc.get("correspondent") is not None, "Correspondent should have been set"
-    correspondent_name = paperless_client.get_correspondent_name(doc["correspondent"])
+    correspondent_name = await paperless_client.get_correspondent_name(doc["correspondent"])
     assert correspondent_name == "Acme Corp", (
         f"Expected correspondent 'Acme Corp', got {correspondent_name!r}"
     )
@@ -101,9 +101,9 @@ async def test_dry_run_does_not_modify_document(
     In dry-run mode, run_batch must return success=1 but leave the document
     completely untouched and the Redis queue intact.
     """
-    from agents.smart_graph_agent import SmartDocumentAgent, _select_extraction_strategy
-    from core.config import AgentConfig
-    from core.runner import run_batch
+    from paperless_ai.agents.smart_graph_agent import SmartDocumentAgent, _select_extraction_strategy
+    from paperless_ai.core.config import AgentConfig
+    from paperless_ai.core.runner import run_batch
 
     doc_id = dummy_document
 
@@ -116,15 +116,15 @@ async def test_dry_run_does_not_modify_document(
 
     agent = SmartDocumentAgent(config, extraction_strategy=_select_extraction_strategy(config))
 
-    custom_field_id = paperless_client.get_or_create_custom_field(
+    custom_field_id = await paperless_client.get_or_create_custom_field(
         "ai_processed", data_type="date"
     )
-    ai_result_field_id = paperless_client.get_or_create_custom_field(
+    ai_result_field_id = await paperless_client.get_or_create_custom_field(
         "ai_result", data_type="longtext"
     )
 
     # Snapshot before
-    r_before = paperless_client._client.get(f"/api/documents/{doc_id}/")
+    r_before = await paperless_client._client.get(f"/api/documents/{doc_id}/")
     r_before.raise_for_status()
     doc_before = r_before.json()
 
@@ -142,7 +142,7 @@ async def test_dry_run_does_not_modify_document(
     )
 
     # Fetch again — nothing should have changed
-    r_after = paperless_client._client.get(f"/api/documents/{doc_id}/")
+    r_after = await paperless_client._client.get(f"/api/documents/{doc_id}/")
     r_after.raise_for_status()
     doc_after = r_after.json()
 
@@ -160,9 +160,10 @@ async def test_pipeline_embeds_into_qdrant(
     Uses mock_embedder (deterministic fake vectors) because the GPU-hosted
     Infinity server is not available in the test environment.
     """
-    from agents.smart_graph_agent import SmartDocumentAgent, _select_extraction_strategy
-    from core.config import AgentConfig
-    from core.runner import run_batch
+    from paperless_ai.agents.smart_graph_agent import SmartDocumentAgent, _select_extraction_strategy
+    from paperless_ai.core.config import AgentConfig
+    from paperless_ai.core.runner import run_batch
+    from paperless_ai.search.qdrant_store import COLLECTION
     from qdrant_client.models import FieldCondition, Filter, MatchValue
 
     doc_id = dummy_document
@@ -176,10 +177,10 @@ async def test_pipeline_embeds_into_qdrant(
 
     agent = SmartDocumentAgent(config, extraction_strategy=_select_extraction_strategy(config))
 
-    custom_field_id = paperless_client.get_or_create_custom_field(
+    custom_field_id = await paperless_client.get_or_create_custom_field(
         "ai_processed", data_type="date"
     )
-    ai_result_field_id = paperless_client.get_or_create_custom_field(
+    ai_result_field_id = await paperless_client.get_or_create_custom_field(
         "ai_result", data_type="longtext"
     )
 
@@ -195,7 +196,7 @@ async def test_pipeline_embeds_into_qdrant(
 
     # Vectors for this document must exist in Qdrant
     results, _ = await qdrant_store._client.scroll(
-        collection_name=qdrant_store.COLLECTION,
+        collection_name=COLLECTION,
         scroll_filter=Filter(
             must=[FieldCondition(key="doc_id", match=MatchValue(value=doc_id))]
         ),

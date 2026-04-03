@@ -290,8 +290,30 @@ class NuExtractStrategy(BaseExtractionStrategy):
 # ---------------------------------------------------------------------------
 
 
+def _select_ocr_pages(total_pages: int, config: "AgentConfig") -> list[int]:
+    """Return the ordered list of 0-based page indices to send through vision OCR.
+
+    For documents with total_pages <= ocr_page_limit_threshold every page is
+    selected (no change in behaviour).  For longer documents only the first
+    ocr_first_pages and last ocr_last_pages are selected — overlapping indices
+    are deduplicated while preserving order.
+
+    Rationale: Paperless-ngx Tesseract already produces full-document text for
+    keyword search.  Vision OCR is only needed to capture semantically rich
+    pages (cover, header, executive summary, signature block) for metadata
+    extraction and embedding.
+    """
+    if total_pages <= config.ocr_page_limit_threshold:
+        return list(range(total_pages))
+
+    first = set(range(min(config.ocr_first_pages, total_pages)))
+    last_start = max(total_pages - config.ocr_last_pages, 0)
+    last = set(range(last_start, total_pages))
+    return sorted(first | last)
+
+
 async def _analyze_pdf(state: AgentState, config: AgentConfig) -> dict:
-    """Node 1: Measure page count and prepare for vision OCR.
+    """Node 1: Measure page count and select pages for vision OCR.
 
     Always uses vision OCR for consistent extraction quality across all PDFs.
     PyMuPDF native text extraction is unreliable for scanned documents and
@@ -302,10 +324,24 @@ async def _analyze_pdf(state: AgentState, config: AgentConfig) -> dict:
     total_pages = len(doc)
     doc.close()
 
-    log.info("Smart agent: %d pages → vision OCR", total_pages)
+    ocr_page_indices = _select_ocr_pages(total_pages, config)
+
+    if len(ocr_page_indices) < total_pages:
+        log.info(
+            "Smart agent: %d-page document — vision OCR limited to %d pages "
+            "(first %d + last %d); threshold=%d",
+            total_pages,
+            len(ocr_page_indices),
+            config.ocr_first_pages,
+            config.ocr_last_pages,
+            config.ocr_page_limit_threshold,
+        )
+    else:
+        log.info("Smart agent: %d pages → vision OCR (all pages)", total_pages)
 
     return {
         "total_pages": total_pages,
+        "ocr_page_indices": ocr_page_indices,
         "is_digital_text": False,  # Always use vision OCR
         "current_page": 0,
         "extracted_text_chunks": [],
@@ -313,30 +349,33 @@ async def _analyze_pdf(state: AgentState, config: AgentConfig) -> dict:
 
 
 async def _batched_vision_ocr(state: AgentState, config: AgentConfig) -> dict:
-    """Node 3: Render a batch of pages to base64 images and run vision OCR.
+    """Node 3: Render a batch of selected pages to base64 images and run vision OCR.
 
-    This is the only active OCR path. Pages are processed in configurable batches
-    (vision_batch_size) so only a few images are held in memory at once. Pixmaps
-    are freed immediately after encoding to avoid C-heap accumulation.
+    current_page is an index into ocr_page_indices, not a raw page number.
+    Pages are processed in configurable batches (vision_batch_size) so only a
+    few images are held in memory at once. Pixmaps are freed immediately after
+    encoding to avoid C-heap accumulation.
     """
     file_path = state["file_path"]
-    current_page = state["current_page"]
+    current_idx = state["current_page"]
     batch_size = state["batch_size"]
     total_pages = state["total_pages"]
+    page_indices = state["ocr_page_indices"]
     language = state.get("language")
 
-    end_page = min(current_page + batch_size, total_pages)
+    end_idx = min(current_idx + batch_size, len(page_indices))
+    batch = page_indices[current_idx:end_idx]
+
     log.info(
-        "Smart agent: vision OCR pages %d–%d / %d",
-        current_page + 1,
-        end_page,
+        "Smart agent: vision OCR pages %s (of %d total)",
+        ", ".join(str(p + 1) for p in batch),
         total_pages,
     )
 
     doc = fitz.open(file_path)
     tasks = []
 
-    for page_idx in range(current_page, end_page):
+    for page_idx in batch:
         page = doc[page_idx]
         # Cap render DPI so the longest image dimension stays within the model's
         # context budget (e.g. nanonets max-model-len=16128). Computing DPI
@@ -392,7 +431,7 @@ async def _batched_vision_ocr(state: AgentState, config: AgentConfig) -> dict:
 
     return {
         "extracted_text_chunks": chunks,
-        "current_page": end_page,
+        "current_page": end_idx,  # advances as index into ocr_page_indices
     }
 
 
@@ -438,6 +477,7 @@ async def run_vision_ocr_only(
         "file_path": file_path,
         "language": None,
         "total_pages": 0,
+        "ocr_page_indices": [],  # populated by _analyze_pdf
         "is_digital_text": False,
         "current_page": 0,
         "batch_size": config.vision_batch_size,
@@ -449,7 +489,7 @@ async def run_vision_ocr_only(
     state = {**initial, **analysis}
     all_chunks: list[str] = []
 
-    while state["current_page"] < total_pages:
+    while state["current_page"] < len(state["ocr_page_indices"]):
         update = await _batched_vision_ocr(state, config)
         all_chunks.extend(update["extracted_text_chunks"])
         state = {**state, "current_page": update["current_page"]}
@@ -505,7 +545,7 @@ class SmartDocumentAgent(BaseDocumentAgent):
         def route_after_vision_ocr(state: AgentState) -> str:
             return (
                 "batched_vision_ocr"
-                if state["current_page"] < state["total_pages"]
+                if state["current_page"] < len(state["ocr_page_indices"])
                 else "extract_metadata"
             )
 
@@ -536,6 +576,7 @@ class SmartDocumentAgent(BaseDocumentAgent):
             "file_path": file_path,
             "language": existing_hints.get("language"),
             "total_pages": 0,
+            "ocr_page_indices": [],  # populated by _analyze_pdf node
             "is_digital_text": False,
             "current_page": 0,
             "batch_size": config.vision_batch_size,

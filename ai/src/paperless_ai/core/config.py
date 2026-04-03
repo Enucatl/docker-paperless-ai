@@ -132,12 +132,29 @@ class AgentConfig(BaseModel):
     chunk_max_chars: int = 2048   # ≈ 512 tokens
     chunk_overlap: int = 256
 
+    # Optional path to a Python file that exports format_chunk_for_embedding.
+    # When set, this hook replaces the default situated-embedding header logic.
+    embed_hook_file: Optional[str] = None
+
     # Smart agent batch size for memory-safe vision OCR loops
     vision_batch_size: int = 5
     # Cap the longest image dimension (px) before encoding for vision OCR.
     # Prevents context-length errors on models with small token budgets.
     # None = no cap (use full 300 DPI render).
     ocr_max_image_dimension: Optional[int] = None
+
+    # Page-sampling strategy for long documents.
+    # When a PDF has more than ocr_page_limit_threshold pages, only the first
+    # ocr_first_pages and last ocr_last_pages are sent through vision OCR.
+    # Paperless-ngx Tesseract already covers the full document for keyword
+    # search; the vision pass is only needed for metadata extraction and
+    # semantic embedding, where the cover/header and final summary pages carry
+    # the vast majority of signal.
+    # Set ocr_page_limit_threshold=0 to always apply the limit, or a large
+    # number (e.g. 9999) to effectively disable it.
+    ocr_page_limit_threshold: int = 40
+    ocr_first_pages: int = 20
+    ocr_last_pages: int = 20
     metadata_max_tokens: int = 1000
 
     # Dotted import path to the agent class to use in eval experiments.
@@ -215,4 +232,8 @@ class AgentConfig(BaseModel):
             embedding_model=os.environ.get("EMBEDDING_MODEL", "BAAI/bge-m3"),
             chunk_max_chars=int(os.environ.get("CHUNK_MAX_CHARS", "2048")),
             chunk_overlap=int(os.environ.get("CHUNK_OVERLAP", "256")),
+            embed_hook_file=os.environ.get("EMBED_HOOK_FILE") or None,
+            ocr_page_limit_threshold=int(os.environ.get("OCR_PAGE_LIMIT_THRESHOLD", "40")),
+            ocr_first_pages=int(os.environ.get("OCR_FIRST_PAGES", "20")),
+            ocr_last_pages=int(os.environ.get("OCR_LAST_PAGES", "20")),
         )

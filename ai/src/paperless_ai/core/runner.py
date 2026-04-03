@@ -36,6 +36,10 @@ log = logging.getLogger(__name__)
 # Set by SIGTERM/SIGINT handler in cli.py; checked between documents.
 _shutdown_requested = False
 
+# Tracks which local server URLs are currently known to be offline.
+# Enables log-once-on-down / log-once-on-recovery across poll cycles.
+_offline_servers: set[str] = set()
+
 
 def request_shutdown() -> None:
     global _shutdown_requested
@@ -44,6 +48,34 @@ def request_shutdown() -> None:
 
 def is_shutdown_requested() -> bool:
     return _shutdown_requested
+
+
+async def _check_server_reachable(base_url: str) -> bool:
+    """Return True if a local model server responds to a lightweight probe.
+
+    Tries GET /health then GET /models (OpenAI-compatible). Logs exactly once
+    when a server goes offline and once when it comes back online, suppressing
+    repeated warnings between polls so the log stays readable during a long
+    GPU-off window.
+    """
+    import httpx
+
+    for path in ("/health", "/models"):
+        try:
+            async with httpx.AsyncClient(timeout=5.0) as c:
+                r = await c.get(base_url.rstrip("/") + path)
+                if r.status_code < 500:
+                    if base_url in _offline_servers:
+                        log.info("Model server back online: %s", base_url)
+                        _offline_servers.discard(base_url)
+                    return True
+        except Exception:
+            continue
+
+    if base_url not in _offline_servers:
+        log.warning("Model server unreachable, will retry next poll: %s", base_url)
+        _offline_servers.add(base_url)
+    return False
 
 
 async def _embed_and_store(
@@ -55,6 +87,7 @@ async def _embed_and_store(
     embedder: "InfinityEmbedder",
 ) -> None:
     """Chunk text, embed via Infinity, and upsert vectors into Qdrant."""
+    from paperless_ai.core.hooks import get_embed_hook
     from paperless_ai.search.chunker import chunk_text
     from paperless_ai.search.qdrant_store import ChunkPayload
 
@@ -63,17 +96,15 @@ async def _embed_and_store(
         log.info("Document %d: no text to embed, skipping Qdrant upsert", doc_id)
         return
 
-    # Prepend a context header to each chunk before embedding (situated embeddings).
-    # This gives the embedding model global document context ("this is an Acme Corp invoice
-    # from 2024-03-15") which significantly improves retrieval quality for BGE-M3.
-    # The raw chunk is stored in Qdrant payload so snippet rendering shows clean text.
-    context_header = (
-        f"Document Title: {meta.title or 'Unknown'}\n"
-        f"Sender/Correspondent: {meta.correspondent or 'Unknown'}\n"
-        f"Date: {meta.document_date or 'Unknown'}\n"
-        f"---\n"
+    # Apply the embed hook to each chunk concurrently.  The default hook
+    # prepends a structured context header (situated embeddings).  Users may
+    # mount a custom EMBED_HOOK_FILE that does arbitrary async work (e.g. LLM
+    # summarisation) before the chunk reaches the embedding model.
+    # The raw chunk is stored in the Qdrant payload so UI snippets show clean text.
+    hook_fn = get_embed_hook()
+    situated_chunks = list(
+        await asyncio.gather(*(hook_fn(chunk, meta, config) for chunk in chunks))
     )
-    situated_chunks = [f"{context_header}{chunk}" for chunk in chunks]
 
     log.info("Document %d: embedding %d chunk(s) with situated context…", doc_id, len(chunks))
     embeddings = await embedder.embed(situated_chunks)
@@ -360,6 +391,11 @@ async def run_ocr_batch(
     from paperless_ai.agents.smart_graph_agent import run_vision_ocr_only
     from paperless_ai.search.queue import TaskQueues
 
+    # Preflight: skip the batch when the local OCR server is offline so we
+    # don't download PDFs that we can't process yet.
+    if config.ocr_api_base and not await _check_server_reachable(config.ocr_api_base):
+        return 0, 0
+
     pending_ids = await queues.peek_stage(TaskQueues.KEY_OCR)
     if not pending_ids:
         return 0, 0
@@ -456,6 +492,15 @@ async def run_metadata_batch(
     """
     from paperless_ai.agents.smart_graph_agent import _select_extraction_strategy
     from paperless_ai.search.queue import TaskQueues
+
+    # Preflight: determine which server drives metadata extraction and bail if
+    # it is offline.  When metadata_model is unset the OCR model (and its
+    # api_base) is reused, so fall back to ocr_api_base in that case.
+    meta_server = config.metadata_api_base or (
+        config.ocr_api_base if config.metadata_model is None else None
+    )
+    if meta_server and not await _check_server_reachable(meta_server):
+        return 0, 0
 
     pending_ids = await queues.peek_stage(TaskQueues.KEY_METADATA)
     if not pending_ids:
@@ -598,6 +643,12 @@ async def run_embed_batch(
     """
     from paperless_ai.search.queue import TaskQueues
 
+    # Preflight: the Infinity embedding server is always local/GPU — bail if it
+    # is offline so we don't leave documents stuck in the embed queue with no
+    # way to process them.
+    if embedder is not None and not await _check_server_reachable(config.infinity_url):
+        return 0, 0
+
     pending_ids = await queues.peek_stage(TaskQueues.KEY_EMBED)
     if not pending_ids:
         return 0, 0
@@ -610,6 +661,8 @@ async def run_embed_batch(
         log.warning("Embed tag '%s' not found — will not remove it", config.tag_embed)
         tag_embed_id = None
 
+    sem = asyncio.Semaphore(config.ocr_concurrency)
+
     async def _process_one(doc_id: int) -> bool:
         if _shutdown_requested:
             return False
@@ -621,24 +674,25 @@ async def run_embed_batch(
 
         content = doc.get("content") or ""
 
-        if store is not None and embedder is not None and content.strip():
-            # Build a metadata-like object for the context header
-            class _Meta:
-                title = doc.get("title")
-                correspondent = None  # resolved below
-                document_date = doc.get("created_date")
+        async with sem:
+            if store is not None and embedder is not None and content.strip():
+                # Build a metadata-like object for the context header
+                class _Meta:
+                    title = doc.get("title")
+                    correspondent = None  # resolved below
+                    document_date = doc.get("created_date")
 
-            meta = _Meta()
-            if doc.get("correspondent"):
-                meta.correspondent = await client.get_correspondent_name(doc["correspondent"])
+                meta = _Meta()
+                if doc.get("correspondent"):
+                    meta.correspondent = await client.get_correspondent_name(doc["correspondent"])
 
-            try:
-                await _embed_and_store(doc_id, content, meta, config, store, embedder)
-            except Exception as e:
-                log.error("Document %d: embedding failed: %s", doc_id, e)
-                return False
-        elif not content.strip():
-            log.info("Document %d: no content — skipping embedding", doc_id)
+                try:
+                    await _embed_and_store(doc_id, content, meta, config, store, embedder)
+                except Exception as e:
+                    log.error("Document %d: embedding failed: %s", doc_id, e)
+                    return False
+            elif not content.strip():
+                log.info("Document %d: no content — skipping embedding", doc_id)
 
         if config.dry_run:
             log.info("Document %d: [dry-run] would remove embed tag", doc_id)

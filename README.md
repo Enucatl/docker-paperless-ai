@@ -2,7 +2,7 @@
 
 AI batch OCR and metadata extraction for [paperless-ngx](https://github.com/paperless-ngx/paperless-ngx) — no source patches required.
 
-Documents are ingested normally via Tesseract, auto-tagged `ai-review-pending` by a paperless Workflow, then re-processed by this service: each page is re-OCRd with a vision LLM and title/date/correspondent are extracted with a text LLM. Everything is updated via the paperless REST API.
+Documents are ingested normally via Tesseract, then routed through a three-stage AI pipeline (OCR → metadata extraction → embedding) driven by Paperless tags and a Redis queue. Each page is re-OCRd with a vision LLM, title/date/correspondent are extracted with a text LLM, and the document is indexed in Qdrant for semantic search. Everything is updated via the Paperless REST API.
 
 ## Privacy notice
 
@@ -16,19 +16,29 @@ Documents are ingested normally via Tesseract, auto-tagged `ai-review-pending` b
 ## How it works
 
 ```
-New document arrives → Tesseract OCR (paperless default)
-                     → tagged "ai-review-pending" (via Workflow)
+New document arrives → Paperless Workflow fires (Document Added):
+                         1. Tag assigned: ai:run-ocr
+                         2. Webhook → webhook-listener enqueues doc ID in Redis
 
-AI worker runs → polls for tagged documents
-              → downloads original PDF
-              → OCRs each page with vision LLM
-              → extracts metadata with text LLM
-              → PATCHes document via REST API
-              → removes tag "ai-review-pending"
-              → writes processing note to document
+OCR worker          → downloads original PDF
+                    → vision LLM OCRs each page
+                    → writes transcript to Paperless content field
+                    → tag transitions: ai:run-ocr → ai:run-metadata
+
+Metadata worker     → reads transcript from Paperless (no PDF download)
+                    → text LLM extracts title / date / correspondent
+                    → PATCHes document via REST API
+                    → tag transitions: ai:run-metadata → ai:run-embed
+
+Embed worker        → reads content + metadata from Paperless
+                    → chunks text, embeds via Infinity (bge-m3)
+                    → upserts dense + sparse vectors into Qdrant
+                    → removes tag ai:run-embed
 ```
 
-The worker runs permanently alongside paperless and idles when no documents are pending or when model servers are unreachable. Documents queue up safely while the GPU workstation is off.
+Each stage is independent: if the GPU workstation is off, the workers detect
+the unreachable server and return immediately without downloading anything.
+Documents wait safely in Redis queues until the server comes back online.
 
 ## Repo layout
 
@@ -91,14 +101,26 @@ PAPERLESS_TOKEN=        # from paperless UI: Settings → API Tokens
 GOOGLE_API_KEY=         # if using Gemini (default)
 ```
 
-### 2. Create a paperless Workflow
+### 2. Create a Paperless Workflow
 
-In the paperless UI (Settings → Workflows):
+In the Paperless UI go to **Settings → Workflows** and create **one** workflow
+with the following configuration:
 
 - **Trigger:** Document Added
-- **Action:** Assignment → add tag `ai-review-pending`
 
-The tag is created automatically on first run if it doesn't exist.
+Then add **two actions in this exact order** (order matters — the tag must be
+assigned before the webhook fires, otherwise the webhook router may not see it):
+
+1. **Action: Assignment** → add tag `ai:run-ocr`
+2. **Action: Webhook** → URL: `http://webhook-listener:8001/webhook/document`
+
+> **Why one workflow?** If you create two separate workflows (one for the tag,
+> one for the webhook), Paperless may fire them in any order. If the webhook
+> fires first, the router sees no `ai:run-ocr` tag and silently skips OCR.
+> Combining both actions in a single workflow guarantees sequential execution.
+
+Tags (`ai:run-ocr`, `ai:run-metadata`, `ai:run-embed`) are created automatically
+on first run if they do not exist.
 
 ### 3. Start the stack
 
@@ -208,7 +230,9 @@ Supported `_FILE` variants: `GOOGLE_API_KEY_FILE`, `ANTHROPIC_API_KEY_FILE`, `OP
 | `ANTHROPIC_API_KEY` | *(none)* | For Claude models |
 | `OPENAI_API_KEY` | *(none)* | For OpenAI / vLLM models |
 | `POLL_INTERVAL` | `300` | Seconds between polls in watch mode |
-| `TAG_PENDING` | `ai-review-pending` | Tag for documents awaiting processing |
+| `TAG_OCR` | `ai:run-ocr` | Tag for documents entering the OCR stage |
+| `TAG_METADATA` | `ai:run-metadata` | Tag for documents entering the metadata stage |
+| `TAG_EMBED` | `ai:run-embed` | Tag for documents entering the embedding stage |
 | `OCR_REASONING_EFFORT` | `minimal` | LiteLLM `reasoning_effort` parameter (set empty to disable) |
 | `DRY_RUN` | `false` | Log actions without modifying documents |
 
@@ -227,7 +251,7 @@ On first run the worker creates a custom field **`ai_processed`** (type: Date) a
 
 ## Reprocessing a document
 
-Re-add the `ai-review-pending` tag and the worker will pick it up on the next poll. The service re-downloads the original and reprocesses, overwriting the previous content, title, and date.
+Re-add the `ai:run-ocr` tag and the worker will pick the document up on the next poll, restarting the full three-stage pipeline and overwriting the previous content, title, and date.
 
 To revert to Tesseract permanently, trigger a reprocess from the paperless UI (More → Reprocess document).
 
@@ -253,9 +277,7 @@ Django migrations and document indexing).  A fresh pull adds image download time
 
 | Test file | What it covers |
 |---|---|
-| `test_e2e_pipeline.py` | Redis queue → OCR → metadata extraction → Paperless PATCH → queue drained |
-| `test_e2e_pipeline.py` | Dry-run mode: Paperless unchanged, Redis queue intact |
-| `test_e2e_pipeline.py` | Embedding pipeline: mock vectors upserted into real Qdrant with correct payload |
+| `test_phase_b_pipeline.py` | Unit tests for the three-stage pipeline (OCR / metadata / embed batches) |
 | `test_webhook.py` | Listener enqueues from `doc_url` field (Paperless `{{doc_url}}` placeholder) |
 | `test_webhook.py` | Listener enqueues from `document_id` / `id` fallback fields |
 | `test_webhook.py` | Redis SADD deduplication (same ID posted twice → one queue entry) |
@@ -277,7 +299,7 @@ Django migrations and document indexing).  A fresh pull adds image download time
 
 The Infinity embedding server is **not** available in the test environment (GPU
 not present in CI).  The `mock_embedder` fixture provides deterministic 1024-d
-fake vectors directly to `run_batch()` so the embedding code path is still
+fake vectors directly to `run_embed_batch()` so the embedding code path is still
 exercised end-to-end against real Qdrant.
 
 #### Skip the build step (faster re-runs)

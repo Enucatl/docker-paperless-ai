@@ -4,6 +4,8 @@ AI batch OCR and metadata extraction for [paperless-ngx](https://github.com/pape
 
 Documents are ingested normally via Tesseract, then routed through a three-stage AI pipeline (OCR → metadata extraction → embedding) driven by Paperless tags and a Redis queue. Each page is re-OCRd with a vision LLM, title/date/correspondent are extracted with a text LLM, and the document is indexed in Qdrant for semantic search. Everything is updated via the Paperless REST API.
 
+The webhook-listener also exposes a **`GET /search`** endpoint that answers queries 24/7 using a local CPU embedder (FastEmbed bge-m3). The GPU Infinity server is only needed for batch indexing — the search API works even when it is powered off.
+
 ## Privacy notice
 
 > **When using cloud models (the default), the following data is sent to the configured third-party API:**
@@ -40,6 +42,14 @@ Each stage is independent: if the GPU workstation is off, the workers detect
 the unreachable server and return immediately without downloading anything.
 Documents wait safely in Redis queues until the server comes back online.
 
+```
+Search query arrives → GET /search?q=invoice+2024&limit=20
+                       1. LocalLazySearchEmbedder loads bge-m3 into CPU RAM (first call only)
+                       2. Dense vector computed via FastEmbed (asyncio.to_thread)
+                       3. Qdrant queried, chunk hits deduplicated to doc_ids
+                       4. Model auto-evicted from RAM after 5 min idle (scale-to-zero)
+```
+
 ## Repo layout
 
 ```
@@ -60,9 +70,9 @@ docker-paperless-ai/
 │   │   └── telemetry.py            # OpenTelemetry → Arize Phoenix
 │   ├── search/
 │   │   ├── queue.py                # Redis Set queue (SADD/SMEMBERS/SREM, DB 1)
-│   │   ├── webhook.py              # FastAPI listener — enqueues doc IDs from Paperless
+│   │   ├── webhook.py              # FastAPI listener — webhook + GET /search endpoint
 │   │   ├── chunker.py              # Overlapping character-based text chunker
-│   │   ├── embedder.py             # Infinity bge-m3 client (dense + sparse vectors)
+│   │   ├── embedder.py             # InfinityEmbedder (GPU batch) + LocalLazySearchEmbedder (CPU search)
 │   │   └── qdrant_store.py         # Qdrant collection management
 │   ├── eval/
 │   │   ├── golden_dataset.json     # Ground truth for 50 IDL documents
@@ -73,8 +83,9 @@ docker-paperless-ai/
 │   │   └── assign_splits.py        # One-time train/validation split assignment
 │   └── tests/
 │       ├── conftest.py             # Shared fixtures (queue, embedder mock, Qdrant, …)
-│       ├── test_e2e_pipeline.py    # E2E: Redis queue → OCR → metadata → Paperless PATCH
+│       ├── test_phase_b_pipeline.py# Three-stage pipeline (OCR / metadata / embed batches)
 │       ├── test_webhook.py         # Webhook listener + Paperless workflow integration
+│       ├── test_search.py          # LocalLazySearchEmbedder unit + GET /search integration
 │       ├── test_metrics.py         # Unit tests for scoring functions
 │       └── test_evaluator.py       # Unit tests for evaluation runner
 ├── docker-compose.yml              # Full server stack
@@ -235,6 +246,35 @@ Supported `_FILE` variants: `GOOGLE_API_KEY_FILE`, `ANTHROPIC_API_KEY_FILE`, `OP
 | `TAG_EMBED` | `ai:run-embed` | Tag for documents entering the embedding stage |
 | `OCR_REASONING_EFFORT` | `minimal` | LiteLLM `reasoning_effort` parameter (set empty to disable) |
 | `DRY_RUN` | `false` | Log actions without modifying documents |
+| `QDRANT_URL` | `http://qdrant:6333` | Qdrant vector DB URL (used by embed worker and `/search`) |
+
+## Search API
+
+The webhook-listener exposes a search endpoint alongside the webhook receiver:
+
+```
+GET /search?q=<query>[&limit=20]
+```
+
+Returns a JSON array of Paperless `doc_id` integers ranked by semantic similarity, deduplicated across chunks:
+
+```bash
+curl "http://localhost:8001/search?q=electricity+bill+2024&limit=10"
+# → [42, 17, 88]
+```
+
+### Dual-embedder design
+
+Two embedders serve different roles and never interfere:
+
+| Embedder | Class | Used for | When available |
+|---|---|---|---|
+| `InfinityEmbedder` | `embedder.py` | Batch indexing via the embed worker | Only when GPU workstation is on |
+| `LocalLazySearchEmbedder` | `embedder.py` | Answering `/search` queries | Always (CPU, no GPU needed) |
+
+`LocalLazySearchEmbedder` loads the bge-m3 model into CPU RAM on the first query and automatically evicts it after 5 minutes of inactivity (`gc.collect()` called on eviction). This keeps RAM usage at zero when search is idle while keeping query latency reasonable on the fast path (model already warm).
+
+The `INFINITY_URL` and GPU workstation availability do not affect `/search` — it uses FastEmbed running locally in the webhook-listener container.
 
 ## Customising prompts
 
@@ -284,6 +324,12 @@ Django migrations and document indexing).  A fresh pull adds image download time
 | `test_webhook.py` | Graceful handling: missing ID → 202, non-JSON body → 400 |
 | `test_webhook.py` | `/health` endpoint reflects live pending count |
 | `test_webhook.py` | **Full Paperless integration**: workflow created via API → document uploaded → Paperless fires `{{doc_url}}` webhook → doc ID lands in Redis |
+| `test_search.py` | `LocalLazySearchEmbedder` unit tests: lazy load, reuse, `_last_used` stamping |
+| `test_search.py` | `idle_watcher` evicts stale model, calls `gc.collect()`, keeps fresh model |
+| `test_search.py` | Memory lifecycle: `tracemalloc` before/after snapshot + `weakref` GC assertion |
+| `test_search.py` | `embed_query` runs in thread pool (event-loop non-blocking verified) |
+| `test_search.py` | `/search` 422 on missing/empty `q` and out-of-range `limit` |
+| `test_search.py` | `/search` returns `list[int]` doc_ids, deduplicates multi-chunk hits |
 | `test_metrics.py` | Scoring function unit tests (correspondent, date, title) |
 | `test_evaluator.py` | Evaluation framework unit tests |
 
@@ -301,6 +347,10 @@ The Infinity embedding server is **not** available in the test environment (GPU
 not present in CI).  The `mock_embedder` fixture provides deterministic 1024-d
 fake vectors directly to `run_embed_batch()` so the embedding code path is still
 exercised end-to-end against real Qdrant.
+
+`LocalLazySearchEmbedder` (used by `/search`) is tested with a `fastembed`
+mock that allocates a real `bytearray` so `tracemalloc` can verify allocation
+and deallocation without downloading the actual bge-m3 weights.
 
 #### Skip the build step (faster re-runs)
 

@@ -27,20 +27,27 @@ Health endpoint:
     GET /health → {"status": "ok", "pending": {"ocr": N, "metadata": N, "embed": N}}
 """
 
+import asyncio
 import logging
 import os
 import re
 import secrets
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 
-from fastapi import FastAPI, Request, Response, status
+from fastapi import FastAPI, HTTPException, Query, Request, Response, status
+from qdrant_client import AsyncQdrantClient
+from qdrant_client.models import NamedVector
 
+from paperless_ai.search.embedder import LocalLazySearchEmbedder
 from paperless_ai.search.queue import TaskQueues
+from paperless_ai.search.qdrant_store import COLLECTION
 
 log = logging.getLogger(__name__)
 
 _queues: TaskQueues | None = None
 _webhook_secret: str | None = None
+_lazy_embedder: LocalLazySearchEmbedder | None = None
+_idle_task: asyncio.Task | None = None
 _tag_ocr: str = "ai:run-ocr"
 _tag_metadata: str = "ai:run-metadata"
 _tag_embed: str = "ai:run-embed"
@@ -53,6 +60,7 @@ _DOC_URL_ID_RE = re.compile(r"/documents/(\d+)")
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global _queues, _webhook_secret, _tag_ocr, _tag_metadata, _tag_embed
+    global _lazy_embedder, _idle_task
     redis_url = os.environ.get("REDIS_URL", "redis://broker:6379/1")
     _webhook_secret = os.environ.get("WEBHOOK_SECRET") or None
     _tag_ocr = os.environ.get("TAG_OCR", os.environ.get("TAG_PENDING", "ai:run-ocr"))
@@ -64,9 +72,14 @@ async def lifespan(app: FastAPI):
     else:
         log.warning("WEBHOOK_SECRET not set — webhook endpoint is unauthenticated")
     _queues = TaskQueues(redis_url)
+    _lazy_embedder = LocalLazySearchEmbedder()
+    _idle_task = asyncio.create_task(_lazy_embedder.idle_watcher())
     log.info("Webhook listener ready (redis=%s, tags: ocr=%r metadata=%r embed=%r)",
              redis_url, _tag_ocr, _tag_metadata, _tag_embed)
     yield
+    _idle_task.cancel()
+    with suppress(asyncio.CancelledError):
+        await _idle_task
     if _queues:
         await _queues.close()
 
@@ -154,6 +167,45 @@ async def webhook_document(request: Request) -> Response:
         )
 
     return Response(status_code=202)
+
+
+@app.get("/search")
+async def search(
+    q: str = Query(..., min_length=1, description="Search query"),
+    limit: int = Query(20, ge=1, le=100),
+) -> list[int]:
+    """Search indexed documents and return matching Paperless doc_ids.
+
+    Uses the local CPU FastEmbed model so the endpoint works even when the
+    GPU Infinity server is powered off.
+    """
+    if _lazy_embedder is None:
+        raise HTTPException(status_code=503, detail="Embedder not ready")
+
+    qdrant_url = os.environ.get("QDRANT_URL", "http://qdrant:6333")
+
+    result = await _lazy_embedder.embed_query(q)
+
+    qdrant = AsyncQdrantClient(url=qdrant_url)
+    try:
+        hits = await qdrant.search(
+            collection_name=COLLECTION,
+            query_vector=NamedVector(name="dense", vector=result.dense),
+            limit=limit,
+            with_payload=True,
+        )
+    finally:
+        await qdrant.close()
+
+    # Deduplicate doc_ids while preserving score order.
+    seen: set[int] = set()
+    doc_ids: list[int] = []
+    for hit in hits:
+        doc_id = hit.payload.get("doc_id") if hit.payload else None
+        if doc_id is not None and doc_id not in seen:
+            seen.add(doc_id)
+            doc_ids.append(doc_id)
+    return doc_ids
 
 
 @app.get("/health")

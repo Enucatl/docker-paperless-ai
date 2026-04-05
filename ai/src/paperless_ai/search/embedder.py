@@ -20,7 +20,9 @@ Expected response shape:
     }
 """
 
+import asyncio
 import logging
+import time
 from dataclasses import dataclass, field
 
 import httpx
@@ -83,3 +85,55 @@ class InfinityEmbedder:
             return r.is_success
         except Exception:
             return False
+
+
+class LocalLazySearchEmbedder:
+    """CPU-based embedder using FastEmbed for ad-hoc search queries.
+
+    The model is loaded on first use and automatically unloaded after a
+    configurable idle period, so it consumes no RAM when the search API
+    is not being used ("scale-to-zero" for RAM).
+    """
+
+    MODEL_NAME = "BAAI/bge-m3"
+
+    def __init__(self) -> None:
+        self.model = None  # fastembed.TextEmbedding | None
+        self._last_used: float = 0.0
+
+    def _get_model(self):
+        """Return the FastEmbed model, loading it on first call."""
+        if self.model is None:
+            from fastembed import TextEmbedding
+
+            log.info("Loading FastEmbed %s into RAM…", self.MODEL_NAME)
+            self.model = TextEmbedding(model_name=self.MODEL_NAME)
+        self._last_used = time.monotonic()
+        return self.model
+
+    async def embed_query(self, query: str) -> EmbeddingResult:
+        """Embed a single search query.
+
+        FastEmbed is CPU-bound; we run it in a thread pool to avoid
+        blocking the FastAPI event loop.
+        """
+
+        def _embed() -> list[float]:
+            model = self._get_model()
+            return list(model.embed([query]))[0].tolist()
+
+        dense = await asyncio.to_thread(_embed)
+        return EmbeddingResult(dense=dense)
+
+    async def idle_watcher(self, timeout_seconds: int = 300) -> None:
+        """Background task: unload the model after it has been idle."""
+        while True:
+            await asyncio.sleep(60)
+            if self.model is not None and (time.monotonic() - self._last_used) > timeout_seconds:
+                log.info(
+                    "FastEmbed model idle for >%ds — freeing RAM", timeout_seconds
+                )
+                self.model = None
+                import gc
+
+                gc.collect()

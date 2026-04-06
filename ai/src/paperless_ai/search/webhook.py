@@ -33,17 +33,24 @@ import os
 import re
 import secrets
 from contextlib import asynccontextmanager, suppress
+from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Query, Request, Response, status
-from qdrant_client import AsyncQdrantClient
-from qdrant_client.models import NamedVector
 
+from paperless_ai.core.paperless import PaperlessClient
 from paperless_ai.search.embedder import LocalLazySearchEmbedder
 from paperless_ai.search.queue import TaskQueues
-from paperless_ai.search.qdrant_store import COLLECTION
+from paperless_ai.search.retriever import (
+    ScoredDoc,
+    dense_search,
+    keyword_search,
+    llm_rerank,
+    rrf_fuse,
+)
 
 log = logging.getLogger(__name__)
 
+# Task queue and webhooks
 _queues: TaskQueues | None = None
 _webhook_secret: str | None = None
 _lazy_embedder: LocalLazySearchEmbedder | None = None
@@ -52,25 +59,70 @@ _tag_ocr: str = "ai:run-ocr"
 _tag_metadata: str = "ai:run-metadata"
 _tag_embed: str = "ai:run-embed"
 
+# Hybrid search
+_paperless_client: PaperlessClient | None = None
+_qdrant_url: str = "http://qdrant:6333"
+_rerank_model: str | None = None
+_rerank_api_base: str | None = None
+
+# Retrieval hyperparameters
+K = 25  # max chunks from dense search
+N = 50  # max candidates for RRF before LLM reranking
+RRF_K = 60  # RRF smoothing constant
+
 # Matches the numeric document ID anywhere in a Paperless document URL.
 # e.g. "https://paperless.home/documents/42/detail" → "42"
 _DOC_URL_ID_RE = re.compile(r"/documents/(\d+)")
 
 
+def _read_secret(env_var: str) -> str | None:
+    """Read env var, or if FOO_FILE is set, read its content from that file.
+
+    Gracefully handles missing or inaccessible secret files.
+    """
+    file_path = os.environ.get(f"{env_var}_FILE")
+    if file_path:
+        p = Path(file_path)
+        try:
+            if p.is_file():
+                return p.read_text().strip()
+        except (OSError, ValueError):
+            pass
+    return os.environ.get(env_var)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global _queues, _webhook_secret, _tag_ocr, _tag_metadata, _tag_embed
-    global _lazy_embedder, _idle_task
+    global _lazy_embedder, _idle_task, _paperless_client, _qdrant_url
+    global _rerank_model, _rerank_api_base
+
     redis_url = os.environ.get("REDIS_URL", "redis://broker:6379/1")
     _webhook_secret = os.environ.get("WEBHOOK_SECRET") or None
     _tag_ocr = os.environ.get("TAG_OCR", os.environ.get("TAG_PENDING", "ai:run-ocr"))
     _tag_metadata = os.environ.get("TAG_METADATA", "ai:run-metadata")
     _tag_embed = os.environ.get("TAG_EMBED", "ai:run-embed")
 
+    # Hybrid search configuration
+    _qdrant_url = os.environ.get("QDRANT_URL", "http://qdrant:6333")
+    paperless_url = os.environ.get("PAPERLESS_URL")
+    paperless_token = _read_secret("PAPERLESS_TOKEN")
+    if paperless_url and paperless_token:
+        _paperless_client = PaperlessClient(paperless_url, paperless_token)
+        log.info("Paperless keyword search enabled (%s)", paperless_url)
+    else:
+        log.debug("Paperless search disabled (PAPERLESS_URL or PAPERLESS_TOKEN not set)")
+
+    _rerank_model = os.environ.get("RERANK_MODEL") or os.environ.get("METADATA_MODEL") or None
+    _rerank_api_base = os.environ.get("RERANK_API_BASE") or os.environ.get("METADATA_API_BASE") or None
+    if _rerank_model:
+        log.info("LLM reranking enabled (model=%s)", _rerank_model)
+
     if _webhook_secret:
         log.info("Webhook authentication enabled")
     else:
         log.warning("WEBHOOK_SECRET not set — webhook endpoint is unauthenticated")
+
     _queues = TaskQueues(redis_url)
     _lazy_embedder = LocalLazySearchEmbedder()
     _idle_task = asyncio.create_task(_lazy_embedder.idle_watcher())
@@ -82,6 +134,8 @@ async def lifespan(app: FastAPI):
         await _idle_task
     if _queues:
         await _queues.close()
+    if _paperless_client:
+        await _paperless_client.aclose()
 
 
 app = FastAPI(lifespan=lifespan)
@@ -174,41 +228,78 @@ async def search(
     q: str = Query(..., min_length=1, description="Search query"),
     limit: int = Query(20, ge=1, le=100),
 ) -> list[int]:
-    """Search indexed documents and return matching Paperless doc_ids.
+    """Hybrid semantic + keyword search with optional LLM reranking.
 
-    Uses the local CPU FastEmbed model so the endpoint works even when the
-    GPU Infinity server is powered off.
+    Two-Tower Retrieval:
+      - Dense: Local CPU embedding (FastEmbed) → Qdrant cosine search
+      - Keyword: Paperless full-text API
+      - Merge: Reciprocal Rank Fusion (RRF) to combine incompatible score scales
+      - Rerank: LLM-as-a-Judge (optional) filters false positives and reorders
+
+    Returns doc_ids in final rank order (RRF or LLM score, descending).
+    Gracefully degrades to dense-only search if Paperless is unavailable.
     """
     if _lazy_embedder is None:
         raise HTTPException(status_code=503, detail="Embedder not ready")
 
-    qdrant_url = os.environ.get("QDRANT_URL", "http://qdrant:6333")
+    # 1. Concurrent dense and keyword search
+    dense_task = asyncio.create_task(
+        dense_search(_lazy_embedder, _qdrant_url, q, K)
+    )
 
-    result = await _lazy_embedder.embed_query(q)
-
-    qdrant = AsyncQdrantClient(url=qdrant_url)
-    try:
-        hits = await qdrant.search(
-            collection_name=COLLECTION,
-            query_vector=NamedVector(name="dense", vector=result.dense),
-            limit=limit,
-            with_payload=True,
+    if _paperless_client:
+        keyword_task = asyncio.create_task(
+            _keyword_search_safe(q)
         )
-    finally:
-        await qdrant.close()
+    else:
+        # No-op coroutine for gather
+        async def _no_op() -> list[int]:
+            return []
+        keyword_task = asyncio.create_task(_no_op())
 
-    # Deduplicate doc_ids while preserving score order.
-    seen: set[int] = set()
-    doc_ids: list[int] = []
-    for hit in hits:
-        doc_id = hit.payload.get("doc_id") if hit.payload else None
-        if doc_id is not None and doc_id not in seen:
-            seen.add(doc_id)
-            doc_ids.append(doc_id)
-    return doc_ids
+    dense_results, keyword_ids = await asyncio.gather(dense_task, keyword_task)
+    dense_ids = [doc_id for doc_id, _ in dense_results]
+    chunk_map = {doc_id: text for doc_id, text in dense_results}
+
+    # 2. RRF fusion or fallback to dense
+    if keyword_ids:
+        log.info("Search: dense=%d results, keyword=%d results → RRF fusion", len(dense_ids), len(keyword_ids))
+        fused_ids = rrf_fuse(dense_ids, keyword_ids, k=RRF_K)
+    else:
+        log.debug("Search: keyword track unavailable, using dense results only")
+        fused_ids = dense_ids
+
+    # 3. Optional LLM reranking on top N candidates
+    if _rerank_model and fused_ids:
+        try:
+            candidates = [
+                ScoredDoc(doc_id, 0.0, chunk_map.get(doc_id))
+                for doc_id in fused_ids[:N]
+            ]
+            fused_ids = await llm_rerank(q, candidates, _rerank_model, _rerank_api_base, N)
+            log.info("Search: reranked %d candidates, final=%d", len(candidates), len(fused_ids))
+        except Exception as e:
+            log.warning("LLM reranking failed, using RRF order: %s", e)
+            # fallback: keep RRF order
+
+    return fused_ids[:limit]
+
+
+async def _keyword_search_safe(query: str) -> list[int]:
+    """Wrapper around keyword_search() that treats errors as empty results."""
+    if _paperless_client is None:
+        return []
+    try:
+        return await _paperless_client.search_documents(query, page_size=N)
+    except Exception as e:
+        log.warning("Keyword search failed: %s", e)
+        return []
 
 
 @app.get("/health")
 async def health() -> dict:
-    pending = await _queues.pending_count() if _queues else {"ocr": 0, "metadata": 0, "embed": 0}
+    if _queues:
+        pending = await _queues.pending_count()
+    else:
+        pending = {"ocr": 0, "metadata": 0, "embed": 0}
     return {"status": "ok", "pending": pending}

@@ -58,6 +58,11 @@ services:
   webhook-listener:
     environment:
       - REDIS_URL=redis://broker:6379/1
+      - QDRANT_URL=http://qdrant:6333
+      - PAPERLESS_URL=http://webserver:8000
+      - PAPERLESS_TOKEN=${TEST_PAPERLESS_TOKEN:-}
+      - RERANK_MODEL=openai/gpt-4o-mini
+      - OPENAI_API_KEY=dummy-test-key
     healthcheck:
       test: ["CMD", "python", "-c",
              "import urllib.request; urllib.request.urlopen('http://localhost:8001/health')"]
@@ -66,6 +71,8 @@ services:
       retries: 15
     depends_on:
       broker:
+        condition: service_healthy
+      qdrant:
         condition: service_healthy
 
   ai:

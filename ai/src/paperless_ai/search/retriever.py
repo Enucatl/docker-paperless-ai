@@ -1,0 +1,227 @@
+"""
+Hybrid retrieval system: dense + keyword + RRF fusion + LLM reranking.
+
+Two-Tower architecture:
+  Track A: Dense embeddings (FastEmbed query → Qdrant cosine) → top K chunks → rolled to doc_ids
+  Track B: Keyword search (Paperless full-text API)
+  Merge:   Reciprocal Rank Fusion (RRF) to combine incompatible score scales
+  Rerank:  LLM-as-a-Judge (litellm) to filter false positives and reorder by semantic relevance
+"""
+
+import asyncio
+import json
+import logging
+from dataclasses import dataclass
+from typing import Optional
+
+import httpx
+import litellm
+from qdrant_client import AsyncQdrantClient
+from qdrant_client.models import NamedVector
+
+from paperless_ai.search.embedder import LocalLazySearchEmbedder
+from paperless_ai.search.qdrant_store import COLLECTION
+
+log = logging.getLogger(__name__)
+
+
+@dataclass
+class ScoredDoc:
+    """Document with RRF score and optional chunk text for reranking."""
+    doc_id: int
+    rrf_score: float
+    chunk_text: Optional[str] = None
+
+
+async def dense_search(
+    embedder: LocalLazySearchEmbedder,
+    qdrant_url: str,
+    query: str,
+    k: int,
+) -> list[tuple[int, str]]:
+    """
+    Search by dense similarity: embed query → Qdrant cosine → roll up to doc_ids.
+
+    Args:
+        embedder: LocalLazySearchEmbedder (CPU FastEmbed)
+        qdrant_url: Qdrant base URL
+        query: user search query
+        k: max chunks to retrieve
+
+    Returns:
+        list of (doc_id, chunk_text) in rank order, deduplicated by highest chunk score
+    """
+    result = await embedder.embed_query(query)
+
+    qdrant = AsyncQdrantClient(url=qdrant_url)
+    try:
+        hits = await qdrant.search(
+            collection_name=COLLECTION,
+            query_vector=NamedVector(name="dense", vector=result.dense),
+            limit=k,
+            with_payload=True,
+        )
+    finally:
+        await qdrant.close()
+
+    # Roll up chunks to doc_ids: keep highest chunk score per doc
+    seen: dict[int, str] = {}
+    for hit in hits:
+        doc_id = hit.payload.get("doc_id") if hit.payload else None
+        text = hit.payload.get("text") if hit.payload else None
+        if doc_id is not None and doc_id not in seen:
+            seen[doc_id] = text or ""
+
+    return [(doc_id, text) for doc_id, text in seen.items()]
+
+
+async def keyword_search(
+    paperless_url: str,
+    token: str,
+    query: str,
+    page_size: int = 50,
+) -> list[int]:
+    """
+    Search via Paperless-ngx full-text API.
+
+    Args:
+        paperless_url: Paperless base URL
+        token: API token
+        query: user search query
+        page_size: max results to fetch
+
+    Returns:
+        list of doc_ids in Paperless relevance order
+
+    Raises:
+        httpx.HTTPStatusError: on API errors
+    """
+    async with httpx.AsyncClient(
+        base_url=paperless_url,
+        headers={"Authorization": f"Token {token}"},
+        timeout=60,
+    ) as client:
+        r = await client.get(
+            "/api/documents/",
+            params={"query": query, "page_size": page_size, "fields": "id"},
+        )
+        r.raise_for_status()
+        return [doc["id"] for doc in r.json().get("results", [])]
+
+
+def rrf_fuse(
+    dense_ids: list[int],
+    keyword_ids: list[int],
+    k: int = 60,
+) -> list[int]:
+    """
+    Reciprocal Rank Fusion: combine dense and keyword rankings.
+
+    Score = 1/(k + rank_dense) + 1/(k + rank_keyword)
+    A doc appearing in both lists scores higher than appearing in one.
+
+    Args:
+        dense_ids: ordered list from dense search
+        keyword_ids: ordered list from keyword search
+        k: smoothing constant (default 60, per RRF literature)
+
+    Returns:
+        merged doc_ids sorted descending by RRF score
+    """
+    scores: dict[int, float] = {}
+
+    for rank, doc_id in enumerate(dense_ids, start=1):
+        scores[doc_id] = scores.get(doc_id, 0) + 1 / (k + rank)
+
+    for rank, doc_id in enumerate(keyword_ids, start=1):
+        scores[doc_id] = scores.get(doc_id, 0) + 1 / (k + rank)
+
+    # Sort descending by score; ties broken by appearance order (stable sort)
+    return sorted(scores.keys(), key=lambda doc_id: scores[doc_id], reverse=True)
+
+
+async def llm_rerank(
+    query: str,
+    candidates: list[ScoredDoc],
+    model: str,
+    api_base: Optional[str],
+    top_n: int,
+) -> list[int]:
+    """
+    Rerank top N candidates using LLM-as-a-Judge (litellm).
+
+    Concurrently evaluates each candidate for relevance and assigns a score (1-10).
+    Filters out docs marked as irrelevant, sorts by score.
+
+    Args:
+        query: user search query
+        candidates: list of ScoredDoc with chunk_text
+        model: LiteLLM model string (e.g., "gemini/gemini-2.5-flash")
+        api_base: optional override for model API endpoint
+        top_n: max candidates to evaluate
+
+    Returns:
+        list of doc_ids sorted by LLM relevance score (highest first)
+        If all evaluations fail, returns input order as fallback
+    """
+    if not candidates:
+        return []
+
+    candidates = candidates[:top_n]
+
+    async def judge_candidate(cand: ScoredDoc) -> tuple[int, Optional[dict]]:
+        """Judge a single candidate. Returns (doc_id, {is_relevant, score, reason} or None on error)."""
+        prompt = f"""You are a relevance judge. Given a search query and a document excerpt, determine if the document is relevant to the query.
+
+Search query: {query}
+
+Document (ID {cand.doc_id}):
+{cand.chunk_text or "(no text available)"}
+
+Output a JSON object with exactly these fields:
+- is_relevant: boolean
+- score: integer 1-10 (higher = more relevant)
+- reason: string explaining your judgment
+
+Respond ONLY with valid JSON, no other text."""
+
+        kwargs: dict = {
+            "model": model,
+            "messages": [{"role": "user", "content": prompt}],
+            "response_format": {"type": "json_object"},
+            "temperature": 0,
+            "max_tokens": 200,
+        }
+        if api_base:
+            kwargs["api_base"] = api_base
+
+        try:
+            resp = await litellm.acompletion(**kwargs)
+            content = resp.choices[0].message.content.strip()
+            data = json.loads(content)
+            return (cand.doc_id, data)
+        except Exception as e:
+            log.warning("LLM rerank failed for doc %d: %s", cand.doc_id, e)
+            return (cand.doc_id, None)
+
+    # Concurrent evaluation
+    tasks = [judge_candidate(cand) for cand in candidates]
+    results = await asyncio.gather(*tasks)
+
+    # Filter and sort
+    scored: list[tuple[int, int]] = []
+    for doc_id, judgment in results:
+        if judgment and judgment.get("is_relevant"):
+            score = judgment.get("score", 0)
+            if isinstance(score, int) and 1 <= score <= 10:
+                scored.append((doc_id, score))
+
+    # Sort descending by score; ties broken by input order (stable)
+    scored.sort(key=lambda x: x[1], reverse=True)
+
+    if scored:
+        return [doc_id for doc_id, _ in scored]
+
+    # Fallback: no relevant docs found, return input order
+    log.debug("No docs judged as relevant; returning input order")
+    return [cand.doc_id for cand in candidates]

@@ -126,10 +126,22 @@ services:
     command: uvicorn paperless_ai.search.webhook:app --host '::' --port 8001
     environment:
       - REDIS_URL=redis://broker:6379/1
+      - QDRANT_URL=http://qdrant:6333
+      - PAPERLESS_URL=http://webserver:8000
+      - PAPERLESS_TOKEN_FILE=/run/secrets/paperless_token
+      - RERANK_MODEL=${RERANK_MODEL:-}
+      - RERANK_API_BASE=${RERANK_API_BASE:-}
+      - GOOGLE_API_KEY=${GOOGLE_API_KEY:-}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+    secrets:
+      - paperless_token
     networks:
       - internal
     depends_on:
       broker:
+        condition: service_healthy
+      qdrant:
         condition: service_healthy
 
   # AI batch post-processing — runs permanently alongside paperless.
@@ -213,6 +225,10 @@ services:
     networks:
       - internal
 
+
+secrets:
+  paperless_token:
+    file: ./secrets/paperless_token.txt
 
 networks:
   internal:

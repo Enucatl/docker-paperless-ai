@@ -25,7 +25,7 @@ import logging
 import time
 from dataclasses import dataclass, field
 
-import httpx
+import niquests
 
 log = logging.getLogger(__name__)
 
@@ -45,7 +45,7 @@ class InfinityEmbedder:
     ):
         self._base_url = base_url.rstrip("/")
         self._model = model
-        self._client = httpx.AsyncClient(timeout=120)
+        self._client = niquests.AsyncSession(timeout=120)
 
     async def aclose(self) -> None:
         """Close the underlying HTTP client connection pool."""

@@ -58,11 +58,11 @@ async def _check_server_reachable(base_url: str) -> bool:
     repeated warnings between polls so the log stays readable during a long
     GPU-off window.
     """
-    import httpx
+    import niquests
 
     for path in ("/health", "/models"):
         try:
-            async with httpx.AsyncClient(timeout=5.0) as c:
+            async with niquests.AsyncSession(timeout=5.0) as c:
                 r = await c.get(base_url.rstrip("/") + path)
                 if r.status_code < 500:
                     if base_url in _offline_servers:

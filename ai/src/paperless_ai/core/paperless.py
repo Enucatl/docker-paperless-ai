@@ -8,26 +8,25 @@ This module is intentionally kept unchanged from the original implementation.
 import logging
 from difflib import SequenceMatcher
 
-import httpx
+import niquests
 
 log = logging.getLogger(__name__)
 
 
-def _raise_for_status(r: httpx.Response) -> None:
+def _raise_for_status(r: niquests.Response) -> None:
     """Like raise_for_status() but includes the response body in the exception message."""
     try:
         r.raise_for_status()
-    except httpx.HTTPStatusError as e:
-        raise httpx.HTTPStatusError(
+    except niquests.HTTPError as e:
+        raise niquests.HTTPError(
             f"{e} — {e.response.text}",
-            request=e.request,
             response=e.response,
         ) from None
 
 
 class PaperlessClient:
     def __init__(self, base_url: str, token: str):
-        self._client = httpx.AsyncClient(
+        self._client = niquests.AsyncSession(
             base_url=base_url,
             headers={"Authorization": f"Token {token}"},
             timeout=60,

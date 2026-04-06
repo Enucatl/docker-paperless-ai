@@ -43,7 +43,7 @@ import weakref
 from contextlib import suppress
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import httpx
+import niquests
 import pytest
 
 from tests.conftest import WEBHOOK_URL
@@ -370,21 +370,21 @@ def test_memory_lifecycle_allocate_and_free():
 
 async def test_search_missing_q_returns_422():
     """/search without ?q must return 422 Unprocessable Entity."""
-    async with httpx.AsyncClient() as client:
+    async with niquests.AsyncSession() as client:
         r = await client.get(f"{WEBHOOK_URL}/search")
     assert r.status_code == 422
 
 
 async def test_search_empty_string_returns_422():
     """/search?q= (empty string) must be rejected by the min_length=1 constraint."""
-    async with httpx.AsyncClient() as client:
+    async with niquests.AsyncSession() as client:
         r = await client.get(f"{WEBHOOK_URL}/search", params={"q": ""})
     assert r.status_code == 422
 
 
 async def test_search_returns_list():
     """/search?q=... must return a JSON array (possibly empty when Qdrant is empty)."""
-    async with httpx.AsyncClient(timeout=30) as client:
+    async with niquests.AsyncSession(timeout=30) as client:
         r = await client.get(f"{WEBHOOK_URL}/search", params={"q": "invoice"})
     assert r.status_code == 200
     body = r.json()
@@ -394,7 +394,7 @@ async def test_search_returns_list():
 
 async def test_search_respects_limit():
     """/search?limit=1 must return at most 1 result."""
-    async with httpx.AsyncClient(timeout=30) as client:
+    async with niquests.AsyncSession(timeout=30) as client:
         r = await client.get(
             f"{WEBHOOK_URL}/search", params={"q": "document", "limit": 1}
         )
@@ -404,7 +404,7 @@ async def test_search_respects_limit():
 
 async def test_search_limit_too_large_returns_422():
     """/search?limit=999 exceeds the max of 100 and must be rejected."""
-    async with httpx.AsyncClient() as client:
+    async with niquests.AsyncSession() as client:
         r = await client.get(
             f"{WEBHOOK_URL}/search", params={"q": "test", "limit": 999}
         )
@@ -448,7 +448,7 @@ async def test_search_deduplicates_chunks_across_same_doc(qdrant_store):
         sparse_values=[[], []],
     )
 
-    async with httpx.AsyncClient(timeout=30) as client:
+    async with niquests.AsyncSession(timeout=30) as client:
         r = await client.get(
             f"{WEBHOOK_URL}/search", params={"q": "dedup test", "limit": 20}
         )

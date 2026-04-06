@@ -19,7 +19,7 @@ import os
 import time
 from unittest.mock import MagicMock, patch
 
-import httpx
+import niquests
 import pytest
 import redis as _redis_sync
 
@@ -101,10 +101,10 @@ def _wait_for_paperless(url: str, timeout: int = 180) -> None:
     deadline = time.time() + timeout
     while time.time() < deadline:
         try:
-            r = httpx.get(f"{url}/api/", timeout=5, follow_redirects=True)
+            r = niquests.get(f"{url}/api/", timeout=5, allow_redirects=True)
             if r.status_code < 500:
                 return
-        except httpx.RequestError:
+        except (niquests.RequestException, niquests.ConnectionError):
             pass
         time.sleep(3)
     raise RuntimeError(f"Paperless not ready at {url} after {timeout}s")

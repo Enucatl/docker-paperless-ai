@@ -24,7 +24,7 @@ import os
 import time
 from unittest.mock import patch
 
-import httpx
+import niquests
 import pytest
 
 from tests.conftest import (
@@ -87,7 +87,7 @@ def webhook_with_tags():
 
 async def test_webhook_health(document_queue):
     """GET /health returns 200 with pending counts per stage."""
-    async with httpx.AsyncClient() as client:
+    async with niquests.AsyncSession() as client:
         r = await client.get(f"{WEBHOOK_URL}/health")
     assert r.status_code == 200
     body = r.json()
@@ -108,7 +108,7 @@ async def test_webhook_enqueues_from_doc_url(document_queue):
     Paperless provides) must enqueue the numeric document ID extracted from
     the URL path.
     """
-    async with httpx.AsyncClient() as client:
+    async with niquests.AsyncSession() as client:
         r = await client.post(
             f"{WEBHOOK_URL}/webhook/document",
             json={"doc_url": "https://paperless.home/documents/42/detail"},
@@ -119,7 +119,7 @@ async def test_webhook_enqueues_from_doc_url(document_queue):
 
 async def test_webhook_enqueues_from_deep_doc_url(document_queue):
     """URL with extra path segments — ID still extracted correctly."""
-    async with httpx.AsyncClient() as client:
+    async with niquests.AsyncSession() as client:
         r = await client.post(
             f"{WEBHOOK_URL}/webhook/document",
             json={"doc_url": "http://paperless.internal:8000/documents/999/"},
@@ -135,7 +135,7 @@ async def test_webhook_enqueues_from_deep_doc_url(document_queue):
 
 async def test_webhook_enqueues_from_document_id_field(document_queue):
     """POST with a plain 'document_id' integer field must enqueue that ID."""
-    async with httpx.AsyncClient() as client:
+    async with niquests.AsyncSession() as client:
         r = await client.post(
             f"{WEBHOOK_URL}/webhook/document",
             json={"document_id": 77},
@@ -146,7 +146,7 @@ async def test_webhook_enqueues_from_document_id_field(document_queue):
 
 async def test_webhook_enqueues_from_id_field(document_queue):
     """POST with a plain 'id' integer field (last-resort fallback)."""
-    async with httpx.AsyncClient() as client:
+    async with niquests.AsyncSession() as client:
         r = await client.post(
             f"{WEBHOOK_URL}/webhook/document",
             json={"id": 55},
@@ -166,7 +166,7 @@ async def test_webhook_deduplicates_same_id(document_queue):
     Redis SADD is idempotent — this verifies the set-based dedup works end-to-end.
     """
     payload = {"doc_url": "https://paperless.home/documents/100/detail"}
-    async with httpx.AsyncClient() as client:
+    async with niquests.AsyncSession() as client:
         await client.post(f"{WEBHOOK_URL}/webhook/document", json=payload)
         await client.post(f"{WEBHOOK_URL}/webhook/document", json=payload)
 
@@ -184,7 +184,7 @@ async def test_webhook_ignores_payload_without_id(document_queue):
     A payload that carries no recognisable document ID is accepted (202) but
     does not add anything to the queue — Paperless should not be forced to retry.
     """
-    async with httpx.AsyncClient() as client:
+    async with niquests.AsyncSession() as client:
         r = await client.post(
             f"{WEBHOOK_URL}/webhook/document",
             json={"event": "document_added", "unrelated": "data"},
@@ -195,7 +195,7 @@ async def test_webhook_ignores_payload_without_id(document_queue):
 
 async def test_webhook_rejects_non_json_body(document_queue):
     """A non-JSON body must return 400."""
-    async with httpx.AsyncClient() as client:
+    async with niquests.AsyncSession() as client:
         r = await client.post(
             f"{WEBHOOK_URL}/webhook/document",
             content=b"not json",
@@ -212,7 +212,7 @@ async def test_webhook_rejects_non_json_body(document_queue):
 
 async def test_webhook_rejects_missing_token(webhook_with_auth, document_queue):
     """When WEBHOOK_SECRET is set, requests without X-Webhook-Token are rejected."""
-    async with httpx.AsyncClient() as client:
+    async with niquests.AsyncSession() as client:
         r = await client.post(
             f"{WEBHOOK_URL}/webhook/document",
             json={"doc_url": "https://paperless.home/documents/42/detail"},
@@ -224,7 +224,7 @@ async def test_webhook_rejects_missing_token(webhook_with_auth, document_queue):
 
 async def test_webhook_rejects_wrong_token(webhook_with_auth, document_queue):
     """When WEBHOOK_SECRET is set, requests with wrong token are rejected."""
-    async with httpx.AsyncClient() as client:
+    async with niquests.AsyncSession() as client:
         r = await client.post(
             f"{WEBHOOK_URL}/webhook/document",
             json={"doc_url": "https://paperless.home/documents/42/detail"},
@@ -236,7 +236,7 @@ async def test_webhook_rejects_wrong_token(webhook_with_auth, document_queue):
 
 async def test_webhook_accepts_correct_token(webhook_with_auth, document_queue):
     """When WEBHOOK_SECRET is set, requests with correct token are accepted."""
-    async with httpx.AsyncClient() as client:
+    async with niquests.AsyncSession() as client:
         r = await client.post(
             f"{WEBHOOK_URL}/webhook/document",
             json={"doc_url": "https://paperless.home/documents/42/detail"},
@@ -260,7 +260,7 @@ async def test_webhook_health_reflects_pending_count(document_queue):
         {"doc_url": "https://paperless.home/documents/201/detail"},
         {"doc_url": "https://paperless.home/documents/202/detail"},
     ]
-    async with httpx.AsyncClient() as client:
+    async with niquests.AsyncSession() as client:
         for p in payloads:
             await client.post(f"{WEBHOOK_URL}/webhook/document", json=p)
 
@@ -278,7 +278,7 @@ async def test_webhook_health_reflects_pending_count(document_queue):
 
 async def test_webhook_routes_ocr_tag_to_ocr_queue(document_queue, webhook_with_tags):
     """ai:run-ocr tag → queue:ocr."""
-    async with httpx.AsyncClient() as client:
+    async with niquests.AsyncSession() as client:
         r = await client.post(
             f"{WEBHOOK_URL}/webhook/document",
             json={
@@ -294,7 +294,7 @@ async def test_webhook_routes_ocr_tag_to_ocr_queue(document_queue, webhook_with_
 
 async def test_webhook_routes_metadata_tag_to_metadata_queue(document_queue, webhook_with_tags):
     """ai:run-metadata tag → queue:metadata."""
-    async with httpx.AsyncClient() as client:
+    async with niquests.AsyncSession() as client:
         r = await client.post(
             f"{WEBHOOK_URL}/webhook/document",
             json={
@@ -309,7 +309,7 @@ async def test_webhook_routes_metadata_tag_to_metadata_queue(document_queue, web
 
 async def test_webhook_routes_embed_tag_to_embed_queue(document_queue, webhook_with_tags):
     """ai:run-embed tag → queue:embed."""
-    async with httpx.AsyncClient() as client:
+    async with niquests.AsyncSession() as client:
         r = await client.post(
             f"{WEBHOOK_URL}/webhook/document",
             json={
@@ -324,7 +324,7 @@ async def test_webhook_routes_embed_tag_to_embed_queue(document_queue, webhook_w
 
 async def test_webhook_routes_no_ai_tag_to_embed_queue(document_queue, webhook_with_tags):
     """No ai:run-* tag → queue:embed (human edit, keep index in sync)."""
-    async with httpx.AsyncClient() as client:
+    async with niquests.AsyncSession() as client:
         r = await client.post(
             f"{WEBHOOK_URL}/webhook/document",
             json={
@@ -338,7 +338,7 @@ async def test_webhook_routes_no_ai_tag_to_embed_queue(document_queue, webhook_w
 
 async def test_webhook_routes_no_tags_field_to_embed_queue(document_queue, webhook_with_tags):
     """Missing document_tags key → queue:embed (safe default)."""
-    async with httpx.AsyncClient() as client:
+    async with niquests.AsyncSession() as client:
         r = await client.post(
             f"{WEBHOOK_URL}/webhook/document",
             json={"doc_url": "https://paperless.home/documents/305/detail"},
@@ -349,7 +349,7 @@ async def test_webhook_routes_no_tags_field_to_embed_queue(document_queue, webho
 
 async def test_webhook_ocr_tag_takes_priority_over_embed(document_queue, webhook_with_tags):
     """If both ai:run-ocr and ai:run-embed are present, ocr wins."""
-    async with httpx.AsyncClient() as client:
+    async with niquests.AsyncSession() as client:
         r = await client.post(
             f"{WEBHOOK_URL}/webhook/document",
             json={

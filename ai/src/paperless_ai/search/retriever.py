@@ -14,8 +14,8 @@ import logging
 from dataclasses import dataclass
 from typing import Optional
 
-import httpx
 import litellm
+import niquests
 from qdrant_client import AsyncQdrantClient
 from qdrant_client.models import NamedVector
 
@@ -94,14 +94,14 @@ async def keyword_search(
         list of doc_ids in Paperless relevance order
 
     Raises:
-        httpx.HTTPStatusError: on API errors
+        niquests.HTTPError: on API errors
     """
-    async with httpx.AsyncClient(
+    async with niquests.AsyncSession(
         base_url=paperless_url,
         headers={"Authorization": f"Token {token}"},
         timeout=60,
-    ) as client:
-        r = await client.get(
+    ) as session:
+        r = await session.get(
             "/api/documents/",
             params={"query": query, "page_size": page_size, "fields": "id"},
         )

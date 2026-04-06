@@ -41,7 +41,7 @@ class InfinityEmbedder:
     def __init__(
         self,
         base_url: str = "http://localhost:8102",
-        model: str = "BAAI/bge-m3",
+        model: str = "BAAI/bge-large-en-v1.5",
     ):
         self._base_url = base_url.rstrip("/")
         self._model = model
@@ -88,7 +88,7 @@ class InfinityEmbedder:
 
 
 class LocalLazySearchEmbedder:
-    """CPU-based embedder using FastEmbed for ad-hoc search queries.
+    """CPU-based embedder using SentenceTransformers for ad-hoc search queries.
 
     The model is loaded on first use and automatically unloaded after a
     configurable idle period, so it consumes no RAM when the search API
@@ -98,29 +98,29 @@ class LocalLazySearchEmbedder:
     MODEL_NAME = "BAAI/bge-m3"
 
     def __init__(self) -> None:
-        self.model = None  # fastembed.TextEmbedding | None
+        self.model = None  # sentence_transformers.SentenceTransformer | None
         self._last_used: float = 0.0
 
     def _get_model(self):
-        """Return the FastEmbed model, loading it on first call."""
+        """Return the SentenceTransformer model, loading it on first call."""
         if self.model is None:
-            from fastembed import TextEmbedding
+            from sentence_transformers import SentenceTransformer
 
-            log.info("Loading FastEmbed %s into RAM…", self.MODEL_NAME)
-            self.model = TextEmbedding(model_name=self.MODEL_NAME)
+            log.info("Loading SentenceTransformer %s into RAM…", self.MODEL_NAME)
+            self.model = SentenceTransformer(self.MODEL_NAME, trust_remote_code=True)
         self._last_used = time.monotonic()
         return self.model
 
     async def embed_query(self, query: str) -> EmbeddingResult:
         """Embed a single search query.
 
-        FastEmbed is CPU-bound; we run it in a thread pool to avoid
+        SentenceTransformer is CPU-bound; we run it in a thread pool to avoid
         blocking the FastAPI event loop.
         """
 
         def _embed() -> list[float]:
             model = self._get_model()
-            return list(model.embed([query]))[0].tolist()
+            return model.encode(query).tolist()
 
         dense = await asyncio.to_thread(_embed)
         return EmbeddingResult(dense=dense)

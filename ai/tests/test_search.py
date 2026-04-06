@@ -50,39 +50,32 @@ from tests.conftest import WEBHOOK_URL
 from paperless_ai.search.embedder import EmbeddingResult, LocalLazySearchEmbedder
 
 # ---------------------------------------------------------------------------
-# Fake fastembed model (no download, tracks allocation)
+# Fake SentenceTransformer model (no download, tracks allocation)
 # ---------------------------------------------------------------------------
 
 _DENSE_DIM = 1024
 _ALLOC_BYTES = 10 * 1024 * 1024  # 10 MiB — large enough for tracemalloc to see
 
 
-class _FakeVector:
-    """Minimal stand-in for a numpy array returned by fastembed."""
-
-    def __init__(self):
-        self._data = [0.1] * _DENSE_DIM
-
-    def tolist(self) -> list[float]:
-        return self._data
+import numpy as np
 
 
-class _FakeTextEmbedding:
+class _FakeSentenceTransformer:
     """
-    Drop-in for fastembed.TextEmbedding.
+    Drop-in for sentence_transformers.SentenceTransformer.
 
     Allocates a 10 MiB bytearray on construction so that tracemalloc can
     detect the allocation and confirm it is freed when the model is unloaded.
     """
 
-    def __init__(self, model_name: str):
+    def __init__(self, model_name: str, trust_remote_code: bool = True):
         self._model_name = model_name
         # bytearray is tracked by Python's allocator → visible to tracemalloc
         self._weights = bytearray(_ALLOC_BYTES)
 
-    def embed(self, texts: list[str]):
-        for _ in texts:
-            yield _FakeVector()
+    def encode(self, text: str, normalize_embeddings: bool = True) -> np.ndarray:
+        """Return a normalized embedding vector."""
+        return np.array([0.1] * _DENSE_DIM, dtype=np.float32)
 
 
 # ---------------------------------------------------------------------------
@@ -96,10 +89,10 @@ def embedder() -> LocalLazySearchEmbedder:
 
 
 @pytest.fixture
-def patched_fastembed():
-    """Patch fastembed.TextEmbedding globally for the duration of the test."""
-    with patch("fastembed.TextEmbedding", _FakeTextEmbedding):
-        yield _FakeTextEmbedding
+def patched_sentence_transformer():
+    """Patch sentence_transformers.SentenceTransformer globally for the duration of the test."""
+    with patch("sentence_transformers.SentenceTransformer", _FakeSentenceTransformer):
+        yield _FakeSentenceTransformer
 
 
 # ---------------------------------------------------------------------------
@@ -111,25 +104,25 @@ def test_model_starts_none(embedder):
     assert embedder.model is None
 
 
-def test_get_model_loads_on_first_call(embedder, patched_fastembed):
+def test_get_model_loads_on_first_call(embedder, patched_sentence_transformer):
     model = embedder._get_model()
     assert model is not None
-    assert isinstance(model, _FakeTextEmbedding)
+    assert isinstance(model, _FakeSentenceTransformer)
 
 
-def test_get_model_reuses_instance(embedder, patched_fastembed):
+def test_get_model_reuses_instance(embedder, patched_sentence_transformer):
     first = embedder._get_model()
     second = embedder._get_model()
     assert first is second
 
 
-def test_get_model_updates_last_used(embedder, patched_fastembed):
+def test_get_model_updates_last_used(embedder, patched_sentence_transformer):
     before = time.monotonic()
     embedder._get_model()
     assert embedder._last_used >= before
 
 
-def test_get_model_logs_on_load(embedder, patched_fastembed, caplog):
+def test_get_model_logs_on_load(embedder, patched_sentence_transformer, caplog):
     import logging
 
     with caplog.at_level(logging.INFO, logger="paperless_ai.search.embedder"):
@@ -137,7 +130,7 @@ def test_get_model_logs_on_load(embedder, patched_fastembed, caplog):
     assert any("Loading" in r.message for r in caplog.records)
 
 
-def test_get_model_does_not_log_on_second_call(embedder, patched_fastembed, caplog):
+def test_get_model_does_not_log_on_second_call(embedder, patched_sentence_transformer, caplog):
     import logging
 
     embedder._get_model()  # first — logs
@@ -152,20 +145,20 @@ def test_get_model_does_not_log_on_second_call(embedder, patched_fastembed, capl
 # ---------------------------------------------------------------------------
 
 
-async def test_embed_query_returns_embedding_result(embedder, patched_fastembed):
+async def test_embed_query_returns_embedding_result(embedder, patched_sentence_transformer):
     result = await embedder.embed_query("what is this invoice about?")
     assert isinstance(result, EmbeddingResult)
     assert len(result.dense) == _DENSE_DIM
     assert all(isinstance(v, float) for v in result.dense)
 
 
-async def test_embed_query_loads_model_lazily(embedder, patched_fastembed):
+async def test_embed_query_loads_model_lazily(embedder, patched_sentence_transformer):
     assert embedder.model is None
     await embedder.embed_query("test query")
     assert embedder.model is not None
 
 
-async def test_embed_query_does_not_block_event_loop(embedder, patched_fastembed):
+async def test_embed_query_does_not_block_event_loop(embedder, patched_sentence_transformer):
     """embed_query must run embedding in a thread, not block the event loop.
 
     We verify this by running a concurrent coroutine while embed_query
@@ -189,7 +182,7 @@ async def test_embed_query_does_not_block_event_loop(embedder, patched_fastembed
 # ---------------------------------------------------------------------------
 
 
-async def test_idle_watcher_keeps_fresh_model(embedder, patched_fastembed):
+async def test_idle_watcher_keeps_fresh_model(embedder, patched_sentence_transformer):
     """A recently-used model must NOT be evicted."""
     embedder._get_model()  # loads model and stamps _last_used
     assert embedder.model is not None
@@ -209,7 +202,7 @@ async def test_idle_watcher_keeps_fresh_model(embedder, patched_fastembed):
     assert embedder.model is not None, "Fresh model should not have been evicted"
 
 
-async def test_idle_watcher_unloads_stale_model(embedder, patched_fastembed):
+async def test_idle_watcher_unloads_stale_model(embedder, patched_sentence_transformer):
     """A model idle longer than timeout_seconds must be set to None."""
     embedder._get_model()
     embedder._last_used = 0.0  # make it look ancient
@@ -229,7 +222,7 @@ async def test_idle_watcher_unloads_stale_model(embedder, patched_fastembed):
     assert embedder.model is None, "Stale model should have been unloaded"
 
 
-async def test_idle_watcher_calls_gc_collect(embedder, patched_fastembed):
+async def test_idle_watcher_calls_gc_collect(embedder, patched_sentence_transformer):
     """gc.collect() must be called after model is unloaded."""
     embedder._get_model()
     embedder._last_used = 0.0
@@ -250,7 +243,7 @@ async def test_idle_watcher_calls_gc_collect(embedder, patched_fastembed):
     mock_gc.assert_called_once()
 
 
-async def test_idle_watcher_logs_eviction(embedder, patched_fastembed, caplog):
+async def test_idle_watcher_logs_eviction(embedder, patched_sentence_transformer, caplog):
     import logging
 
     embedder._get_model()
@@ -303,9 +296,9 @@ def test_memory_lifecycle_allocate_and_free():
     # ── Baseline ──────────────────────────────────────────────────────────
     snap_baseline = tracemalloc.take_snapshot()
 
-    with patch("fastembed.TextEmbedding", _FakeTextEmbedding):
+    with patch("sentence_transformers.SentenceTransformer", _FakeSentenceTransformer):
         embedder = LocalLazySearchEmbedder()
-        embedder._get_model()  # triggers _FakeTextEmbedding(…) → allocates bytearray
+        embedder._get_model()  # triggers _FakeSentenceTransformer(…) → allocates bytearray
 
     # ── Loaded ────────────────────────────────────────────────────────────
     snap_loaded = tracemalloc.take_snapshot()
@@ -368,6 +361,7 @@ def test_memory_lifecycle_allocate_and_free():
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.requires_webhook_listener
 async def test_search_missing_q_returns_422():
     """/search without ?q must return 422 Unprocessable Entity."""
     async with niquests.AsyncSession() as client:
@@ -375,6 +369,7 @@ async def test_search_missing_q_returns_422():
     assert r.status_code == 422
 
 
+@pytest.mark.requires_webhook_listener
 async def test_search_empty_string_returns_422():
     """/search?q= (empty string) must be rejected by the min_length=1 constraint."""
     async with niquests.AsyncSession() as client:
@@ -382,6 +377,7 @@ async def test_search_empty_string_returns_422():
     assert r.status_code == 422
 
 
+@pytest.mark.requires_webhook_listener
 async def test_search_returns_list():
     """/search?q=... must return a JSON array (possibly empty when Qdrant is empty)."""
     async with niquests.AsyncSession(timeout=30) as client:
@@ -392,6 +388,7 @@ async def test_search_returns_list():
     assert all(isinstance(doc_id, int) for doc_id in body)
 
 
+@pytest.mark.requires_webhook_listener
 async def test_search_respects_limit():
     """/search?limit=1 must return at most 1 result."""
     async with niquests.AsyncSession(timeout=30) as client:
@@ -402,6 +399,7 @@ async def test_search_respects_limit():
     assert len(r.json()) <= 1
 
 
+@pytest.mark.requires_webhook_listener
 async def test_search_limit_too_large_returns_422():
     """/search?limit=999 exceeds the max of 100 and must be rejected."""
     async with niquests.AsyncSession() as client:
@@ -411,6 +409,7 @@ async def test_search_limit_too_large_returns_422():
     assert r.status_code == 422
 
 
+@pytest.mark.requires_webhook_listener
 async def test_search_deduplicates_chunks_across_same_doc(qdrant_store):
     """
     When multiple chunks from the same doc_id score highly, the /search

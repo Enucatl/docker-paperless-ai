@@ -227,6 +227,8 @@ services:
       - POLL_INTERVAL
       - TAG_OCR=ai:run-ocr
       - OCR_REASONING_EFFORT
+      - OCR_TEMPERATURE
+      - METADATA_TEMPERATURE
       - OCR_CONCURRENCY
       - LLM_RETRIES
       # - DRY_RUN=false

@@ -275,6 +275,20 @@ class PaperlessClient:
             data = r.json()
             for field in data["results"]:
                 if field["name"] == name:
+                    existing_type = field.get("data_type")
+                    if existing_type != data_type:
+                        r = await self._client.patch(
+                            f"/api/custom_fields/{field['id']}/",
+                            json={"data_type": data_type},
+                        )
+                        _raise_for_status(r)
+                        log.info(
+                            "Updated custom field '%s' (id=%d) type %s -> %s",
+                            name,
+                            field["id"],
+                            existing_type,
+                            data_type,
+                        )
                     log.info("Found custom field '%s' (id=%d)", name, field["id"])
                     return field["id"]
             if not data.get("next"):

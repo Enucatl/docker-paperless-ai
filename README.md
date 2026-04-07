@@ -155,7 +155,7 @@ on first run if they do not exist. The AI service also creates these custom
 fields automatically on first successful startup:
 
 - `ai_processed` (Date)
-- `ai_summary` (String)
+- `ai_summary` (Long text)
 - `ai_result` (Long text)
 
 ### 3. Start the stack
@@ -354,7 +354,7 @@ docker compose restart ai
 On first run the worker creates these custom fields automatically:
 
 - `ai_processed` (Date)
-- `ai_summary` (String)
+- `ai_summary` (Long text)
 - `ai_result` (Long text)
 
 `ai_processed` is set to the processing date on every successfully finished

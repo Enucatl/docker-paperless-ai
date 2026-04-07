@@ -160,7 +160,7 @@ async def main_async(args: argparse.Namespace) -> None:
                 "ai_processed", data_type="date"
             )
             ai_summary_field_id = await client.get_or_create_custom_field(
-                "ai_summary", data_type="string"
+                "ai_summary", data_type="longtext"
             )
             ai_result_field_id = await client.get_or_create_custom_field(
                 "ai_result", data_type="longtext"

@@ -618,7 +618,7 @@ async def test_webhook_loop_broken_by_tag_removal(
     agent = SmartDocumentAgent(config, extraction_strategy=_select_extraction_strategy(config))
 
     custom_field_id = await paperless_client.get_or_create_custom_field("ai_processed", data_type="date")
-    ai_summary_field_id = await paperless_client.get_or_create_custom_field("ai_summary", data_type="string")
+    ai_summary_field_id = await paperless_client.get_or_create_custom_field("ai_summary", data_type="longtext")
     ai_result_field_id = await paperless_client.get_or_create_custom_field("ai_result", data_type="longtext")
 
     tag_id = await paperless_client.get_tag_id(config.tag_pending)

@@ -164,3 +164,26 @@ async def test_ensure_ai_workflows_creates_added_and_updated_workflows():
             "doc_url": "{{doc_url}}",
             "document_tags": "{{document_tags}}",
         }
+
+
+@pytest.mark.asyncio
+async def test_get_or_create_custom_field_updates_existing_field_type():
+    with patch("paperless_ai.core.paperless.niquests.AsyncSession") as mock_session_class:
+        mock_session = AsyncMock()
+        mock_session_class.return_value = mock_session
+        mock_session.close = AsyncMock()
+        mock_session.get = AsyncMock(
+            return_value=_paged_response([{"id": 3, "name": "ai_summary", "data_type": "string"}])
+        )
+        mock_session.patch = AsyncMock(
+            return_value=MagicMock(status_code=200, ok=True, headers={}, json=MagicMock(return_value={}))
+        )
+
+        async with PaperlessClient("http://test:8000", "token123") as client:
+            field_id = await client.get_or_create_custom_field("ai_summary", data_type="longtext")
+
+        assert field_id == 3
+        mock_session.patch.assert_awaited_once_with(
+            "/api/custom_fields/3/",
+            json={"data_type": "longtext"},
+        )

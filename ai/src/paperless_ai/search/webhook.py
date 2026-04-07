@@ -103,7 +103,7 @@ async def lifespan(app: FastAPI):
     global _chat_copilot
 
     redis_url = os.environ.get("REDIS_URL", "redis://broker:6379/1")
-    _webhook_secret = os.environ.get("WEBHOOK_SECRET") or None
+    _webhook_secret = _read_secret("WEBHOOK_SECRET") or None
     _tag_ocr = os.environ.get("TAG_OCR", os.environ.get("TAG_PENDING", "ai:run-ocr"))
     _tag_metadata = os.environ.get("TAG_METADATA", "ai:run-metadata")
     _tag_embed = os.environ.get("TAG_EMBED", "ai:run-embed")

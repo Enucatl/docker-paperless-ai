@@ -30,6 +30,7 @@ services:
   ai:
     secrets:
       - paperless_token
+      - webhook_secret
       - openai_api_key
       - anthropic_api_key
       - google_api_key
@@ -55,6 +56,8 @@ volumes:
 secrets:
   paperless_token:
     file: ./secrets/paperless_token.txt
+  webhook_secret:
+    file: ./secrets/webhook_secret.txt
   openai_api_key:
     file: ./secrets/openai_api_key.txt
   anthropic_api_key:

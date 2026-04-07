@@ -33,7 +33,13 @@ def _read_secret(env_var: str) -> str | None:
 
 def _inject_secrets() -> None:
     """Read Docker secrets (_FILE variants) and inject them into os.environ."""
-    for key in ("GOOGLE_API_KEY", "ANTHROPIC_API_KEY", "OPENAI_API_KEY", "PAPERLESS_TOKEN"):
+    for key in (
+        "GOOGLE_API_KEY",
+        "ANTHROPIC_API_KEY",
+        "OPENAI_API_KEY",
+        "PAPERLESS_TOKEN",
+        "WEBHOOK_SECRET",
+    ):
         val = _read_secret(key)
         if val:
             os.environ[key] = val

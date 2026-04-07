@@ -135,7 +135,7 @@ services:
       - QDRANT_URL=http://qdrant:6333
       - PAPERLESS_URL=http://webserver:8000
       - PAPERLESS_TOKEN_FILE=/run/secrets/paperless_token
-      - WEBHOOK_SECRET
+      - WEBHOOK_SECRET_FILE=/run/secrets/webhook_secret
       - RERANK_MODEL=${RERANK_MODEL:-}
       - RERANK_API_BASE=${RERANK_API_BASE:-}
       - GOOGLE_API_KEY=${GOOGLE_API_KEY:-}
@@ -143,8 +143,22 @@ services:
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
     secrets:
       - paperless_token
+      - webhook_secret
     networks:
       - internal
+      - traefik_proxy
+    labels:
+      - "checkmk_monitor=true"
+      - "traefik.enable=true"
+      - "traefik.docker.network=traefik_proxy"
+      - "traefik.http.routers.paperless-ai.rule=Host(`paperless.${DOCKER_DOMAIN}`) && PathPrefix(`/ai`)"
+      - "traefik.http.routers.paperless-ai.entrypoints=https"
+      - "traefik.http.routers.paperless-ai.tls=true"
+      - "traefik.http.routers.paperless-ai.priority=200"
+      - "traefik.http.routers.paperless-ai.middlewares=paperless-ai-strip,authelia@docker,secured@file"
+      - "traefik.http.routers.paperless-ai.service=paperless-ai"
+      - "traefik.http.middlewares.paperless-ai-strip.stripprefix.prefixes=/ai"
+      - "traefik.http.services.paperless-ai.loadbalancer.server.port=8001"
     depends_on:
       broker:
         condition: service_healthy
@@ -183,7 +197,7 @@ services:
       # Paperless connection (required)
       - PAPERLESS_URL=http://webserver:8000
       - PAPERLESS_TOKEN_FILE=/run/secrets/paperless_token
-      - WEBHOOK_SECRET
+      - WEBHOOK_SECRET_FILE=/run/secrets/webhook_secret
       - PAPERLESS_WEBHOOK_URL=http://webhook-listener:8001/webhook/document
       - MANAGE_PAPERLESS_WORKFLOWS=${MANAGE_PAPERLESS_WORKFLOWS:-true}
 

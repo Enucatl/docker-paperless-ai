@@ -130,6 +130,12 @@ services:
     restart: unless-stopped
     entrypoint: []
     command: uvicorn paperless_ai.search.webhook:app --host '::' --port 8001
+    healthcheck:
+      test: ["CMD", "curl", "-fs", "-S", "--max-time", "2", "http://localhost:8001/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
     environment:
       - REDIS_URL=redis://broker:6379/1
       - QDRANT_URL=http://qdrant:6333

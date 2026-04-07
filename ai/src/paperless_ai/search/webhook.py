@@ -112,11 +112,23 @@ async def lifespan(app: FastAPI):
     _qdrant_url = os.environ.get("QDRANT_URL", "http://qdrant:6333")
     paperless_url = os.environ.get("PAPERLESS_URL")
     paperless_token = _read_secret("PAPERLESS_TOKEN")
+    log.info(
+        "Startup config: redis=%s qdrant=%s paperless_url=%r paperless_token=%s webhook_secret=%s",
+        redis_url,
+        _qdrant_url,
+        paperless_url,
+        "loaded" if paperless_token else "missing",
+        "loaded" if _webhook_secret else "missing",
+    )
     if paperless_url and paperless_token:
         _paperless_client = PaperlessClient(paperless_url, paperless_token)
         log.info("Paperless keyword search enabled (%s)", paperless_url)
     else:
-        log.debug("Paperless search disabled (PAPERLESS_URL or PAPERLESS_TOKEN not set)")
+        log.warning(
+            "Paperless search disabled (paperless_url=%s paperless_token=%s)",
+            "set" if paperless_url else "missing",
+            "set" if paperless_token else "missing",
+        )
 
     _rerank_model = os.environ.get("RERANK_MODEL") or os.environ.get("METADATA_MODEL") or None
     _rerank_api_base = os.environ.get("RERANK_API_BASE") or os.environ.get("METADATA_API_BASE") or None
@@ -138,8 +150,10 @@ async def lifespan(app: FastAPI):
             _lazy_embedder,
             _qdrant_url,
         )
+        log.info("Chat copilot enabled")
     else:
         _chat_copilot = None
+        log.warning("Chat copilot disabled (Paperless client unavailable)")
     log.info("Webhook listener ready (redis=%s, tags: ocr=%r metadata=%r embed=%r)",
              redis_url, _tag_ocr, _tag_metadata, _tag_embed)
     yield

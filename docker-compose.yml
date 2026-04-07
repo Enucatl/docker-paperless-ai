@@ -131,7 +131,7 @@ services:
     sysctls:
       - net.ipv6.bindv6only=0
     entrypoint: []
-    command: uvicorn paperless_ai.search.webhook:app --host :: --port 8001 --log-config /app/uvicorn_logging.json
+    command: "uvicorn paperless_ai.search.webhook:app --host '::' --port 8001 --log-config /app/uvicorn_logging.json"
     healthcheck:
       test:
         [

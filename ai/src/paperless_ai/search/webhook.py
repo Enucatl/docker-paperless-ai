@@ -205,6 +205,24 @@ def _parse_tags(body: dict) -> set[str]:
     return {t.strip() for t in str(raw).split(",") if t.strip()}
 
 
+async def _get_current_document_tags(doc_id: int, payload_tags: set[str]) -> set[str]:
+    """Return current tag names from Paperless, falling back to payload tags."""
+    if _paperless_client is None:
+        return payload_tags
+
+    try:
+        doc = await _paperless_client.get_document(doc_id)
+        if doc is None:
+            return payload_tags
+        tag_ids = doc.get("tags") or []
+        if not isinstance(tag_ids, list):
+            return payload_tags
+        return set(await _paperless_client.get_tag_names(tag_ids))
+    except Exception as e:
+        log.warning("Webhook: failed to resolve current tags for document %d: %s", doc_id, e)
+        return payload_tags
+
+
 @app.post("/webhook/document", status_code=202)
 async def webhook_document(request: Request) -> Response:
     if _webhook_secret is not None:
@@ -219,13 +237,15 @@ async def webhook_document(request: Request) -> Response:
         log.warning("Webhook received non-JSON body")
         return Response(status_code=400)
 
+    log.info("Webhook payload: %s", body)
+
     doc_id = _extract_doc_id(body)
     if doc_id is None:
         log.warning("Webhook payload missing document ID: %s", body)
         return Response(status_code=202)  # Accept anyway — don't make Paperless retry
 
     if _queues:
-        tags = _parse_tags(body)
+        tags = await _get_current_document_tags(doc_id, _parse_tags(body))
         stage = _route_to_stage(tags)
         added = await _queues.enqueue(doc_id, stage)
         log.info(

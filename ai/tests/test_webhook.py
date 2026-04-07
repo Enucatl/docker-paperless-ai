@@ -338,6 +338,35 @@ async def test_webhook_ocr_tag_takes_priority_over_embed(webhook_session, docume
     assert 306 not in _redis_stage_members(TaskQueues.KEY_EMBED)
 
 
+async def test_webhook_uses_current_paperless_tags_over_payload_snapshot(
+    webhook_session, document_queue, webhook_with_tags, monkeypatch
+):
+    """Route using current Paperless tags when webhook payload tags are stale."""
+    from paperless_ai.search import webhook as webhook_module
+
+    class _FakePaperlessClient:
+        async def get_document(self, doc_id):
+            assert doc_id == 307
+            return {"id": doc_id, "tags": [11]}
+
+        async def get_tag_names(self, tag_ids):
+            assert tag_ids == [11]
+            return ["ai:run-ocr", "invoice"]
+
+    monkeypatch.setattr(webhook_module, "_paperless_client", _FakePaperlessClient())
+
+    r = await webhook_session.post(
+        f"{WEBHOOK_URL}/webhook/document",
+        json={
+            "doc_url": "https://paperless.home/documents/307/detail",
+            "document_tags": "ai:run-embed",
+        },
+    )
+    assert r.status_code == 202
+    assert 307 in _redis_stage_members(TaskQueues.KEY_OCR)
+    assert 307 not in _redis_stage_members(TaskQueues.KEY_EMBED)
+
+
 # ---------------------------------------------------------------------------
 # End-to-end: Paperless fires the webhook on document events
 # ---------------------------------------------------------------------------
@@ -487,6 +516,48 @@ async def test_paperless_fires_webhook_on_document_updated(
         f"Document {doc_id} never appeared in the Redis queue within 60 s "
         f"(trigger=DOCUMENT_UPDATED, webhook={_PAPERLESS_FACING_WEBHOOK_ENDPOINT}). "
         "Check that trigger type 3 is DOCUMENT_UPDATED in this Paperless version."
+    )
+
+
+async def test_auto_managed_updated_workflow_routes_tagged_docs_to_ocr_queue(
+    paperless_client, document_queue, uploaded_document
+):
+    """
+    Real auto-managed workflow payload preserves document_tags for backfills.
+
+    This covers the production path that regressed:
+    1. Upload a document before workflows exist.
+    2. Create/update the auto-managed workflows via ensure_ai_workflows().
+    3. Add ai:run-ocr to the existing document.
+    4. Verify Paperless fires DOCUMENT_UPDATED and the webhook listener routes
+       the document to the OCR queue, not the embed queue.
+    """
+    doc_id = await uploaded_document()
+
+    await paperless_client.ensure_ai_workflows(
+        tag_ocr="ai:run-ocr",
+        webhook_url=_PAPERLESS_FACING_WEBHOOK_ENDPOINT,
+        webhook_secret=TEST_WEBHOOK_SECRET,
+    )
+
+    tag_id = await paperless_client.get_tag_id("ai:run-ocr", create=False)
+    r = await paperless_client._client.patch(
+        f"/api/documents/{doc_id}/",
+        json={"tags": [tag_id]},
+    )
+    assert r.status_code == 200, f"Failed to add ai:run-ocr tag: {r.status_code} — {r.text}"
+
+    deadline = time.monotonic() + 60
+    while time.monotonic() < deadline:
+        if doc_id in _redis_stage_members(TaskQueues.KEY_OCR):
+            break
+        await asyncio.sleep(2)
+
+    assert doc_id in _redis_stage_members(TaskQueues.KEY_OCR), (
+        f"Document {doc_id} never appeared in OCR queue after adding ai:run-ocr"
+    )
+    assert doc_id not in _redis_stage_members(TaskQueues.KEY_EMBED), (
+        f"Document {doc_id} incorrectly landed in embed queue instead of OCR queue"
     )
 
 

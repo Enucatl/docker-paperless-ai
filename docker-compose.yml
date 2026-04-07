@@ -166,6 +166,7 @@ services:
   ai:
     build:
       context: ./ai
+      target: runtime
     profiles: [ai]
     restart: unless-stopped
     # secrets: [paperless_token] moved to override
@@ -224,6 +225,43 @@ services:
     volumes: []
     networks:
       - internal
+
+  ai-eval:
+    image: paperless-ai-ai-eval
+    build:
+      context: ./ai
+      target: eval
+    profiles: [eval]
+    entrypoint: []
+    command: python cli.py --eval --split ${EVAL_SPLIT:-code-test}
+    environment:
+      - PAPERLESS_URL=http://webserver:8000
+      - PAPERLESS_TOKEN_FILE=/run/secrets/paperless_token
+      - OCR_MODEL
+      - METADATA_MODEL
+      - OCR_API_BASE
+      - METADATA_API_BASE
+      - GOOGLE_API_KEY
+      - ANTHROPIC_API_KEY
+      - OPENAI_API_KEY
+      - GOOGLE_API_KEY_FILE=/run/secrets/google_api_key
+      - ANTHROPIC_API_KEY_FILE=/run/secrets/anthropic_api_key
+      - OPENAI_API_KEY_FILE=/run/secrets/openai_api_key
+      - REDIS_URL=redis://broker:6379/1
+      - QDRANT_URL=http://qdrant:6333
+      - INFINITY_URL
+      - EMBEDDING_MODEL
+      - PHOENIX_CLIENT_HEADERS=api_key=local
+    volumes: []
+    networks:
+      - internal
+    depends_on:
+      webserver:
+        condition: service_healthy
+      qdrant:
+        condition: service_started
+      phoenix:
+        condition: service_started
 
 
 secrets:

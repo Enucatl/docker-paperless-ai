@@ -18,6 +18,7 @@ from typing import Optional
 import litellm
 import niquests
 from qdrant_client import AsyncQdrantClient
+from qdrant_client.models import FieldCondition, Filter, MatchAny, MatchValue
 
 from paperless_ai.search.embedder import LocalLazySearchEmbedder
 from paperless_ai.search.qdrant_store import COLLECTION
@@ -33,11 +34,65 @@ class ScoredDoc:
     chunk_text: Optional[str] = None
 
 
+@dataclass
+class SearchFilters:
+    correspondent: Optional[str] = None
+    document_type: Optional[str] = None
+    storage_path: Optional[str] = None
+    tags: Optional[list[str]] = None
+    year: Optional[str] = None
+
+
+def build_qdrant_filter(filters: SearchFilters) -> Filter | None:
+    """Build a Qdrant filter from human-readable metadata values."""
+    must_conditions: list[FieldCondition] = []
+    if filters.correspondent:
+        must_conditions.append(
+            FieldCondition(
+                key="correspondent",
+                match=MatchValue(value=filters.correspondent),
+            )
+        )
+    if filters.document_type:
+        must_conditions.append(
+            FieldCondition(
+                key="document_type",
+                match=MatchValue(value=filters.document_type),
+            )
+        )
+    if filters.storage_path:
+        must_conditions.append(
+            FieldCondition(
+                key="storage_path",
+                match=MatchValue(value=filters.storage_path),
+            )
+        )
+    if filters.tags:
+        must_conditions.append(
+            FieldCondition(key="tags", match=MatchAny(any=filters.tags))
+        )
+    if filters.year:
+        must_conditions.append(
+            FieldCondition(key="year", match=MatchValue(value=str(filters.year)))
+        )
+    return Filter(must=must_conditions) if must_conditions else None
+
+
+def _extract_qdrant_hits(response) -> list:
+    """Normalize AsyncQdrantClient query responses across client versions."""
+    if hasattr(response, "points"):
+        return list(response.points)
+    if isinstance(response, tuple):
+        return list(response[0])
+    return list(response)
+
+
 async def dense_search(
     embedder: LocalLazySearchEmbedder,
     qdrant_url: str,
     query: str,
     k: int,
+    filters: SearchFilters | None = None,
 ) -> list[tuple[int, str]]:
     """
     Search by dense similarity: embed query → Qdrant cosine → roll up to doc_ids.
@@ -55,15 +110,17 @@ async def dense_search(
 
     qdrant = AsyncQdrantClient(url=qdrant_url)
     try:
-        hits = await qdrant.query_points(
+        response = await qdrant.query_points(
             collection_name=COLLECTION,
             query=result.dense,
             using="dense",
             limit=k,
             with_payload=True,
+            query_filter=build_qdrant_filter(filters or SearchFilters()),
         )
     finally:
         await qdrant.close()
+    hits = _extract_qdrant_hits(response)
 
     # Roll up chunks to doc_ids: keep highest chunk score per doc
     seen: dict[int, str] = {}

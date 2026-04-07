@@ -80,7 +80,7 @@ services:
     # Override entrypoint+command to install test deps then run pytest.
     entrypoint: []
     command: >
-      bash -c "uv pip install --system -e .[test] && pytest -v /app/tests/"
+      bash -lc "uv sync --frozen --extra test --extra eval && python -m pytest -v /app/tests/"
     environment:
       - PAPERLESS_URL=http://webserver:8000
       # Dummy keys guarantee no real LLM API calls even if a mock is misconfigured.
@@ -88,6 +88,8 @@ services:
       - ANTHROPIC_API_KEY=dummy-test-key
       - OPENAI_API_KEY=dummy-test-key
       - OCR_MODEL=gemini/gemini-2.5-flash
+      - OCR_API_BASE=
+      - METADATA_API_BASE=
       # Redis queue (DB 1)
       - REDIS_URL=redis://broker:6379/1
       # Qdrant vector store

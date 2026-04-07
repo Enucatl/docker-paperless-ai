@@ -1,21 +1,22 @@
-FROM python:3.12-slim
+FROM python:3.12-slim AS runtime
 
 # Install uv for fast dependency management
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
 
 WORKDIR /app
+ENV UV_PROJECT_ENVIRONMENT=/usr/local
 
 # Install dependencies first (cached layer — only busts when pyproject.toml changes).
 # src/ must exist so setuptools doesn't reject the build; it's empty at this point
 # so no project packages are installed yet — only the declared dependencies.
-COPY pyproject.toml ./
-RUN mkdir src && uv pip install --system .
+COPY pyproject.toml uv.lock ./
+RUN mkdir src && uv sync --frozen --no-install-project
 
-# Copy source tree and reinstall just the project package into site-packages
+# Copy source tree and tests; keep production image lean.
 COPY cli.py .
 COPY src/ src/
 COPY tests/ tests/
-RUN uv pip install --system --no-deps .
+RUN uv sync --frozen --no-dev
 
 # Liveness check for the watch-mode poll loop.
 # cli.py calls _write_heartbeat() after every batch cycle, writing the current
@@ -32,3 +33,7 @@ HEALTHCHECK --interval=60s --timeout=5s --retries=3 --start-period=120s \
 
 ENTRYPOINT ["python", "cli.py"]
 CMD ["--watch"]
+
+FROM runtime AS eval
+
+RUN uv sync --frozen --extra eval

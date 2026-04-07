@@ -143,6 +143,9 @@ async def main_async(args: argparse.Namespace) -> None:
             custom_field_id = await client.get_or_create_custom_field(
                 "ai_processed", data_type="date"
             )
+            ai_summary_field_id = await client.get_or_create_custom_field(
+                "AI Summary", data_type="string"
+            )
             ai_result_field_id = await client.get_or_create_custom_field(
                 "ai_result", data_type="longtext"
             )
@@ -151,8 +154,9 @@ async def main_async(args: argparse.Namespace) -> None:
             sys.exit(1)
 
         log.info(
-            "Custom fields: ai_processed=%d ai_result=%d",
+            "Custom fields: ai_processed=%d ai_summary=%d ai_result=%d",
             custom_field_id,
+            ai_summary_field_id,
             ai_result_field_id,
         )
 
@@ -183,7 +187,7 @@ async def main_async(args: argparse.Namespace) -> None:
                 # Sequential: OCR → metadata → embed (docs flow through all stages in one run)
                 ocr_s, ocr_f = await run_ocr_batch(client, config, queues)
                 meta_s, meta_f = await run_metadata_batch(
-                    client, config, queues, custom_field_id, ai_result_field_id
+                    client, config, queues, custom_field_id, ai_summary_field_id, ai_result_field_id
                 )
                 embed_s, embed_f = await run_embed_batch(client, config, queues, store, embedder)
                 _write_heartbeat()
@@ -230,7 +234,7 @@ async def main_async(args: argparse.Namespace) -> None:
                     while not is_shutdown_requested():
                         try:
                             s, f = await run_metadata_batch(
-                                client, config, queues, custom_field_id, ai_result_field_id
+                                client, config, queues, custom_field_id, ai_summary_field_id, ai_result_field_id
                             )
                             if s or f:
                                 log.info("Metadata worker: %d ok / %d failed", s, f)

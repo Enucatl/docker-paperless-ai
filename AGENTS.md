@@ -16,8 +16,15 @@ This avoids managing `.venv` manually and ensures consistent builds.
 
 **Local unit tests** (no infrastructure):
 ```bash
+cd ai
+uv sync --extra test --extra eval
 uv run pytest tests/ -k "not test_webhook and not test_phase_b_pipeline and not test_search"
 ```
+
+Notes:
+- Run `uv` commands from the `ai/` directory. The Python project and lockfile live there.
+- Use local `uv run pytest` for fast feedback on pure unit tests and small targeted test files.
+- Tests that need Paperless, Redis, Qdrant, webhook delivery, or real container networking should be treated as Docker tests even if they look small.
 
 **Full E2E tests** (requires Docker):
 ```bash
@@ -31,7 +38,7 @@ The test harness:
 3. Runs pytest inside the AI container
 4. Tears down all containers and anonymous volumes on exit
 
-**Important:** Full E2E tests require Docker infrastructure. Use `uv run pytest` for unit-level testing without Docker.
+**Important:** Full E2E tests require Docker infrastructure. Use `uv run pytest` for unit-level testing without Docker. `run_tests.sh` is the authoritative check for integration failures.
 
 **API Compatibility Coverage:** Tests cover external library API usage (e.g., niquests AsyncSession methods, Redis async methods) to catch parameter incompatibilities early. This prevents runtime errors like `follow_redirects` (httpx) being used with niquests.
 
@@ -55,8 +62,12 @@ These tests prevent regressions like:
 Evaluate OCR and metadata extraction with different LLM configurations via Phoenix:
 
 ```bash
-docker compose run --build --rm ai --eval --split code-test
+docker compose run --build --rm ai-eval --split code-test
 ```
+
+Notes:
+- `ai-eval` is a separate Docker service/image from `ai` so production and eval dependencies do not conflict.
+- Production tracing to Phoenix still comes from the regular `ai` service via OTLP; the separate eval image only carries the offline-evaluation stack.
 
 Flags:
 - `--split code-test` — Quick pipeline verification using tagged examples (fastest)

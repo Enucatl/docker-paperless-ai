@@ -15,7 +15,11 @@ Payload per point:
     "chunk_index":  int,
     "title":        str | null,
     "correspondent":str | null,
+    "document_type":str | null,
+    "storage_path": str | null,
+    "tags":         list[str],
     "date":         str | null,   # YYYY-MM-DD
+    "year":         str | null,   # YYYY
     "text":         str,
   }
 """
@@ -50,7 +54,11 @@ class ChunkPayload:
     chunk_index: int
     title: Optional[str]
     correspondent: Optional[str]
+    document_type: Optional[str]
+    storage_path: Optional[str]
+    tags: list[str]
     date: Optional[str]
+    year: Optional[str]
     text: str
 
 
@@ -96,7 +104,11 @@ class QdrantDocumentStore:
                     "chunk_index": chunk.chunk_index,
                     "title": chunk.title,
                     "correspondent": chunk.correspondent,
+                    "document_type": chunk.document_type,
+                    "storage_path": chunk.storage_path,
+                    "tags": chunk.tags,
                     "date": chunk.date,
+                    "year": chunk.year,
                     "text": chunk.text,
                 },
             )

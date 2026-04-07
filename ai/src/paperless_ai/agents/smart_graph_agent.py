@@ -27,7 +27,7 @@ import datetime as _dt
 import fitz  # PyMuPDF
 import litellm
 from json_repair import repair_json
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field
 
 from paperless_ai.agents.base import AgentResult, BaseDocumentAgent, DocumentMetadata
 from paperless_ai.agents.state import AgentState
@@ -108,14 +108,6 @@ class _ExtractedMetadata(BaseModel):
             "Used as retrieval context for semantic search. Be specific and factual."
         ),
     )
-
-    @field_validator("date", mode="before")
-    @classmethod
-    def coerce_datetime_to_date(cls, v):
-        """Convert datetime objects to date (strip time component)."""
-        if isinstance(v, _dt.datetime):
-            return v.date()
-        return v
 
 
 def _field_instructions_from_schema() -> str:

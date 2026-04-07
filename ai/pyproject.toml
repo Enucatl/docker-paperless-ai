@@ -17,23 +17,26 @@ dependencies = [
     "openinference-instrumentation",
     "opentelemetry-sdk",
     "opentelemetry-exporter-otlp",
-    "arize-phoenix-client",
-    "arize-phoenix-otel",
-    "arize-phoenix-evals",
-    "nest_asyncio",
-    "pandas",
     "pydantic>=2.0",
     "PyYAML>=6.0",
-    "datasets",
     "click>=8.0",
     "fastapi>=0.115",
     "uvicorn[standard]>=0.30",
     "redis[hiredis]>=5.0",
     "qdrant-client>=1.12",
+    "torch",
     "sentence-transformers>=3.0",
 ]
 
 [project.optional-dependencies]
+eval = [
+    "arize-phoenix-client",
+    "arize-phoenix-otel",
+    "arize-phoenix-evals",
+    "datasets",
+    "nest_asyncio",
+    "pandas",
+]
 test = [
     "pytest>=8.0",
     "pytest-asyncio>=0.23",
@@ -48,3 +51,11 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.uv.sources]
+torch = { index = "pytorch-cpu" }
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true

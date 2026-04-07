@@ -46,7 +46,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import niquests
 import pytest
 
-from tests.conftest import WEBHOOK_URL
+from tests.conftest import QDRANT_URL, WEBHOOK_URL
 from paperless_ai.search.embedder import EmbeddingResult, LocalLazySearchEmbedder
 
 # ---------------------------------------------------------------------------
@@ -430,7 +430,11 @@ async def test_search_deduplicates_chunks_across_same_doc(qdrant_store):
                 chunk_index=0,
                 title="Dedup test",
                 correspondent=None,
+                document_type=None,
+                storage_path=None,
+                tags=[],
                 date=None,
+                year=None,
                 text="first chunk",
             ),
             ChunkPayload(
@@ -438,7 +442,11 @@ async def test_search_deduplicates_chunks_across_same_doc(qdrant_store):
                 chunk_index=1,
                 title="Dedup test",
                 correspondent=None,
+                document_type=None,
+                storage_path=None,
+                tags=[],
                 date=None,
+                year=None,
                 text="second chunk",
             ),
         ],
@@ -460,3 +468,69 @@ async def test_search_deduplicates_chunks_across_same_doc(qdrant_store):
 
     # Cleanup
     await qdrant_store.delete_document(9999)
+
+
+async def test_dense_search_applies_metadata_filters(qdrant_store):
+    from paperless_ai.search.retriever import SearchFilters, dense_search
+    from paperless_ai.search.qdrant_store import ChunkPayload
+
+    class _QueryEmbedder:
+        async def embed_query(self, _query: str) -> EmbeddingResult:
+            dense = [0.0] * 1024
+            dense[0] = 1.0
+            return EmbeddingResult(dense=dense, sparse_indices=[], sparse_values=[])
+
+    dense = [0.0] * 1024
+    dense[0] = 1.0
+
+    await qdrant_store.upsert_chunks(
+        chunks=[
+            ChunkPayload(
+                doc_id=9101,
+                chunk_index=0,
+                title="Tax receipt",
+                correspondent="Home Depot",
+                document_type="Receipt",
+                storage_path="Archive/2023",
+                tags=["Home Improvement", "Urgent"],
+                date="2023-02-11",
+                year="2023",
+                text="lumber and screws",
+            ),
+            ChunkPayload(
+                doc_id=9102,
+                chunk_index=0,
+                title="Other invoice",
+                correspondent="Home Depot",
+                document_type="Invoice",
+                storage_path="Inbox",
+                tags=["Personal"],
+                date="2024-02-11",
+                year="2024",
+                text="paint order",
+            ),
+        ],
+        dense_vecs=[dense, dense],
+        sparse_indices=[[], []],
+        sparse_values=[[], []],
+    )
+
+    try:
+        results = await dense_search(
+            _QueryEmbedder(),
+            QDRANT_URL,
+            "home depot",
+            10,
+            filters=SearchFilters(
+                correspondent="Home Depot",
+                document_type="Receipt",
+                storage_path="Archive/2023",
+                tags=["Urgent"],
+                year="2023",
+            ),
+        )
+    finally:
+        await qdrant_store.delete_document(9101)
+        await qdrant_store.delete_document(9102)
+
+    assert [doc_id for doc_id, _ in results] == [9101]

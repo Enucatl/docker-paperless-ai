@@ -35,16 +35,18 @@ import secrets
 from contextlib import asynccontextmanager, suppress
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException, Query, Request, Response, status
-from fastapi.responses import JSONResponse
+from fastapi import FastAPI, HTTPException, Query, Request, Response, WebSocket, WebSocketDisconnect, status
+from fastapi.responses import HTMLResponse, JSONResponse
 
+from paperless_ai.core.config import AgentConfig
 from paperless_ai.core.paperless import PaperlessClient
+from paperless_ai.search.chat_agent import ChatCopilot
 from paperless_ai.search.embedder import LocalLazySearchEmbedder
 from paperless_ai.search.queue import TaskQueues
 from paperless_ai.search.retriever import (
+    SearchFilters,
     ScoredDoc,
     dense_search,
-    keyword_search,
     llm_rerank,
     rrf_fuse,
 )
@@ -65,6 +67,7 @@ _paperless_client: PaperlessClient | None = None
 _qdrant_url: str = "http://qdrant:6333"
 _rerank_model: str | None = None
 _rerank_api_base: str | None = None
+_chat_copilot: ChatCopilot | None = None
 
 # Retrieval hyperparameters
 K = 25  # max chunks from dense search
@@ -97,6 +100,7 @@ async def lifespan(app: FastAPI):
     global _queues, _webhook_secret, _tag_ocr, _tag_metadata, _tag_embed
     global _lazy_embedder, _idle_task, _paperless_client, _qdrant_url
     global _rerank_model, _rerank_api_base
+    global _chat_copilot
 
     redis_url = os.environ.get("REDIS_URL", "redis://broker:6379/1")
     _webhook_secret = os.environ.get("WEBHOOK_SECRET") or None
@@ -127,6 +131,15 @@ async def lifespan(app: FastAPI):
     _queues = TaskQueues(redis_url)
     _lazy_embedder = LocalLazySearchEmbedder()
     _idle_task = asyncio.create_task(_lazy_embedder.idle_watcher())
+    if _paperless_client is not None:
+        _chat_copilot = ChatCopilot(
+            AgentConfig.from_env(),
+            _paperless_client,
+            _lazy_embedder,
+            _qdrant_url,
+        )
+    else:
+        _chat_copilot = None
     log.info("Webhook listener ready (redis=%s, tags: ocr=%r metadata=%r embed=%r)",
              redis_url, _tag_ocr, _tag_metadata, _tag_embed)
     yield
@@ -137,6 +150,7 @@ async def lifespan(app: FastAPI):
         await _queues.close()
     if _paperless_client:
         await _paperless_client.aclose()
+    _chat_copilot = None
 
 
 app = FastAPI(lifespan=lifespan)
@@ -228,6 +242,11 @@ async def webhook_document(request: Request) -> Response:
 async def search(
     q: str = Query(..., min_length=1, description="Search query"),
     limit: int = Query(20, ge=1, le=100),
+    correspondent: str | None = Query(None),
+    document_type: str | None = Query(None),
+    storage_path: str | None = Query(None),
+    tags: list[str] | None = Query(None),
+    year: str | None = Query(None),
 ) -> JSONResponse:
     """Hybrid semantic + keyword search with optional LLM reranking.
 
@@ -244,11 +263,32 @@ async def search(
         raise HTTPException(status_code=503, detail="Embedder not ready")
 
     try:
+        filters = SearchFilters(
+            correspondent=correspondent,
+            document_type=document_type,
+            storage_path=storage_path,
+            tags=tags,
+            year=year,
+        )
+        has_metadata_filters = any(
+            [
+                filters.correspondent,
+                filters.document_type,
+                filters.storage_path,
+                filters.tags,
+                filters.year,
+            ]
+        )
+
         # 1. Concurrent dense and keyword search
-        keyword_coro = _keyword_search_safe(q) if _paperless_client else _empty_list()
+        keyword_coro = (
+            _empty_list()
+            if has_metadata_filters or not _paperless_client
+            else _keyword_search_safe(q)
+        )
 
         dense_result, keyword_result = await asyncio.gather(
-            dense_search(_lazy_embedder, _qdrant_url, q, K),
+            dense_search(_lazy_embedder, _qdrant_url, q, K, filters=filters),
             keyword_coro,
             return_exceptions=True,
         )
@@ -293,6 +333,119 @@ async def search(
     except BaseException as exc:
         log.warning("Search endpoint error (%s: %s) — returning empty results", type(exc).__name__, exc)
         return JSONResponse(content=[])
+
+
+@app.get("/metadata/available")
+async def available_metadata() -> JSONResponse:
+    """Return exact metadata names available for agentic search pre-filtering."""
+    if _paperless_client is None:
+        raise HTTPException(status_code=503, detail="Paperless client not configured")
+    return JSONResponse(content=await _paperless_client.get_available_metadata())
+
+
+@app.get("/chat")
+async def chat_ui() -> HTMLResponse:
+    """Serve a minimal browser UI for the Paperless copilot."""
+    return HTMLResponse(
+        """
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Paperless Copilot</title>
+  <style>
+    :root { color-scheme: light; }
+    body { margin: 0; font: 16px/1.5 Georgia, serif; background: linear-gradient(160deg, #f3efe3, #dbe8e6); color: #1f2a2c; }
+    main { max-width: 900px; margin: 0 auto; padding: 32px 20px 48px; }
+    h1 { margin: 0 0 8px; font-size: 2.2rem; }
+    p { margin: 0 0 20px; }
+    #messages { min-height: 55vh; display: grid; gap: 12px; margin-bottom: 16px; }
+    .msg { padding: 14px 16px; border-radius: 16px; white-space: pre-wrap; box-shadow: 0 10px 30px rgba(0,0,0,0.08); }
+    .user { background: #1f5c57; color: #f8f7f2; margin-left: 10%; }
+    .assistant { background: rgba(255,255,255,0.85); margin-right: 10%; }
+    .status { background: rgba(255,255,255,0.55); font-style: italic; }
+    form { display: grid; grid-template-columns: 1fr auto; gap: 12px; }
+    textarea { min-height: 72px; resize: vertical; padding: 12px; border-radius: 14px; border: 1px solid rgba(0,0,0,0.12); font: inherit; }
+    button { border: 0; border-radius: 999px; padding: 0 18px; font: inherit; background: #c0612f; color: white; cursor: pointer; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Paperless Copilot</h1>
+    <p>Ask questions about your archive. The assistant cites document IDs and can inspect full OCR text when needed.</p>
+    <section id="messages"></section>
+    <form id="chat-form">
+      <textarea id="prompt" placeholder="Ask about invoices, receipts, tags, or correspondents..."></textarea>
+      <button type="submit">Send</button>
+    </form>
+  </main>
+  <script>
+    const messages = document.getElementById("messages");
+    const form = document.getElementById("chat-form");
+    const prompt = document.getElementById("prompt");
+    const protocol = window.location.protocol === "https:" ? "wss" : "ws";
+    const socket = new WebSocket(`${protocol}://${window.location.host}/ws/chat`);
+
+    function addMessage(role, content) {
+      const div = document.createElement("div");
+      div.className = `msg ${role}`;
+      div.textContent = content;
+      messages.appendChild(div);
+      messages.scrollTop = messages.scrollHeight;
+    }
+
+    socket.onmessage = (event) => {
+      const payload = JSON.parse(event.data);
+      addMessage(payload.role || "assistant", payload.content || "");
+    };
+    socket.onopen = () => addMessage("status", "Connected.");
+    socket.onclose = () => addMessage("status", "Connection closed.");
+
+    form.addEventListener("submit", (event) => {
+      event.preventDefault();
+      const content = prompt.value.trim();
+      if (!content) return;
+      addMessage("user", content);
+      socket.send(content);
+      prompt.value = "";
+    });
+  </script>
+</body>
+</html>
+        """
+    )
+
+
+@app.websocket("/ws/chat")
+async def chat_ws(websocket: WebSocket) -> None:
+    """Interactive Paperless copilot over WebSocket."""
+    await websocket.accept()
+    if _chat_copilot is None:
+        await websocket.send_json(
+            {"role": "assistant", "content": "Chat is unavailable because Paperless is not configured."}
+        )
+        await websocket.close(code=1011)
+        return
+
+    history: list[dict] = []
+    try:
+        while True:
+            user_message = (await websocket.receive_text()).strip()
+            if not user_message:
+                continue
+            await websocket.send_json({"role": "status", "content": "Working..."})
+            try:
+                reply, history = await _chat_copilot.run_turn(user_message, history)
+            except Exception as exc:
+                log.exception("Chat turn failed")
+                await websocket.send_json(
+                    {"role": "assistant", "content": f"Chat request failed: {type(exc).__name__}: {exc}"}
+                )
+                continue
+            await websocket.send_json({"role": "assistant", "content": reply or "(no response)"})
+    except WebSocketDisconnect:
+        return
 
 
 async def _empty_list() -> list[int]:

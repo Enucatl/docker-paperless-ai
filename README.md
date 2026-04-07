@@ -363,14 +363,11 @@ and deallocation without downloading the actual bge-m3 weights.
 ```bash
 # Run only the webhook tests
 docker compose -f docker-compose.yml -f docker-compose.test.yml \
-  run --rm ai bash -c \
-  "uv pip install --system -e .[test] && pytest -v tests/test_webhook.py"
+  run --rm ai pytest -v /app/tests/test_webhook.py
 
 # Run a single test by name
 docker compose -f docker-compose.yml -f docker-compose.test.yml \
-  run --rm ai bash -c \
-  "uv pip install --system -e .[test] && \
-   pytest -v -k test_paperless_fires_webhook_on_document_added"
+  run --rm ai pytest -v -k test_paperless_fires_webhook_on_document_added /app/tests/
 ```
 
 > These commands assume the infrastructure services (`webserver`, `qdrant`,
@@ -412,16 +409,16 @@ Evaluations run all experiments defined in `ai/eval/experiments.yaml` and log re
 
 ```bash
 # Smoke test — single tagged document, verifies the pipeline works end-to-end
-docker compose run --rm ai --eval --split code-test
+docker compose run --build --rm ai-eval --split code-test
 
 # Run against the test set (default)
-docker compose run --rm ai --eval
+docker compose run --build --rm ai-eval --split test
 
 # Run against the held-out validation set
-docker compose run --rm ai --eval --split validation
+docker compose run --build --rm ai-eval --split validation
 
 # Run against all documents
-docker compose run --rm ai --eval --split all
+docker compose run --build --rm ai-eval --split all
 ```
 
 Each `--split` value maps to a separate named dataset in Phoenix (`paperless-golden-test`, `paperless-golden-validation`, `paperless-golden-code-test`, …), so experiments from different splits are never mixed in the comparison view.

@@ -543,6 +543,7 @@ async def test_webhook_loop_broken_by_tag_removal(
     agent = SmartDocumentAgent(config, extraction_strategy=_select_extraction_strategy(config))
 
     custom_field_id = await paperless_client.get_or_create_custom_field("ai_processed", data_type="date")
+    ai_summary_field_id = await paperless_client.get_or_create_custom_field("AI Summary", data_type="string")
     ai_result_field_id = await paperless_client.get_or_create_custom_field("ai_result", data_type="longtext")
 
     tag_id = await paperless_client.get_tag_id(config.tag_pending)
@@ -560,7 +561,7 @@ async def test_webhook_loop_broken_by_tag_removal(
     await document_queue.enqueue(doc_id)
     success, failure = await run_batch(
         paperless_client, agent, config,
-        custom_field_id, ai_result_field_id,
+        custom_field_id, ai_summary_field_id, ai_result_field_id,
         document_queue,
     )
     assert success == 1 and failure == 0, f"run_batch: {success=} {failure=}"

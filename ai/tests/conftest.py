@@ -219,6 +219,7 @@ _METADATA_JSON = json.dumps({
     "title": "Test Invoice",
     "document_date": "2024-01-15",
     "correspondent": "Acme Corp",
+    "summary": "Invoice from Acme Corp dated 2024-01-15 for $100.00.",
 })
 
 

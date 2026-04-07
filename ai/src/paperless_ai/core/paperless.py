@@ -7,6 +7,7 @@ This module is intentionally kept unchanged from the original implementation.
 
 import logging
 from difflib import SequenceMatcher
+from typing import Any
 
 import niquests
 
@@ -33,6 +34,9 @@ class PaperlessClient:
         )
         self.paperless_version: str | None = None
         self._correspondents_cache: list[dict] | None = None
+        self._tags_cache: list[dict] | None = None
+        self._document_types_cache: list[dict] | None = None
+        self._storage_paths_cache: list[dict] | None = None
 
     async def aclose(self):
         await self._client.close()
@@ -74,7 +78,7 @@ class PaperlessClient:
         r = await self._client.get(
             f"/api/documents/{doc_id}/",
             params={
-                "fields": "id,title,correspondent,created_date,custom_fields,tags,language"
+                "fields": "id,title,correspondent,document_type,storage_path,created_date,custom_fields,tags,language"
             },
         )
         if r.status_code == 404:
@@ -87,7 +91,7 @@ class PaperlessClient:
         r = await self._client.get(
             f"/api/documents/{doc_id}/",
             params={
-                "fields": "id,title,correspondent,created_date,custom_fields,tags,language,content"
+                "fields": "id,title,correspondent,document_type,storage_path,created_date,custom_fields,tags,language,content"
             },
         )
         if r.status_code == 404:
@@ -105,25 +109,65 @@ class PaperlessClient:
         _raise_for_status(r)
         return r.content
 
-    async def _get_all_correspondents(self, force: bool = False) -> list[dict]:
-        """Return all correspondents, using a cache within the batch run."""
-        if self._correspondents_cache is not None and not force:
-            return self._correspondents_cache
-        all_corr: list[dict] = []
+    async def _get_all_objects(
+        self,
+        endpoint: str,
+        cache_attr: str,
+        force: bool = False,
+    ) -> list[dict]:
+        """Return all paginated objects from a Paperless endpoint, using a cache."""
+        cached = getattr(self, cache_attr)
+        if cached is not None and not force:
+            return cached
+
+        items: list[dict] = []
         page = 1
         while True:
-            r = await self._client.get(
-                "/api/correspondents/", params={"page": page, "page_size": 250}
-            )
+            r = await self._client.get(endpoint, params={"page": page, "page_size": 250})
             _raise_for_status(r)
             data = r.json()
-            all_corr.extend(data["results"])
+            items.extend(data["results"])
             if not data.get("next"):
                 break
             page += 1
-        self._correspondents_cache = all_corr
-        log.info("Loaded %d correspondent(s)", len(all_corr))
-        return all_corr
+
+        setattr(self, cache_attr, items)
+        log.info("Loaded %d object(s) from %s", len(items), endpoint)
+        return items
+
+    @staticmethod
+    def _resource_label(item: dict[str, Any]) -> str | None:
+        """Extract the human-readable label for a Paperless metadata object."""
+        for key in ("name", "path", "title"):
+            value = item.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+        return None
+
+    async def _get_all_correspondents(self, force: bool = False) -> list[dict]:
+        """Return all correspondents, using a cache within the batch run."""
+        return await self._get_all_objects(
+            "/api/correspondents/",
+            "_correspondents_cache",
+            force=force,
+        )
+
+    async def _get_all_tags(self, force: bool = False) -> list[dict]:
+        return await self._get_all_objects("/api/tags/", "_tags_cache", force=force)
+
+    async def _get_all_document_types(self, force: bool = False) -> list[dict]:
+        return await self._get_all_objects(
+            "/api/document_types/",
+            "_document_types_cache",
+            force=force,
+        )
+
+    async def _get_all_storage_paths(self, force: bool = False) -> list[dict]:
+        return await self._get_all_objects(
+            "/api/storage_paths/",
+            "_storage_paths_cache",
+            force=force,
+        )
 
     async def find_or_create_correspondent(self, name: str) -> int:
         """Match against correspondents (exact → fuzzy via API filter), or create a new one."""
@@ -250,11 +294,85 @@ class PaperlessClient:
     async def get_correspondent_name(self, correspondent_id: int) -> str | None:
         """Return the name of a correspondent by ID, or None on failure."""
         try:
-            r = await self._client.get(f"/api/correspondents/{correspondent_id}/")
-            _raise_for_status(r)
-            return r.json().get("name")
+            correspondents = await self._get_all_correspondents()
+            for correspondent in correspondents:
+                if correspondent.get("id") == correspondent_id:
+                    return self._resource_label(correspondent)
         except Exception:
             return None
+        return None
+
+    async def get_document_type_name(self, document_type_id: int | None) -> str | None:
+        """Return the name of a document type by ID, or None on failure."""
+        if not document_type_id:
+            return None
+        try:
+            for doc_type in await self._get_all_document_types():
+                if doc_type.get("id") == document_type_id:
+                    return self._resource_label(doc_type)
+        except Exception:
+            return None
+        return None
+
+    async def get_storage_path_name(self, storage_path_id: int | None) -> str | None:
+        """Return the display path/name of a storage path by ID, or None on failure."""
+        if not storage_path_id:
+            return None
+        try:
+            for storage_path in await self._get_all_storage_paths():
+                if storage_path.get("id") == storage_path_id:
+                    return self._resource_label(storage_path)
+        except Exception:
+            return None
+        return None
+
+    async def get_tag_names(self, tag_ids: list[int]) -> list[str]:
+        """Resolve a list of tag IDs to human-readable tag names."""
+        if not tag_ids:
+            return []
+        try:
+            by_id = {
+                tag["id"]: label
+                for tag in await self._get_all_tags()
+                if (label := self._resource_label(tag)) is not None
+            }
+            return [by_id[tag_id] for tag_id in tag_ids if tag_id in by_id]
+        except Exception:
+            return []
+
+    async def get_available_metadata(self) -> dict[str, list[str]]:
+        """Return the exact metadata names that exist in Paperless for agent filtering."""
+        correspondents = await self._get_all_correspondents()
+        document_types = await self._get_all_document_types()
+        storage_paths = await self._get_all_storage_paths()
+        tags = await self._get_all_tags()
+        return {
+            "correspondents": sorted(
+                label for item in correspondents if (label := self._resource_label(item))
+            ),
+            "document_types": sorted(
+                label for item in document_types if (label := self._resource_label(item))
+            ),
+            "storage_paths": sorted(
+                label for item in storage_paths if (label := self._resource_label(item))
+            ),
+            "tags": sorted(
+                label for item in tags if (label := self._resource_label(item))
+            ),
+        }
+
+    async def search_documents(
+        self,
+        query: str,
+        page_size: int = 50,
+    ) -> list[int]:
+        """Search via Paperless full-text API and return doc IDs in relevance order."""
+        r = await self._client.get(
+            "/api/documents/",
+            params={"query": query, "page_size": page_size, "fields": "id"},
+        )
+        _raise_for_status(r)
+        return [doc["id"] for doc in r.json().get("results", [])]
 
     async def update_tags(self, doc: dict, remove_id: int, add_id: int | None) -> None:
         """Remove pending tag from document, optionally adding another."""

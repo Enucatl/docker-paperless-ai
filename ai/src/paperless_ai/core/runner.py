@@ -20,6 +20,7 @@ import asyncio
 import json
 import logging
 import tempfile
+from dataclasses import dataclass
 from datetime import date, datetime, timezone
 from pathlib import Path
 from collections.abc import Awaitable, Callable
@@ -42,6 +43,18 @@ _shutdown_requested = False
 # Tracks which local server URLs are currently known to be offline.
 # Enables log-once-on-down / log-once-on-recovery across poll cycles.
 _offline_servers: set[str] = set()
+
+
+@dataclass
+class SearchMetadata:
+    title: Optional[str]
+    correspondent: Optional[str]
+    document_date: Optional[str]
+    summary: Optional[str]
+    document_type: Optional[str]
+    storage_path: Optional[str]
+    tags: list[str]
+    year: Optional[str]
 
 
 def request_shutdown() -> None:
@@ -84,7 +97,7 @@ async def _check_server_reachable(base_url: str) -> bool:
 async def _embed_and_store(
     doc_id: int,
     full_text: str,
-    meta,
+    meta: SearchMetadata,
     config: AgentConfig,
     store: "QdrantDocumentStore",
     embedder: "InfinityEmbedder",
@@ -115,7 +128,11 @@ async def _embed_and_store(
             chunk_index=i,
             title=meta.title,
             correspondent=meta.correspondent,
+            document_type=meta.document_type,
+            storage_path=meta.storage_path,
+            tags=meta.tags,
             date=meta.document_date,
+            year=meta.year,
             text=chunk,  # raw chunk, not situated, for UI display
         )
         for i, chunk in enumerate(chunks)
@@ -129,12 +146,49 @@ async def _embed_and_store(
     log.info("Document %d: upserted %d vector(s) into Qdrant", doc_id, len(chunks))
 
 
+def _extract_year(date_value: Optional[str]) -> Optional[str]:
+    if not date_value:
+        return None
+    try:
+        return str(datetime.fromisoformat(str(date_value)).date().year)
+    except ValueError:
+        return str(date_value)[:4] if len(str(date_value)) >= 4 else None
+
+
+async def _build_search_metadata(
+    client: PaperlessClient,
+    doc: dict,
+    *,
+    title: Optional[str],
+    correspondent: Optional[str],
+    document_date: Optional[str],
+    summary: Optional[str],
+    exclude_tag_ids: set[int] | None = None,
+) -> SearchMetadata:
+    tag_ids = [
+        int(tag_id)
+        for tag_id in doc.get("tags", [])
+        if not exclude_tag_ids or int(tag_id) not in exclude_tag_ids
+    ]
+    return SearchMetadata(
+        title=title,
+        correspondent=correspondent,
+        document_date=document_date,
+        summary=summary,
+        document_type=await client.get_document_type_name(doc.get("document_type")),
+        storage_path=await client.get_storage_path_name(doc.get("storage_path")),
+        tags=await client.get_tag_names(tag_ids),
+        year=_extract_year(document_date),
+    )
+
+
 async def process_document(
     doc: dict,
     client: PaperlessClient,
     agent: BaseDocumentAgent,
     config: AgentConfig,
     custom_field_id: int,
+    ai_summary_field_id: int,
     ai_result_field_id: int,
     queue: "DocumentQueue",
     store: QdrantDocumentStore | None = None,
@@ -201,20 +255,32 @@ async def process_document(
     # Embed and store vectors (skipped gracefully if store/embedder not configured)
     if store is not None and embedder is not None:
         try:
-            await _embed_and_store(doc_id, full_text, meta, config, store, embedder)
+            search_meta = await _build_search_metadata(
+                client,
+                doc,
+                title=meta.title,
+                correspondent=meta.correspondent,
+                document_date=meta.document_date,
+                summary=meta.summary,
+                exclude_tag_ids={tag_pending_id} if tag_pending_id is not None else None,
+            )
+            await _embed_and_store(doc_id, full_text, search_meta, config, store, embedder)
         except Exception as e:
             log.error("Document %d: embedding failed: %s", doc_id, e)
             return False
 
     # Build PATCH payload
     today = datetime.now(timezone.utc).date().isoformat()
-    managed_fields = {custom_field_id, ai_result_field_id}
+    managed_fields = {custom_field_id, ai_summary_field_id, ai_result_field_id}
     existing_cf = [
         cf for cf in doc.get("custom_fields", []) if cf["field"] not in managed_fields
     ]
     payload: dict = {
         "content": full_text,
-        "custom_fields": existing_cf + [{"field": custom_field_id, "value": today}],
+        "custom_fields": existing_cf + [
+            {"field": custom_field_id, "value": today},
+            {"field": ai_summary_field_id, "value": (meta.summary or "").strip()},
+        ],
     }
 
     if meta.title:
@@ -288,6 +354,7 @@ async def process_document(
                 "title": meta.title,
                 "document_date": meta.document_date,
                 "correspondent": meta.correspondent,
+                "summary": meta.summary,
             },
         },
         ensure_ascii=False,
@@ -320,6 +387,7 @@ async def run_batch(
     agent: BaseDocumentAgent,
     config: AgentConfig,
     custom_field_id: int,
+    ai_summary_field_id: int,
     ai_result_field_id: int,
     queue: "DocumentQueue",
     store: QdrantDocumentStore | None = None,
@@ -361,7 +429,7 @@ async def run_batch(
             return None  # silently removed — not a success, not a failure
         async with sem:
             return await process_document(
-                doc, client, agent, config, custom_field_id, ai_result_field_id,
+                doc, client, agent, config, custom_field_id, ai_summary_field_id, ai_result_field_id,
                 queue, store, embedder, tag_pending_id=tag_pending_id,
             )
 
@@ -496,6 +564,7 @@ async def run_metadata_batch(
     config: AgentConfig,
     queues: TaskQueues,
     custom_field_id: int,
+    ai_summary_field_id: int,
     ai_result_field_id: int,
 ) -> tuple[int, int]:
     """Metadata stage: read content from Paperless, run LLM, write metadata, transition tag.
@@ -561,11 +630,14 @@ async def run_metadata_batch(
             return True
 
         today = datetime.now(timezone.utc).date().isoformat()
-        managed_fields = {custom_field_id, ai_result_field_id}
+        managed_fields = {custom_field_id, ai_summary_field_id, ai_result_field_id}
         existing_cf = [cf for cf in doc.get("custom_fields", []) if cf["field"] not in managed_fields]
 
         payload: dict = {
-            "custom_fields": existing_cf + [{"field": custom_field_id, "value": today}],
+            "custom_fields": existing_cf + [
+                {"field": custom_field_id, "value": today},
+                {"field": ai_summary_field_id, "value": (extracted.summary or "").strip()},
+            ],
         }
 
         if extracted.title:
@@ -596,6 +668,7 @@ async def run_metadata_batch(
                     "title": extracted.title,
                     "document_date": extracted.date.isoformat() if extracted.date else None,
                     "correspondent": extracted.correspondent,
+                    "summary": extracted.summary,
                 },
             },
             ensure_ascii=False,
@@ -660,18 +733,19 @@ async def run_embed_batch(
 
         async with sem:
             if store is not None and embedder is not None and content.strip():
-                # Build a metadata-like object for the context header
-                class _Meta:
-                    title = doc.get("title")
-                    correspondent = None  # resolved below
-                    document_date = doc.get("created_date")
-
-                meta = _Meta()
-                if doc.get("correspondent"):
-                    meta.correspondent = await client.get_correspondent_name(doc["correspondent"])
-
                 try:
-                    await _embed_and_store(doc_id, content, meta, config, store, embedder)
+                    search_meta = await _build_search_metadata(
+                        client,
+                        doc,
+                        title=doc.get("title"),
+                        correspondent=await client.get_correspondent_name(doc["correspondent"])
+                        if doc.get("correspondent")
+                        else None,
+                        document_date=doc.get("created_date"),
+                        summary=None,
+                        exclude_tag_ids={tag_embed_id} if tag_embed_id is not None else None,
+                    )
+                    await _embed_and_store(doc_id, content, search_meta, config, store, embedder)
                 except Exception as e:
                     log.error("Document %d: embedding failed: %s", doc_id, e)
                     return False

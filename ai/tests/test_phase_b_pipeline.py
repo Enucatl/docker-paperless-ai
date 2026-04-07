@@ -285,6 +285,9 @@ async def test_metadata_batch_writes_metadata_and_transitions_tag(
     custom_field_id = await paperless_client.get_or_create_custom_field(
         "ai_processed", data_type="date"
     )
+    ai_summary_field_id = await paperless_client.get_or_create_custom_field(
+        "AI Summary", data_type="string"
+    )
     ai_result_field_id = await paperless_client.get_or_create_custom_field(
         "ai_result", data_type="longtext"
     )
@@ -304,7 +307,7 @@ async def test_metadata_batch_writes_metadata_and_transitions_tag(
     await task_queues.enqueue_metadata(doc_id)
 
     success, failure = await run_metadata_batch(
-        paperless_client, config, task_queues, custom_field_id, ai_result_field_id
+        paperless_client, config, task_queues, custom_field_id, ai_summary_field_id, ai_result_field_id
     )
     assert success == 1, f"Expected 1 success, got {success=} {failure=}"
     assert failure == 0
@@ -325,6 +328,7 @@ async def test_metadata_batch_writes_metadata_and_transitions_tag(
     cf_map = {cf["field"]: cf["value"] for cf in doc.get("custom_fields", [])}
     assert custom_field_id in cf_map
     assert cf_map[custom_field_id] == date.today().isoformat()
+    assert cf_map[ai_summary_field_id] == "Invoice from Acme Corp dated 2024-01-15 for $100.00."
 
     # Tag transitioned: ai:run-metadata removed, ai:run-embed added
     assert tag_metadata_id not in doc["tags"]
@@ -343,6 +347,9 @@ async def test_metadata_batch_skips_empty_content(paperless_client, task_queues,
     config = AgentConfig(paperless_url=PAPERLESS_URL, paperless_token=token)
 
     custom_field_id = await paperless_client.get_or_create_custom_field("ai_processed")
+    ai_summary_field_id = await paperless_client.get_or_create_custom_field(
+        "AI Summary", data_type="string"
+    )
     ai_result_field_id = await paperless_client.get_or_create_custom_field("ai_result", data_type="longtext")
 
     doc_id = await _upload_document(paperless_client, _make_test_pdf())
@@ -351,7 +358,7 @@ async def test_metadata_batch_skips_empty_content(paperless_client, task_queues,
     await task_queues.enqueue_metadata(doc_id)
 
     success, failure = await run_metadata_batch(
-        paperless_client, config, task_queues, custom_field_id, ai_result_field_id
+        paperless_client, config, task_queues, custom_field_id, ai_summary_field_id, ai_result_field_id
     )
     assert success == 0
     assert failure == 0
@@ -374,6 +381,9 @@ async def test_metadata_batch_dry_run(paperless_client, task_queues, document_qu
     )
 
     custom_field_id = await paperless_client.get_or_create_custom_field("ai_processed")
+    ai_summary_field_id = await paperless_client.get_or_create_custom_field(
+        "AI Summary", data_type="string"
+    )
     ai_result_field_id = await paperless_client.get_or_create_custom_field("ai_result", data_type="longtext")
 
     doc_id = await _upload_document(paperless_client, _make_test_pdf())
@@ -386,7 +396,7 @@ async def test_metadata_batch_dry_run(paperless_client, task_queues, document_qu
     await task_queues.enqueue_metadata(doc_id)
 
     success, failure = await run_metadata_batch(
-        paperless_client, config, task_queues, custom_field_id, ai_result_field_id
+        paperless_client, config, task_queues, custom_field_id, ai_summary_field_id, ai_result_field_id
     )
     assert success == 1
     assert failure == 0
@@ -579,6 +589,9 @@ async def test_full_phase_b_pipeline_sequential(
     custom_field_id = await paperless_client.get_or_create_custom_field(
         "ai_processed", data_type="date"
     )
+    ai_summary_field_id = await paperless_client.get_or_create_custom_field(
+        "AI Summary", data_type="string"
+    )
     ai_result_field_id = await paperless_client.get_or_create_custom_field(
         "ai_result", data_type="longtext"
     )
@@ -598,7 +611,7 @@ async def test_full_phase_b_pipeline_sequential(
 
     # Stage 2: Metadata
     meta_s, meta_f = await run_metadata_batch(
-        paperless_client, config, task_queues, custom_field_id, ai_result_field_id
+        paperless_client, config, task_queues, custom_field_id, ai_summary_field_id, ai_result_field_id
     )
     assert meta_s == 1 and meta_f == 0, f"Metadata stage failed: {meta_s=} {meta_f=}"
 
@@ -623,6 +636,7 @@ async def test_full_phase_b_pipeline_sequential(
     cf_map = {cf["field"]: cf["value"] for cf in doc.get("custom_fields", [])}
     assert custom_field_id in cf_map
     assert cf_map[custom_field_id] == date.today().isoformat()
+    assert cf_map[ai_summary_field_id] == "Invoice from Acme Corp dated 2024-01-15 for $100.00."
 
     # All ai:run-* tags removed
     for tag_id in [tag_ocr_id, tag_metadata_id, tag_embed_id]:

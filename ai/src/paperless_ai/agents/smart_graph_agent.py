@@ -32,6 +32,7 @@ from pydantic import BaseModel, Field
 from paperless_ai.agents.base import AgentResult, BaseDocumentAgent, DocumentMetadata
 from paperless_ai.agents.state import AgentState
 from paperless_ai.core.config import AgentConfig
+from paperless_ai.core.telemetry import add_litellm_metadata
 
 log = logging.getLogger(__name__)
 
@@ -205,6 +206,11 @@ class StructuredOutputStrategy(BaseExtractionStrategy):
 
         if config.metadata_api_base:
             kwargs["api_base"] = config.metadata_api_base
+        add_litellm_metadata(
+            kwargs,
+            stage="metadata",
+            operation="extract_metadata",
+        )
 
         response = await litellm.acompletion(**kwargs)
         raw = _get_completion_text(response) or "{}"
@@ -269,6 +275,12 @@ class NuExtractStrategy(BaseExtractionStrategy):
 
         if config.metadata_api_base:
             base_kwargs["api_base"] = config.metadata_api_base
+        add_litellm_metadata(
+            base_kwargs,
+            stage="metadata",
+            operation="extract_metadata",
+            strategy="nuextract",
+        )
 
         from tenacity import AsyncRetrying, retry_if_exception_type, stop_after_attempt
 
@@ -454,6 +466,11 @@ async def _batched_vision_ocr(state: AgentState, config: AgentConfig) -> dict:
         }
         if config.ocr_api_base:
             kwargs["api_base"] = config.ocr_api_base
+        add_litellm_metadata(
+            kwargs,
+            stage="ocr",
+            operation="extract_text",
+        )
 
         tasks.append(litellm.acompletion(**kwargs))
 

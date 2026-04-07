@@ -16,6 +16,8 @@ from dataclasses import dataclass, field
 import litellm
 import niquests
 
+from paperless_ai.core.telemetry import add_litellm_metadata
+
 log = logging.getLogger(__name__)
 
 
@@ -48,13 +50,20 @@ class EmbeddingAPIEmbedder:
 
     async def embed(self, texts: list[str]) -> list[EmbeddingResult]:
         """Embed *texts* and return dense vectors plus optional sparse vectors."""
-        response = await litellm.aembedding(
-            model=self._model,
-            input=texts,
-            api_base=f"{self._base_url}/v1",
-            api_key=os.environ.get("OPENAI_API_KEY", "dummy"),
-            custom_llm_provider="openai",
+        kwargs = {
+            "model": self._model,
+            "input": texts,
+            "api_base": f"{self._base_url}/v1",
+            "api_key": os.environ.get("OPENAI_API_KEY", "dummy"),
+            "custom_llm_provider": "openai",
+            "encoding_format": "float",
+        }
+        add_litellm_metadata(
+            kwargs,
+            stage="embedding",
+            operation="embed_document_chunks",
         )
+        response = await litellm.aembedding(**kwargs)
 
         results = []
         for item in response.data:

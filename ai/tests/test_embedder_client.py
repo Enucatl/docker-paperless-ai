@@ -32,6 +32,13 @@ async def test_embedding_api_embedder_context_manager():
                 api_base="http://test:8102/v1",
                 api_key="dummy",
                 custom_llm_provider="openai",
+                encoding_format="float",
+                metadata={
+                    "paperless_ai": {
+                        "stage": "embedding",
+                        "operation": "embed_document_chunks",
+                    }
+                },
             )
 
         # Verify close() was called (not aclose())

@@ -13,6 +13,16 @@ log = logging.getLogger(__name__)
 _configured = False
 
 
+def add_litellm_metadata(kwargs: dict, **fields: str) -> dict:
+    """Merge Paperless-specific metadata into a LiteLLM call kwargs dict."""
+    metadata = dict(kwargs.get("metadata") or {})
+    paperless_ai = dict(metadata.get("paperless_ai") or {})
+    paperless_ai.update({k: v for k, v in fields.items() if v is not None})
+    metadata["paperless_ai"] = paperless_ai
+    kwargs["metadata"] = metadata
+    return kwargs
+
+
 def setup_telemetry(*, service_name: str | None = None, project_name: str | None = None) -> None:
     """Configure OTEL tracing to export to Arize Phoenix."""
     global _configured

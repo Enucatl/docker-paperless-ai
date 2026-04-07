@@ -1,8 +1,4 @@
-"""
-Tests for EmbeddingAPIEmbedder async context manager and API compatibility.
-
-Ensures niquests AsyncSession is used correctly (e.g., close() not aclose()).
-"""
+"""Tests for EmbeddingAPIEmbedder connectivity and LiteLLM embeddings calls."""
 
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -12,30 +8,30 @@ from paperless_ai.search.embedder import EmbeddingAPIEmbedder
 
 @pytest.mark.asyncio
 async def test_embedding_api_embedder_context_manager():
-    """Verify EmbeddingAPIEmbedder async context manager works (uses close() not aclose())."""
-    with patch("paperless_ai.search.embedder.niquests.AsyncSession") as mock_session_class:
+    """Verify EmbeddingAPIEmbedder routes embedding calls through LiteLLM."""
+    with (
+        patch("paperless_ai.search.embedder.niquests.AsyncSession") as mock_session_class,
+        patch("paperless_ai.search.embedder.litellm.aembedding", new_callable=AsyncMock) as mock_aembedding,
+    ):
         mock_session = AsyncMock()
         mock_session_class.return_value = mock_session
 
-        # Simulate a working embedding response
-        mock_response = MagicMock()
-        mock_response.ok = True
-        mock_response.json.return_value = {
-            "data": [
-                {
-                    "embedding": [0.1] * 1024,
-                    "sparse_embedding": {"indices": [1, 2], "values": [0.5, 0.3]},
-                }
-            ]
+        mock_item = MagicMock()
+        mock_item.model_dump.return_value = {
+            "embedding": [0.1] * 1024,
+            "sparse_embedding": {"indices": [1, 2], "values": [0.5, 0.3]},
         }
-        mock_session.post.return_value = mock_response
+        mock_aembedding.return_value = MagicMock(data=[mock_item])
 
         async with EmbeddingAPIEmbedder("http://test:8102", "BAAI/bge-m3") as embedder:
             results = await embedder.embed(["test text"])
             assert len(results) == 1
-            mock_session.post.assert_called_once_with(
-                "http://test:8102/v1/embeddings",
-                json={"input": ["test text"], "model": "BAAI/bge-m3"},
+            mock_aembedding.assert_awaited_once_with(
+                model="BAAI/bge-m3",
+                input=["test text"],
+                api_base="http://test:8102/v1",
+                api_key="dummy",
+                custom_llm_provider="openai",
             )
 
         # Verify close() was called (not aclose())

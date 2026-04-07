@@ -8,10 +8,12 @@ vLLM's `/v1/embeddings`. Some backends also return an optional
 
 import asyncio
 import logging
+import os
 import threading
 import time
 from dataclasses import dataclass, field
 
+import litellm
 import niquests
 
 log = logging.getLogger(__name__)
@@ -46,16 +48,19 @@ class EmbeddingAPIEmbedder:
 
     async def embed(self, texts: list[str]) -> list[EmbeddingResult]:
         """Embed *texts* and return dense vectors plus optional sparse vectors."""
-        r = await self._client.post(
-            f"{self._base_url}/v1/embeddings",
-            json={"input": texts, "model": self._model},
+        response = await litellm.aembedding(
+            model=self._model,
+            input=texts,
+            api_base=f"{self._base_url}/v1",
+            api_key=os.environ.get("OPENAI_API_KEY", "dummy"),
+            custom_llm_provider="openai",
         )
-        r.raise_for_status()
 
         results = []
-        for item in r.json()["data"]:
-            dense = item.get("embedding", [])
-            sparse = item.get("sparse_embedding") or {}
+        for item in response.data:
+            item_dict = item.model_dump() if hasattr(item, "model_dump") else dict(item)
+            dense = item_dict.get("embedding", [])
+            sparse = item_dict.get("sparse_embedding") or {}
             results.append(
                 EmbeddingResult(
                     dense=dense,

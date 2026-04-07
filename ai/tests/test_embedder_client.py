@@ -19,7 +19,7 @@ async def test_embedding_api_embedder_context_manager():
 
         # Simulate a working embedding response
         mock_response = MagicMock()
-        mock_response.is_success = True
+        mock_response.ok = True
         mock_response.json.return_value = {
             "data": [
                 {
@@ -64,7 +64,7 @@ async def test_embedding_api_embedder_health_check():
         mock_session_class.return_value = mock_session
 
         mock_response = MagicMock()
-        mock_response.is_success = True
+        mock_response.ok = True
         mock_session.get.return_value = mock_response
 
         embedder = EmbeddingAPIEmbedder("http://test:8102", "BAAI/bge-m3")

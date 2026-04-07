@@ -176,6 +176,8 @@ services:
       target: runtime
     profiles: [ai]
     restart: unless-stopped
+    extra_hosts:
+      - "${DOCKER_DOMAIN}:host-gateway"
     # secrets: [paperless_token] moved to override
     environment:
       # Paperless connection (required)
@@ -235,6 +237,15 @@ services:
     volumes: []
     networks:
       - internal
+    depends_on:
+      webserver:
+        condition: service_healthy
+      broker:
+        condition: service_healthy
+      qdrant:
+        condition: service_healthy
+      phoenix:
+        condition: service_started
 
   ai-eval:
     image: paperless-ai-ai-eval
@@ -242,6 +253,8 @@ services:
       context: ./ai
       target: eval
     profiles: [eval]
+    extra_hosts:
+      - "${DOCKER_DOMAIN}:host-gateway"
     entrypoint: []
     command: python cli.py --eval --split ${EVAL_SPLIT:-code-test}
     environment:

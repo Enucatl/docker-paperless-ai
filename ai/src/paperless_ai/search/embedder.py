@@ -70,7 +70,7 @@ class EmbeddingAPIEmbedder:
         for path in ("/health", "/v1/models", "/models"):
             try:
                 r = await self._client.get(f"{self._base_url}{path}", timeout=5)
-                if r.is_success:
+                if getattr(r, "ok", False):
                     return True
             except Exception:
                 continue

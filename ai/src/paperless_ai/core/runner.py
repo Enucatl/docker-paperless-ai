@@ -106,7 +106,7 @@ async def _embed_and_store(
     from paperless_ai.search.chunker import chunk_text
     from paperless_ai.search.qdrant_store import ChunkPayload
 
-    chunks = chunk_text(full_text, config.chunk_max_chars, config.chunk_overlap)
+    chunks = chunk_text(full_text, config.chunk_size, config.chunk_overlap)
     if not chunks:
         log.info("Document %d: no text to embed, skipping Qdrant upsert", doc_id)
         return

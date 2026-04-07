@@ -139,8 +139,11 @@ class AgentConfig(BaseSettings):
     embedding_model: str = "BAAI/bge-m3"
 
     # Text chunking for embedding
-    chunk_max_chars: int = 2048   # ≈ 512 tokens
-    chunk_overlap: int = 256
+    chunk_size: int = Field(
+        default=512,
+        validation_alias=AliasChoices("chunk_size", "CHUNK_SIZE"),
+    )
+    chunk_overlap: int = 50
 
     # Optional path to a Python file that exports format_chunk_for_embedding.
     # When set, this hook replaces the default situated-embedding header logic.

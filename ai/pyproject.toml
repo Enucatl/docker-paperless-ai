@@ -26,6 +26,7 @@ dependencies = [
     "qdrant-client>=1.12",
     "torch",
     "sentence-transformers>=3.0",
+    "langchain-text-splitters>=1.1.1",
 ]
 
 [project.optional-dependencies]

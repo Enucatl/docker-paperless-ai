@@ -44,7 +44,7 @@ services:
         condition: service_started
     healthcheck:
       test: ["CMD", "curl", "-fs", "-S", "--max-time", "2", "http://localhost:8000"]
-      interval: 120s
+      interval: 30s
       timeout: 10s
       retries: 5
     volumes: [] # overridden in docker-compose.override.yml and docker-compose.test.yml

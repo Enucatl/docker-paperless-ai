@@ -270,7 +270,7 @@ async def _refresh_qdrant_payload(doc_id: int) -> bool:
             correspondent=await _paperless_client.get_correspondent_name(doc["correspondent"])
             if doc.get("correspondent")
             else None,
-            document_date=doc.get("created_date"),
+            document_date=doc.get("created"),
             summary=None,
             exclude_tag_ids={tag_embed_id} if tag_embed_id is not None else None,
         )

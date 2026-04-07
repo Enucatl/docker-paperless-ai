@@ -218,8 +218,8 @@ async def process_document(
         existing_hints: dict = {}
         if doc.get("title"):
             existing_hints["title"] = doc["title"]
-        if doc.get("created_date"):
-            existing_hints["date"] = doc["created_date"]
+        if doc.get("created"):
+            existing_hints["date"] = doc["created"]
         if doc.get("correspondent"):
             correspondent_name = await client.get_correspondent_name(doc["correspondent"])
             if correspondent_name:
@@ -290,7 +290,7 @@ async def process_document(
         try:
             parsed = datetime.fromisoformat(str(meta.document_date)).date()
             if date(1900, 1, 1) <= parsed <= date.today():
-                payload["created_date"] = parsed.isoformat()
+                payload["created"] = parsed.isoformat()
             else:
                 log.warning(
                     "Document %d: AI date '%s' out of range, skipping",
@@ -645,7 +645,7 @@ async def run_metadata_batch(
 
         if extracted.date:
             if date(1900, 1, 1) <= extracted.date <= date.today():
-                payload["created_date"] = extracted.date.isoformat()
+                payload["created"] = extracted.date.isoformat()
             else:
                 log.warning("Document %d: AI date '%s' out of range, skipping", doc_id, extracted.date)
 
@@ -741,7 +741,7 @@ async def run_embed_batch(
                         correspondent=await client.get_correspondent_name(doc["correspondent"])
                         if doc.get("correspondent")
                         else None,
-                        document_date=doc.get("created_date"),
+                        document_date=doc.get("created"),
                         summary=None,
                         exclude_tag_ids={tag_embed_id} if tag_embed_id is not None else None,
                     )

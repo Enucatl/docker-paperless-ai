@@ -341,7 +341,7 @@ async def test_refresh_qdrant_payload_for_untagged_updates(monkeypatch):
                 "correspondent": 9,
                 "document_type": None,
                 "storage_path": None,
-                "created_date": "2026-04-07",
+                "created": "2026-04-07",
                 "custom_fields": [],
                 "tags": [21],
             }

@@ -79,7 +79,7 @@ class PaperlessClient:
         r = await self._client.get(
             f"/api/documents/{doc_id}/",
             params={
-                "fields": "id,title,correspondent,document_type,storage_path,created_date,custom_fields,tags,language"
+                "fields": "id,title,correspondent,document_type,storage_path,created,custom_fields,tags,language"
             },
         )
         if r.status_code == 404:
@@ -92,7 +92,7 @@ class PaperlessClient:
         r = await self._client.get(
             f"/api/documents/{doc_id}/",
             params={
-                "fields": "id,title,correspondent,document_type,storage_path,created_date,custom_fields,tags,language,content"
+                "fields": "id,title,correspondent,document_type,storage_path,created,custom_fields,tags,language,content"
             },
         )
         if r.status_code == 404:

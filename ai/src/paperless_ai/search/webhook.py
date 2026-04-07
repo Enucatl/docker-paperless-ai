@@ -18,7 +18,7 @@ Routing (tag-driven):
   ai:run-ocr      → queue:ocr      (vision OCR stage)
   ai:run-metadata → queue:metadata (LLM metadata extraction stage)
   ai:run-embed    → queue:embed    (embedding stage)
-  (no ai:run-*)   → queue:embed    (human edit — keep index in sync)
+  (no ai:run-*)   → ignored        (no implicit re-index on unrelated updates)
 
 Authentication is optional: if WEBHOOK_SECRET is set, the endpoint validates
 the X-Webhook-Token header using constant-time comparison.
@@ -181,17 +181,18 @@ def _extract_doc_id(body: dict) -> int | None:
     return None
 
 
-def _route_to_stage(tags: set[str]) -> str:
+def _route_to_stage(tags: set[str]) -> str | None:
     """Determine which queue stage to route to based on document tags.
 
-    Priority: ocr > metadata > embed > embed (fallback for human edits).
+    Priority: ocr > metadata > embed. Untagged updates are ignored.
     """
     if _tag_ocr in tags:
         return TaskQueues.KEY_OCR
     if _tag_metadata in tags:
         return TaskQueues.KEY_METADATA
-    # ai:run-embed tag OR no ai:run-* tag at all → (re-)embed
-    return TaskQueues.KEY_EMBED
+    if _tag_embed in tags:
+        return TaskQueues.KEY_EMBED
+    return None
 
 
 def _parse_tags(body: dict) -> set[str]:
@@ -223,6 +224,58 @@ async def _get_current_document_tags(doc_id: int, payload_tags: set[str]) -> set
         return payload_tags
 
 
+async def _refresh_qdrant_payload(doc_id: int) -> bool:
+    """Refresh Qdrant payload metadata for an already-indexed document."""
+    if _paperless_client is None:
+        return False
+
+    try:
+        doc = await _paperless_client.get_document(doc_id)
+        if doc is None:
+            return False
+
+        from paperless_ai.core.runner import _build_search_metadata
+        from paperless_ai.search.qdrant_store import QdrantDocumentStore
+
+        tag_embed_name = os.environ.get("TAG_EMBED", "ai:run-embed")
+        tag_embed_id = None
+        try:
+            tag_embed_id = await _paperless_client.get_tag_id(tag_embed_name, create=False)
+        except ValueError:
+            tag_embed_id = None
+
+        meta = await _build_search_metadata(
+            _paperless_client,
+            doc,
+            title=doc.get("title"),
+            correspondent=await _paperless_client.get_correspondent_name(doc["correspondent"])
+            if doc.get("correspondent")
+            else None,
+            document_date=doc.get("created_date"),
+            summary=None,
+            exclude_tag_ids={tag_embed_id} if tag_embed_id is not None else None,
+        )
+
+        store = QdrantDocumentStore(_qdrant_url)
+        try:
+            await store.update_document_payload(
+                doc_id=doc_id,
+                title=meta.title,
+                correspondent=meta.correspondent,
+                document_type=meta.document_type,
+                storage_path=meta.storage_path,
+                tags=meta.tags,
+                date=meta.document_date,
+                year=meta.year,
+            )
+        finally:
+            await store.aclose()
+        return True
+    except Exception as e:
+        log.warning("Webhook: failed to refresh Qdrant payload for document %d: %s", doc_id, e)
+        return False
+
+
 @app.post("/webhook/document", status_code=202)
 async def webhook_document(request: Request) -> Response:
     if _webhook_secret is not None:
@@ -247,13 +300,20 @@ async def webhook_document(request: Request) -> Response:
     if _queues:
         tags = await _get_current_document_tags(doc_id, _parse_tags(body))
         stage = _route_to_stage(tags)
-        added = await _queues.enqueue(doc_id, stage)
-        log.info(
-            "Webhook: document %d → %s (%s)",
-            doc_id,
-            stage.split(":")[-1],
-            "queued" if added else "already pending",
-        )
+        if stage is None:
+            refreshed = await _refresh_qdrant_payload(doc_id)
+            if refreshed:
+                log.info("Webhook: document %d refreshed Qdrant payload only", doc_id)
+            else:
+                log.info("Webhook: document %d ignored (no ai:run-* tags present)", doc_id)
+        else:
+            added = await _queues.enqueue(doc_id, stage)
+            log.info(
+                "Webhook: document %d → %s (%s)",
+                doc_id,
+                stage.split(":")[-1],
+                "queued" if added else "already pending",
+            )
 
     return Response(status_code=202)
 

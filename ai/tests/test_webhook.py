@@ -235,8 +235,7 @@ async def test_webhook_accepts_correct_token(webhook_session, document_queue):
 
 async def test_webhook_health_reflects_pending_count(webhook_session, document_queue):
     """
-    After enqueuing two documents, /health must report total pending=2.
-    Without document_tags both go to the embed queue (human-edit fallback).
+    Untagged webhook payloads do not enqueue any work.
     """
     payloads = [
         {"doc_url": "https://paperless.home/documents/201/detail"},
@@ -250,7 +249,7 @@ async def test_webhook_health_reflects_pending_count(webhook_session, document_q
 
     pending = r.json()["pending"]
     total = sum(pending.values())
-    assert total == 2
+    assert total == 0
 
 
 # ---------------------------------------------------------------------------
@@ -301,8 +300,8 @@ async def test_webhook_routes_embed_tag_to_embed_queue(webhook_session, document
     assert 303 not in _redis_stage_members(TaskQueues.KEY_OCR)
 
 
-async def test_webhook_routes_no_ai_tag_to_embed_queue(webhook_session, document_queue, webhook_with_tags):
-    """No ai:run-* tag → queue:embed (human edit, keep index in sync)."""
+async def test_webhook_ignores_no_ai_tag(webhook_session, document_queue, webhook_with_tags):
+    """No ai:run-* tag → payload refresh only, no queue entry."""
     r = await webhook_session.post(
         f"{WEBHOOK_URL}/webhook/document",
         json={
@@ -311,17 +310,88 @@ async def test_webhook_routes_no_ai_tag_to_embed_queue(webhook_session, document
         },
     )
     assert r.status_code == 202
-    assert 304 in _redis_stage_members(TaskQueues.KEY_EMBED)
+    assert 304 not in _redis_stage_members(TaskQueues.KEY_OCR)
+    assert 304 not in _redis_stage_members(TaskQueues.KEY_METADATA)
+    assert 304 not in _redis_stage_members(TaskQueues.KEY_EMBED)
 
 
-async def test_webhook_routes_no_tags_field_to_embed_queue(webhook_session, document_queue, webhook_with_tags):
-    """Missing document_tags key → queue:embed (safe default)."""
+async def test_webhook_ignores_missing_tags_field(webhook_session, document_queue, webhook_with_tags):
+    """Missing document_tags key → payload refresh only, no queue entry."""
     r = await webhook_session.post(
         f"{WEBHOOK_URL}/webhook/document",
         json={"doc_url": "https://paperless.home/documents/305/detail"},
     )
     assert r.status_code == 202
-    assert 305 in _redis_stage_members(TaskQueues.KEY_EMBED)
+    assert 305 not in _redis_stage_members(TaskQueues.KEY_OCR)
+    assert 305 not in _redis_stage_members(TaskQueues.KEY_METADATA)
+    assert 305 not in _redis_stage_members(TaskQueues.KEY_EMBED)
+
+
+async def test_refresh_qdrant_payload_for_untagged_updates(monkeypatch):
+    """Untagged updates refresh Qdrant payload metadata without re-embedding."""
+    from paperless_ai.search import webhook as webhook_module
+    from paperless_ai.search import qdrant_store as qdrant_store_module
+
+    class _FakePaperlessClient:
+        async def get_document(self, doc_id):
+            assert doc_id == 308
+            return {
+                "id": doc_id,
+                "title": "Updated title",
+                "correspondent": 9,
+                "document_type": None,
+                "storage_path": None,
+                "created_date": "2026-04-07",
+                "custom_fields": [],
+                "tags": [21],
+            }
+
+        async def get_tag_names(self, tag_ids):
+            assert tag_ids == [21]
+            return ["invoice"]
+
+        async def get_correspondent_name(self, correspondent_id):
+            assert correspondent_id == 9
+            return "Swisscom"
+
+        async def get_document_type_name(self, document_type_id):
+            return None
+
+        async def get_storage_path_name(self, storage_path_id):
+            return None
+
+        async def get_tag_id(self, name, create=False):
+            raise ValueError(name)
+
+    class _FakeStore:
+        def __init__(self, url):
+            self.url = url
+
+        async def update_document_payload(self, **kwargs):
+            calls.append(kwargs)
+
+        async def aclose(self):
+            return None
+
+    calls = []
+    monkeypatch.setattr(webhook_module, "_paperless_client", _FakePaperlessClient())
+    monkeypatch.setattr(webhook_module, "_qdrant_url", "http://qdrant:6333")
+    monkeypatch.setattr(qdrant_store_module, "QdrantDocumentStore", _FakeStore)
+
+    refreshed = await webhook_module._refresh_qdrant_payload(308)
+    assert refreshed is True
+    assert calls == [
+        {
+            "doc_id": 308,
+            "title": "Updated title",
+            "correspondent": "Swisscom",
+            "document_type": None,
+            "storage_path": None,
+            "tags": ["invoice"],
+            "date": "2026-04-07",
+            "year": "2026",
+        }
+    ]
 
 
 async def test_webhook_ocr_tag_takes_priority_over_embed(webhook_session, document_queue, webhook_with_tags):

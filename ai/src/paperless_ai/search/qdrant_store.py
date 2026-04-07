@@ -66,6 +66,9 @@ class QdrantDocumentStore:
     def __init__(self, url: str = "http://qdrant:6333"):
         self._client = AsyncQdrantClient(url=url)
 
+    async def aclose(self) -> None:
+        await self._client.close()
+
     async def ensure_collection(self) -> None:
         """Create the collection if it does not already exist."""
         existing = await self._client.get_collections()
@@ -131,3 +134,35 @@ class QdrantDocumentStore:
             ),
         )
         log.debug("Deleted vectors for doc %d", doc_id)
+
+    async def update_document_payload(
+        self,
+        *,
+        doc_id: int,
+        title: Optional[str],
+        correspondent: Optional[str],
+        document_type: Optional[str],
+        storage_path: Optional[str],
+        tags: list[str],
+        date: Optional[str],
+        year: Optional[str],
+    ) -> None:
+        """Refresh metadata payload for all chunks of a document without re-embedding."""
+        await self._client.set_payload(
+            collection_name=COLLECTION,
+            payload={
+                "title": title,
+                "correspondent": correspondent,
+                "document_type": document_type,
+                "storage_path": storage_path,
+                "tags": tags,
+                "date": date,
+                "year": year,
+            },
+            points=FilterSelector(
+                filter=Filter(
+                    must=[FieldCondition(key="doc_id", match=MatchValue(value=doc_id))]
+                )
+            ),
+        )
+        log.debug("Updated payload metadata for doc %d", doc_id)

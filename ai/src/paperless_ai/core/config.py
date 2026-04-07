@@ -131,8 +131,11 @@ class AgentConfig(BaseSettings):
     paperless_webhook_url: str = "http://webhook-listener:8001/webhook/document"
     webhook_secret: Optional[str] = None
 
-    # Infinity embedding server (bge-m3, dense + sparse)
-    infinity_url: str = "http://complex.home.arpa:8102"
+    # Embedding API server (vLLM OpenAI-compatible embeddings endpoint).
+    embedding_api_base: str = Field(
+        default="http://complex.home.arpa:8102",
+        validation_alias=AliasChoices("embedding_api_base", "EMBEDDING_API_BASE"),
+    )
     embedding_model: str = "BAAI/bge-m3"
 
     # Text chunking for embedding

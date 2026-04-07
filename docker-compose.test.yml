@@ -8,7 +8,7 @@
 #     no named volumes to clean up even if the script is Ctrl+C'd.
 #   - webserver, qdrant use anonymous volumes — Docker auto-wipes them on `down -v`.
 #   - Dummy LLM keys prevent real API calls even if a mock is accidentally skipped.
-#   - Infinity (GPU embedder) is NOT available in tests; the mock_embedder fixture
+#   - The embeddings API is NOT available in tests; the mock_embedder fixture
 #     provides deterministic fake vectors directly to run_batch instead.
 
 services:
@@ -97,8 +97,8 @@ services:
       - REDIS_URL=redis://broker:6379/1
       # Qdrant vector store
       - QDRANT_URL=http://qdrant:6333
-      # Infinity is not available in tests; connectivity check will fail gracefully.
-      - INFINITY_URL=http://nonexistent-infinity:8102
+      # The embeddings API is not available in tests; connectivity check will fail gracefully.
+      - EMBEDDING_API_BASE=http://nonexistent-embeddings:8102
       # Webhook listener endpoint (for webhook integration tests)
       - WEBHOOK_URL=http://webhook-listener:8001
       # Used by conftest.py to fetch an ephemeral API token at test startup.

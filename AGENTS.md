@@ -48,7 +48,7 @@ Test-specific workflow note:
 
 **New API compatibility test suite:**
 - `test_paperless_client.py` — Tests PaperlessClient async context manager and correct niquests usage
-- `test_embedder_client.py` — Tests InfinityEmbedder async context manager and connectivity checks
+- `test_embedder_client.py` — Tests the embeddings API client async context manager and connectivity checks
 - `test_cli_connectivity.py` — Tests CLI Paperless API connectivity checks without invalid parameters
 - `test_niquests_api_compatibility.py` — Documents niquests vs httpx differences (close() vs aclose(), allow_redirects vs follow_redirects)
 

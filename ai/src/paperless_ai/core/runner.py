@@ -5,7 +5,7 @@ Flow per document:
   1. Fetch document metadata from Paperless API
   2. Download original PDF to a temp file
   3. Run SmartDocumentAgent (vision OCR + metadata extraction)
-  4. Chunk OCR text → embed via Infinity → upsert into Qdrant
+  4. Chunk OCR text → embed via the embedding API → upsert into Qdrant
   5. PATCH Paperless (title, date, correspondent, content, custom fields)
   6. SREM doc_id from Redis queue (only on full success)
 
@@ -31,7 +31,7 @@ from paperless_ai.core.config import AgentConfig
 from paperless_ai.core.paperless import PaperlessClient
 
 if TYPE_CHECKING:
-    from paperless_ai.search.embedder import InfinityEmbedder
+    from paperless_ai.search.embedder import EmbeddingAPIEmbedder
     from paperless_ai.search.queue import DocumentQueue, TaskQueues
     from paperless_ai.search.qdrant_store import QdrantDocumentStore
 
@@ -100,9 +100,9 @@ async def _embed_and_store(
     meta: SearchMetadata,
     config: AgentConfig,
     store: "QdrantDocumentStore",
-    embedder: "InfinityEmbedder",
+    embedder: "EmbeddingAPIEmbedder",
 ) -> None:
-    """Chunk text, embed via Infinity, and upsert vectors into Qdrant."""
+    """Chunk text, embed via the embeddings API, and upsert vectors into Qdrant."""
     from paperless_ai.search.chunker import chunk_text
     from paperless_ai.search.qdrant_store import ChunkPayload
 
@@ -192,7 +192,7 @@ async def process_document(
     ai_result_field_id: int,
     queue: "DocumentQueue",
     store: QdrantDocumentStore | None = None,
-    embedder: "Optional[InfinityEmbedder]" = None,
+    embedder: "Optional[EmbeddingAPIEmbedder]" = None,
     tag_pending_id: "Optional[int]" = None,
 ) -> bool:
     """Download, process, embed, and patch a single document. Returns True on success."""
@@ -391,7 +391,7 @@ async def run_batch(
     ai_result_field_id: int,
     queue: "DocumentQueue",
     store: QdrantDocumentStore | None = None,
-    embedder: "Optional[InfinityEmbedder]" = None,
+    embedder: "Optional[EmbeddingAPIEmbedder]" = None,
 ) -> tuple[int, int]:
     """Process all documents in the Redis queue concurrently. Returns (success_count, failure_count)."""
     pending_ids = await queue.peek_all()
@@ -704,7 +704,7 @@ async def run_embed_batch(
     config: AgentConfig,
     queues: TaskQueues,
     store: QdrantDocumentStore | None = None,
-    embedder: Optional[InfinityEmbedder] = None,
+    embedder: Optional[EmbeddingAPIEmbedder] = None,
 ) -> tuple[int, int]:
     """Embed stage: read content + metadata from Paperless, embed, upsert Qdrant, remove tag.
 
@@ -769,9 +769,9 @@ async def run_embed_batch(
         await queues.remove(doc_id, TaskQueues.KEY_EMBED)
         return True
 
-    # Preflight: the Infinity embedding server is always local/GPU — bail if it
-    # is offline so we don't leave documents stuck in the embed queue.
-    preflight = config.infinity_url if embedder is not None else None
+    # Preflight: the embedding API server is optional — bail if it is offline so
+    # we don't leave documents stuck in the embed queue.
+    preflight = config.embedding_api_base if embedder is not None else None
     return await _run_stage("Embed", preflight, TaskQueues.KEY_EMBED, queues, _process_one)
 
 

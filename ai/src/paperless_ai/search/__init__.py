@@ -1,1 +1,1 @@
-# Search package: Redis queue, webhook listener, Qdrant store, Infinity embedder.
+# Search package: Redis queue, webhook listener, Qdrant store, embeddings client.

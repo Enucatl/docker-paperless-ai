@@ -215,10 +215,10 @@ services:
       - ANTHROPIC_API_KEY_FILE=/run/secrets/anthropic_api_key
       - OPENAI_API_KEY_FILE=/run/secrets/openai_api_key
 
-      # Redis queue + Qdrant + Infinity embedding
+      # Redis queue + Qdrant + embeddings API
       - REDIS_URL=redis://broker:6379/1
       - QDRANT_URL=http://qdrant:6333
-      - INFINITY_URL
+      - EMBEDDING_API_BASE
       - EMBEDDING_MODEL
 
       # Behaviour tuning (all optional)
@@ -259,7 +259,7 @@ services:
       - OPENAI_API_KEY_FILE=/run/secrets/openai_api_key
       - REDIS_URL=redis://broker:6379/1
       - QDRANT_URL=http://qdrant:6333
-      - INFINITY_URL
+      - EMBEDDING_API_BASE
       - EMBEDDING_MODEL
       - PHOENIX_CLIENT_HEADERS=api_key=local
     volumes: []

@@ -1,23 +1,9 @@
 """
-Async client for the Infinity embedding server (michaelfeil/infinity).
+Async client for an embeddings API.
 
-Infinity extends the OpenAI /embeddings spec to return *both* a dense vector
-and a sparse (BM25/lexical) vector per input text in a single call, making it
-ideal for hybrid search with bge-m3.
-
-Expected response shape:
-    {
-        "data": [
-            {
-                "embedding": [0.01, -0.23, ...],       # dense 1024-d
-                "sparse_embedding": {
-                    "indices": [42, 1337, ...],
-                    "values":  [0.71, 0.33, ...]
-                }
-            },
-            ...
-        ]
-    }
+The batch embed worker uses an OpenAI-compatible embeddings endpoint, such as
+vLLM's `/v1/embeddings`. Some backends also return an optional
+`sparse_embedding` extension; when absent, sparse vectors are left empty.
 """
 
 import asyncio
@@ -38,7 +24,7 @@ class EmbeddingResult:
     sparse_values: list[float] = field(default_factory=list)
 
 
-class InfinityEmbedder:
+class EmbeddingAPIEmbedder:
     def __init__(
         self,
         base_url: str = "http://localhost:8102",
@@ -59,9 +45,9 @@ class InfinityEmbedder:
         await self.aclose()
 
     async def embed(self, texts: list[str]) -> list[EmbeddingResult]:
-        """Embed *texts* and return dense + sparse vectors for each."""
+        """Embed *texts* and return dense vectors plus optional sparse vectors."""
         r = await self._client.post(
-            f"{self._base_url}/embeddings",
+            f"{self._base_url}/v1/embeddings",
             json={"input": texts, "model": self._model},
         )
         r.raise_for_status()
@@ -80,12 +66,15 @@ class InfinityEmbedder:
         return results
 
     async def check_connectivity(self) -> bool:
-        """Return True if the Infinity server is reachable."""
-        try:
-            r = await self._client.get(f"{self._base_url}/health", timeout=5)
-            return r.is_success
-        except Exception:
-            return False
+        """Return True if the embeddings server is reachable."""
+        for path in ("/health", "/v1/models", "/models"):
+            try:
+                r = await self._client.get(f"{self._base_url}{path}", timeout=5)
+                if r.is_success:
+                    return True
+            except Exception:
+                continue
+        return False
 
 
 class LocalLazySearchEmbedder:

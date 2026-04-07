@@ -10,7 +10,7 @@ Infrastructure available in the test environment (docker-compose.test.yml):
   - Redis (broker)               redis://broker:6379/1  (DB 1, AI queue)
   - Qdrant (vector DB)           http://qdrant:6333
   - Webhook listener             http://webhook-listener:8001
-  - Infinity embedder            NOT available — use mock_embedder fixture instead
+  - Embeddings API               NOT available — use mock_embedder fixture instead
 """
 
 import io
@@ -303,11 +303,11 @@ async def task_queues():
 @pytest.fixture
 def mock_embedder(monkeypatch):
     """
-    A fake InfinityEmbedder that returns deterministic 1024-d dense vectors
+    A fake embeddings client that returns deterministic 1024-d dense vectors
     and sparse BM25 weights without making any network calls.
 
     Pass this directly to run_batch() when testing the embedding pipeline.
-    Infinity is not available in the test environment.
+    The embeddings API is not available in the test environment.
 
     Also patches _check_server_reachable so that run_embed_batch's preflight
     check doesn't bail early — that check is a production guard and is

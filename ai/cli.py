@@ -58,7 +58,7 @@ async def main_async(args: argparse.Namespace) -> None:
         run_embed_batch,
     )
     from paperless_ai.core.telemetry import setup_telemetry
-    from paperless_ai.search.embedder import InfinityEmbedder
+    from paperless_ai.search.embedder import EmbeddingAPIEmbedder
     from paperless_ai.search.queue import TaskQueues
     from paperless_ai.search.qdrant_store import QdrantDocumentStore
 
@@ -88,7 +88,7 @@ async def main_async(args: argparse.Namespace) -> None:
         config.effective_metadata_model,
         f" (api_base={config.metadata_api_base})" if config.metadata_api_base else "",
     )
-    log.info("Embedding: %s @ %s", config.embedding_model, config.infinity_url)
+    log.info("Embedding: %s @ %s", config.embedding_model, config.embedding_api_base)
     log.info(
         "Pipeline tags: ocr=%r metadata=%r embed=%r",
         config.tag_ocr, config.tag_metadata, config.tag_embed,
@@ -189,11 +189,12 @@ async def main_async(args: argparse.Namespace) -> None:
             log.warning("Qdrant not reachable: %s — embedding will be skipped", e)
             store = None
 
-        # Set up Infinity embedder (optional — embedding skipped if unavailable)
-        embedder = InfinityEmbedder(config.infinity_url, config.embedding_model)
+        # Set up embeddings client (optional — embedding skipped if unavailable)
+        embedder = EmbeddingAPIEmbedder(config.embedding_api_base, config.embedding_model)
         if not await embedder.check_connectivity():
             log.warning(
-                "Infinity not reachable at %s — embedding will be skipped", config.infinity_url
+                "Embedding API not reachable at %s — embedding will be skipped",
+                config.embedding_api_base,
             )
             await embedder.aclose()
             embedder = None

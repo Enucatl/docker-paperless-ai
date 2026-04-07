@@ -387,7 +387,8 @@ async def _create_webhook_workflow(
     filter_has_tags: list | None = None,
 ) -> int:
     """
-    Create a Paperless Workflow that POSTs {"doc_url": "{{doc_url}}"} to the
+    Create a Paperless Workflow that POSTs {"doc_url": "{{doc_url}}",
+    "document_tags": "{{document_tags}}"} to the
     webhook-listener on the given trigger and return the workflow ID.
 
     filter_has_tags: list of tag IDs the document must carry for the trigger
@@ -412,7 +413,10 @@ async def _create_webhook_workflow(
                     "url": _PAPERLESS_FACING_WEBHOOK_ENDPOINT,
                     "use_params": True,
                     "as_json": True,
-                    "params": {"doc_url": "{{doc_url}}"},
+                    "params": {
+                        "doc_url": "{{doc_url}}",
+                        "document_tags": "{{document_tags}}",
+                    },
                     "headers": {"X-Webhook-Token": TEST_WEBHOOK_SECRET},
                 },
             }

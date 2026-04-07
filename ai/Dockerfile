@@ -14,6 +14,7 @@ RUN mkdir src && uv sync --frozen --no-install-project
 
 # Copy source tree and tests; keep production image lean.
 COPY cli.py .
+COPY uvicorn_logging.json .
 COPY src/ src/
 COPY tests/ tests/
 RUN uv sync --frozen --no-dev

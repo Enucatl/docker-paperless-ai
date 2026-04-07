@@ -75,7 +75,7 @@ async def main_async(args: argparse.Namespace) -> None:
         sys.exit(1)
 
     if not args.eval:
-        setup_telemetry()
+        setup_telemetry(service_name=config.name, project_name=config.name)
 
     log.info("Paperless URL: %s", config.paperless_url)
     log.info(

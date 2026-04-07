@@ -10,7 +10,11 @@ from qdrant_client import AsyncQdrantClient
 from paperless_ai.core.paperless import PaperlessClient
 from paperless_ai.search.embedder import LocalLazySearchEmbedder
 from paperless_ai.search.qdrant_store import COLLECTION
-from paperless_ai.search.retriever import SearchFilters, build_qdrant_filter
+from paperless_ai.search.retriever import (
+    SearchFilters,
+    _extract_qdrant_hits,
+    build_qdrant_filter,
+)
 
 TOOL_SCHEMAS = [
     {
@@ -125,6 +129,7 @@ async def search_documents(
         )
     finally:
         await qdrant.close()
+    hits = _extract_qdrant_hits(hits)
 
     seen_doc_ids: set[int] = set()
     formatted: list[str] = []

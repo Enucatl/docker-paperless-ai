@@ -82,6 +82,35 @@ async def test_search_documents_formats_qdrant_hits():
 
 
 @pytest.mark.asyncio
+async def test_search_documents_handles_tuple_shaped_qdrant_response():
+    embedder = AsyncMock()
+    embedder.embed_query.return_value = MagicMock(dense=[0.1] * 1024)
+
+    hit = MagicMock()
+    hit.payload = {
+        "doc_id": 99,
+        "title": "Zoo Tickets",
+        "correspondent": "Zoo Zurich",
+        "date": "2025-07-01",
+        "text": "Family admission tickets purchased online",
+    }
+
+    qdrant = AsyncMock()
+    qdrant.query_points.return_value = ([hit], None)
+
+    with patch("paperless_ai.search.tools.AsyncQdrantClient", return_value=qdrant):
+        result = await search_documents(
+            "zoo",
+            embedder=embedder,
+            qdrant_url="http://qdrant:6333",
+        )
+
+    assert "Doc 99" in result
+    assert "Zoo Tickets" in result
+    qdrant.close.assert_awaited_once()
+
+
+@pytest.mark.asyncio
 async def test_execute_tool_call_reads_document():
     client = AsyncMock()
     client.get_document_with_content.return_value = {

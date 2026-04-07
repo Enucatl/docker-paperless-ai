@@ -34,8 +34,13 @@ services:
       - openai_api_key
       - anthropic_api_key
       - google_api_key
+      - hf_token
     volumes:
       - ./ai/eval:/app/eval
+
+  phoenix:
+    volumes:
+      - phoenixdata:/root/.phoenix
 
   qdrant:
     volumes:
@@ -50,6 +55,7 @@ volumes:
     name: paperless-ai_media
   export:
   pgdata:
+  phoenixdata:
   redisdata:
   qdrantdata:
 
@@ -64,6 +70,8 @@ secrets:
     file: ./secrets/anthropic_api_key.txt
   google_api_key:
     file: ./secrets/google_api_key.txt
+  hf_token:
+    file: ./secrets/hf_token.txt
 
 networks:
   traefik_proxy:

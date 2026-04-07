@@ -37,6 +37,7 @@ def _inject_secrets() -> None:
         "GOOGLE_API_KEY",
         "ANTHROPIC_API_KEY",
         "OPENAI_API_KEY",
+        "HF_TOKEN",
         "PAPERLESS_TOKEN",
         "WEBHOOK_SECRET",
     ):

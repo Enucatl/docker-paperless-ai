@@ -40,6 +40,7 @@ from fastapi.responses import HTMLResponse, JSONResponse
 
 from paperless_ai.core.config import AgentConfig
 from paperless_ai.core.paperless import PaperlessClient
+from paperless_ai.core.telemetry import setup_telemetry
 from paperless_ai.search.chat_agent import ChatCopilot
 from paperless_ai.search.embedder import LocalLazySearchEmbedder
 from paperless_ai.search.queue import TaskQueues
@@ -135,6 +136,9 @@ async def lifespan(app: FastAPI):
     if _rerank_model:
         log.info("LLM reranking enabled (model=%s)", _rerank_model)
 
+    config = AgentConfig.from_env()
+    setup_telemetry(service_name=config.name, project_name=config.name)
+
     if _webhook_secret:
         log.info("Webhook authentication enabled")
     else:
@@ -145,7 +149,7 @@ async def lifespan(app: FastAPI):
     _idle_task = asyncio.create_task(_lazy_embedder.idle_watcher())
     if _paperless_client is not None:
         _chat_copilot = ChatCopilot(
-            AgentConfig.from_env(),
+            config,
             _paperless_client,
             _lazy_embedder,
             _qdrant_url,
@@ -479,7 +483,9 @@ async def chat_ui() -> HTMLResponse:
     const form = document.getElementById("chat-form");
     const prompt = document.getElementById("prompt");
     const protocol = window.location.protocol === "https:" ? "wss" : "ws";
-    const socket = new WebSocket(`${protocol}://${window.location.host}/ws/chat`);
+    const basePath = window.location.pathname.replace(/\/chat\/?$/, "");
+    const wsPath = `${basePath}/ws/chat`.replace(/\/{2,}/g, "/");
+    const socket = new WebSocket(`${protocol}://${window.location.host}${wsPath}`);
 
     function addMessage(role, content) {
       const div = document.createElement("div");

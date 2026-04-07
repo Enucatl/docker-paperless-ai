@@ -113,11 +113,11 @@ async def test_task_queues_deduplication(task_queues):
 
 def test_parse_tags_empty():
     assert _parse_tags({}) == set()
-    assert _parse_tags({"document_tags": ""}) == set()
+    assert _parse_tags({"tag_list": ""}) == set()
 
 
 def test_parse_tags_comma_separated():
-    body = {"document_tags": "ai:run-ocr, invoice, personal"}
+    body = {"tag_list": "ai:run-ocr, invoice, personal"}
     assert _parse_tags(body) == {"ai:run-ocr", "invoice", "personal"}
 
 

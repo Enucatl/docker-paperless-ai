@@ -10,7 +10,7 @@ key-value pairs with Jinja2 placeholders.  Configure in Paperless:
       URL:    http://webhook-listener:8001/webhook/document
       Body (JSON, key-value):
         doc_url          →  {{doc_url}}
-        document_tags    →  {{document_tags}}
+        tag_list         →  {{tag_list}}
       Headers:
         X-Webhook-Token: <WEBHOOK_SECRET value>
 
@@ -214,32 +214,14 @@ def _route_to_stage(tags: set[str]) -> str | None:
 
 
 def _parse_tags(body: dict) -> set[str]:
-    """Parse document_tags from the webhook payload.
+    """Parse tag_list from the webhook payload.
 
-    Paperless sends {{document_tags}} as a comma-separated string of tag names.
+    Paperless sends {{tag_list}} as a comma-separated string of tag names.
     """
-    raw = body.get("document_tags", "")
+    raw = body.get("tag_list", body.get("document_tags", ""))
     if not raw:
         return set()
     return {t.strip() for t in str(raw).split(",") if t.strip()}
-
-
-async def _get_current_document_tags(doc_id: int, payload_tags: set[str]) -> set[str]:
-    """Return current tag names from Paperless, falling back to payload tags."""
-    if _paperless_client is None:
-        return payload_tags
-
-    try:
-        doc = await _paperless_client.get_document(doc_id)
-        if doc is None:
-            return payload_tags
-        tag_ids = doc.get("tags") or []
-        if not isinstance(tag_ids, list):
-            return payload_tags
-        return set(await _paperless_client.get_tag_names(tag_ids))
-    except Exception as e:
-        log.warning("Webhook: failed to resolve current tags for document %d: %s", doc_id, e)
-        return payload_tags
 
 
 async def _refresh_qdrant_payload(doc_id: int) -> bool:
@@ -316,7 +298,7 @@ async def webhook_document(request: Request) -> Response:
         return Response(status_code=202)  # Accept anyway — don't make Paperless retry
 
     if _queues:
-        tags = await _get_current_document_tags(doc_id, _parse_tags(body))
+        tags = _parse_tags(body)
         stage = _route_to_stage(tags)
         if stage is None:
             refreshed = await _refresh_qdrant_payload(doc_id)

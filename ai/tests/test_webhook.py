@@ -263,7 +263,7 @@ async def test_webhook_routes_ocr_tag_to_ocr_queue(webhook_session, document_que
         f"{WEBHOOK_URL}/webhook/document",
         json={
             "doc_url": "https://paperless.home/documents/301/detail",
-            "document_tags": "ai:run-ocr,invoice",
+            "tag_list": "ai:run-ocr,invoice",
         },
     )
     assert r.status_code == 202
@@ -278,7 +278,7 @@ async def test_webhook_routes_metadata_tag_to_metadata_queue(webhook_session, do
         f"{WEBHOOK_URL}/webhook/document",
         json={
             "doc_url": "https://paperless.home/documents/302/detail",
-            "document_tags": "ai:run-metadata",
+            "tag_list": "ai:run-metadata",
         },
     )
     assert r.status_code == 202
@@ -292,7 +292,7 @@ async def test_webhook_routes_embed_tag_to_embed_queue(webhook_session, document
         f"{WEBHOOK_URL}/webhook/document",
         json={
             "doc_url": "https://paperless.home/documents/303/detail",
-            "document_tags": "ai:run-embed",
+            "tag_list": "ai:run-embed",
         },
     )
     assert r.status_code == 202
@@ -306,7 +306,7 @@ async def test_webhook_ignores_no_ai_tag(webhook_session, document_queue, webhoo
         f"{WEBHOOK_URL}/webhook/document",
         json={
             "doc_url": "https://paperless.home/documents/304/detail",
-            "document_tags": "invoice,personal",
+            "tag_list": "invoice,personal",
         },
     )
     assert r.status_code == 202
@@ -316,7 +316,7 @@ async def test_webhook_ignores_no_ai_tag(webhook_session, document_queue, webhoo
 
 
 async def test_webhook_ignores_missing_tags_field(webhook_session, document_queue, webhook_with_tags):
-    """Missing document_tags key → payload refresh only, no queue entry."""
+    """Missing tag_list key → payload refresh only, no queue entry."""
     r = await webhook_session.post(
         f"{WEBHOOK_URL}/webhook/document",
         json={"doc_url": "https://paperless.home/documents/305/detail"},
@@ -400,7 +400,7 @@ async def test_webhook_ocr_tag_takes_priority_over_embed(webhook_session, docume
         f"{WEBHOOK_URL}/webhook/document",
         json={
             "doc_url": "https://paperless.home/documents/306/detail",
-            "document_tags": "ai:run-embed,ai:run-ocr",
+            "tag_list": "ai:run-embed,ai:run-ocr",
         },
     )
     assert r.status_code == 202
@@ -429,7 +429,7 @@ async def test_webhook_uses_current_paperless_tags_over_payload_snapshot(
         f"{WEBHOOK_URL}/webhook/document",
         json={
             "doc_url": "https://paperless.home/documents/307/detail",
-            "document_tags": "ai:run-embed",
+            "tag_list": "ai:run-embed",
         },
     )
     assert r.status_code == 202
@@ -487,7 +487,7 @@ async def _create_webhook_workflow(
 ) -> int:
     """
     Create a Paperless Workflow that POSTs {"doc_url": "{{doc_url}}",
-    "document_tags": "{{document_tags}}"} to the
+    "tag_list": "{{tag_list}}"} to the
     webhook-listener on the given trigger and return the workflow ID.
 
     filter_has_tags: list of tag IDs the document must carry for the trigger
@@ -512,10 +512,7 @@ async def _create_webhook_workflow(
                     "url": _PAPERLESS_FACING_WEBHOOK_ENDPOINT,
                     "use_params": True,
                     "as_json": True,
-                    "params": {
-                        "doc_url": "{{doc_url}}",
-                        "document_tags": "{{document_tags}}",
-                    },
+                    "params": {"doc_url": "{{doc_url}}", "tag_list": "{{tag_list}}"},
                     "headers": {"X-Webhook-Token": TEST_WEBHOOK_SECRET},
                 },
             }
@@ -593,7 +590,7 @@ async def test_auto_managed_updated_workflow_routes_tagged_docs_to_ocr_queue(
     paperless_client, document_queue, uploaded_document
 ):
     """
-    Real auto-managed workflow payload preserves document_tags for backfills.
+    Real auto-managed workflow payload preserves tag_list for backfills.
 
     This covers the production path that regressed:
     1. Upload a document before workflows exist.

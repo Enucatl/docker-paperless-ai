@@ -128,15 +128,17 @@ services:
     build:
       context: ./ai
     restart: unless-stopped
+    sysctls:
+      - net.ipv6.bindv6only=0
     entrypoint: []
-    command: uvicorn paperless_ai.search.webhook:app --host 0.0.0.0 --port 8001 --log-config /app/uvicorn_logging.json
+    command: uvicorn paperless_ai.search.webhook:app --host :: --port 8001 --log-config /app/uvicorn_logging.json
     healthcheck:
       test:
         [
           "CMD",
           "python",
           "-c",
-          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8001/health', timeout=2)"
+          "import urllib.request; urllib.request.urlopen('http://[::1]:8001/health', timeout=2)"
         ]
       interval: 30s
       timeout: 5s

@@ -477,6 +477,55 @@ async def test_embed_batch_upserts_qdrant_and_removes_tag(
 
 
 @pytest.mark.requires_redis
+async def test_embed_batch_reuses_ai_summary_in_situated_chunks(
+    paperless_client, task_queues, mock_embedder, qdrant_store
+):
+    """Embed-only rebuilds should reuse the stored ai_summary custom field."""
+    from paperless_ai.core.config import AgentConfig
+    from paperless_ai.core.runner import run_embed_batch
+
+    token = paperless_client._client.headers["Authorization"].split(" ")[1]
+    config = AgentConfig(
+        paperless_url=PAPERLESS_URL,
+        paperless_token=token,
+        tag_embed="ai:run-embed",
+    )
+
+    ai_summary_field_id = await paperless_client.get_or_create_custom_field(
+        "ai_summary", data_type="longtext"
+    )
+
+    doc_id = await _upload_document(paperless_client, _make_test_pdf())
+    tag_embed_id = await paperless_client.get_tag_id(config.tag_embed, create=True)
+
+    await paperless_client.patch_document(
+        doc_id,
+        {
+            "title": "Test Invoice",
+            "content": "INVOICE\nAcme Corp\n123 Main St\nDate: January 15, 2024",
+            "tags": [tag_embed_id],
+            "custom_fields": [
+                {
+                    "field": ai_summary_field_id,
+                    "value": "Invoice from Acme Corp dated 2024-01-15 for $100.00.",
+                }
+            ],
+        },
+    )
+    await task_queues.enqueue_embed(doc_id)
+
+    success, failure = await run_embed_batch(
+        paperless_client, config, task_queues, qdrant_store, mock_embedder
+    )
+    assert success == 1
+    assert failure == 0
+    assert mock_embedder.last_texts
+    assert "Summary: Invoice from Acme Corp dated 2024-01-15 for $100.00." in mock_embedder.last_texts[0]
+
+    await paperless_client._client.delete(f"/api/documents/{doc_id}/")
+
+
+@pytest.mark.requires_redis
 async def test_embed_batch_skips_empty_content(paperless_client, task_queues, qdrant_store, document_queue):
     """Document with empty content is processed (tag removed) but nothing embedded."""
     from paperless_ai.core.config import AgentConfig

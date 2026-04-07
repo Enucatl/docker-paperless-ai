@@ -57,6 +57,17 @@ class SearchMetadata:
     year: Optional[str]
 
 
+def _get_custom_field_value(doc: dict, field_id: int | None) -> Optional[str]:
+    """Return a document custom field value by field ID."""
+    if field_id is None:
+        return None
+    for custom_field in doc.get("custom_fields", []):
+        if custom_field.get("field") == field_id:
+            value = custom_field.get("value")
+            return str(value) if value is not None else None
+    return None
+
+
 def request_shutdown() -> None:
     global _shutdown_requested
     _shutdown_requested = True
@@ -718,6 +729,14 @@ async def run_embed_batch(
         log.warning("Embed tag '%s' not found — will not remove it", config.tag_embed)
         tag_embed_id = None
 
+    try:
+        ai_summary_field_id = await client.get_or_create_custom_field(
+            "ai_summary", data_type="longtext"
+        )
+    except Exception as e:
+        log.warning("Could not resolve ai_summary custom field for embed stage: %s", e)
+        ai_summary_field_id = None
+
     sem = asyncio.Semaphore(config.ocr_concurrency)
 
     async def _process_one(doc_id: int) -> bool | None:
@@ -742,7 +761,7 @@ async def run_embed_batch(
                         if doc.get("correspondent")
                         else None,
                         document_date=doc.get("created"),
-                        summary=None,
+                        summary=_get_custom_field_value(doc, ai_summary_field_id),
                         exclude_tag_ids={tag_embed_id} if tag_embed_id is not None else None,
                     )
                     await _embed_and_store(doc_id, content, search_meta, config, store, embedder)

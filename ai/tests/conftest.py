@@ -322,7 +322,11 @@ def mock_embedder(monkeypatch):
     from paperless_ai.search.embedder import EmbeddingResult
 
     class _MockEmbedder:
+        def __init__(self) -> None:
+            self.last_texts: list[str] = []
+
         async def embed(self, texts: list[str]) -> list[EmbeddingResult]:
+            self.last_texts = list(texts)
             return [
                 EmbeddingResult(
                     dense=[0.01 * (i % 100)] * 1024,

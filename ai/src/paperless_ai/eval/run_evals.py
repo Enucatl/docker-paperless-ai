@@ -69,7 +69,17 @@ async def run_scientific_evaluation(config: AgentConfig, split: str = "test") ->
         entries = [e for e in entries if "code-test" in e.get("tags", [])]
     elif split != "all":
         entries = [e for e in entries if e.get("split", "test") == split]
-    entries = [e for e in entries if Path(e["file_path"]).exists()]
+
+    # Verify files exist
+    log.info("Checking %d entries for local files...", len(entries))
+    existing_entries = []
+    for e in entries:
+        if Path(e["file_path"]).exists():
+            existing_entries.append(e)
+        else:
+            log.debug("File not found: %s", e["file_path"])
+
+    entries = existing_entries
     if not entries:
         log.warning("No local files found for split '%s'", split)
         return
@@ -101,11 +111,13 @@ async def run_scientific_evaluation(config: AgentConfig, split: str = "test") ->
                 ],
                 name=phoenix_dataset_name,
             )
-        except Exception:
-            phoenix_dataset = await phoenix_client.datasets.get_dataset(dataset=phoenix_dataset_name)
-            log.info("Using existing Phoenix dataset '%s'", phoenix_dataset_name)
-        else:
-            log.info("Uploaded %d examples to Phoenix dataset '%s'", len(df), phoenix_dataset_name)
+            log.info("Created Phoenix dataset '%s' with %d examples", phoenix_dataset_name, len(df))
+        except Exception as e:
+            if "already exists" in str(e):
+                log.info("Using existing Phoenix dataset '%s'", phoenix_dataset_name)
+                phoenix_dataset = await phoenix_client.datasets.get_dataset(dataset=phoenix_dataset_name)
+            else:
+                raise
 
         # Phoenix is reachable — enable OTel so LiteLLM spans carry token/cost data.
         setup_telemetry()
@@ -257,10 +269,11 @@ Respond with exactly one word: "appropriate" or "inappropriate".
     for exp_config in experiments:
         log.info("\n=== Running Experiment: %s ===", exp_config.name)
         log.info(
-            "Params: agent=%s model=%s temp=%s ocr_reasoning=%s metadata_reasoning=%s",
+            "Params: agent=%s model=%s ocr_temp=%s metadata_temp=%s ocr_reasoning=%s metadata_reasoning=%s",
             exp_config.agent_class,
             exp_config.effective_metadata_model,
-            exp_config.temperature,
+            exp_config.ocr_temperature,
+            exp_config.metadata_temperature,
             exp_config.ocr_reasoning_effort,
             exp_config.metadata_reasoning_effort,
         )
@@ -341,7 +354,8 @@ Respond with exactly one word: "appropriate" or "inappropriate".
                     "agent_class": exp_config.agent_class,
                     "ocr_model": exp_config.ocr_model,
                     "metadata_model": exp_config.effective_metadata_model,
-                    "temperature": exp_config.temperature,
+                    "ocr_temperature": exp_config.ocr_temperature,
+                    "metadata_temperature": exp_config.metadata_temperature,
                     "ocr_reasoning_effort": exp_config.ocr_reasoning_effort,
                     "metadata_reasoning_effort": exp_config.metadata_reasoning_effort,
                 },

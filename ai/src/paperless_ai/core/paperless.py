@@ -35,7 +35,7 @@ class PaperlessClient:
         self._correspondents_cache: list[dict] | None = None
 
     async def aclose(self):
-        await self._client.aclose()
+        await self._client.close()
 
     async def __aenter__(self):
         return self
@@ -238,7 +238,7 @@ class PaperlessClient:
         r = await self._client.post(
             "/api/custom_fields/", json={"name": name, "data_type": data_type}
         )
-        if not r.is_success:
+        if not r.ok:
             log.warning("Custom field create failed (%d): %s", r.status_code, r.text)
         _raise_for_status(r)
         field_id = r.json()["id"]

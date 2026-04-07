@@ -9,10 +9,12 @@ Tests validate graceful handling of:
 - Non-string values (numbers, booleans)
 """
 
+import datetime
 import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from pydantic import ValidationError
 
 from paperless_ai.agents.smart_graph_agent import (
     BaseExtractionStrategy,
@@ -35,6 +37,8 @@ def mock_config():
     config.effective_metadata_model = "test-model"
     config.metadata_api_base = None
     config.metadata_prompt = "Extract metadata from the following text:"
+    config.llm_retries = 2
+    config.nuextract_json_retries = 2
     config.get_metadata_litellm_kwargs = lambda: {}
     return config
 
@@ -132,7 +136,7 @@ class TestStructuredOutputStrategy:
             result = await strategy.extract("Sample OCR text", mock_config)
 
         assert result.title == "Test Invoice"
-        assert result.date == "2024-01-15"
+        assert result.date == datetime.date(2024, 1, 15)
         assert result.correspondent == "Acme Corp"
 
     @pytest.mark.asyncio
@@ -221,7 +225,7 @@ class TestNuExtractStrategy:
             result = await strategy.extract("Sample OCR text", mock_config)
 
         assert result.title == "Test Invoice"
-        assert result.date == "2024-01-15"
+        assert result.date == datetime.date(2024, 1, 15)
         assert result.correspondent == "Acme Corp"
 
     @pytest.mark.asyncio
@@ -272,30 +276,28 @@ class TestDateFieldValidation:
     """Test date field parsing and validation in _ExtractedMetadata."""
 
     def test_valid_iso_date(self):
-        """Valid ISO date should be accepted."""
+        """Valid ISO date string is coerced to a date object by Pydantic."""
         meta = _ExtractedMetadata(
             title="Test",
             date="2024-01-15",
             correspondent="Acme",
         )
-        assert meta.date == "2024-01-15"
+        assert meta.date == datetime.date(2024, 1, 15)
 
-    def test_iso_datetime_stripped_to_date(self):
-        """ISO datetime should be stripped to date only."""
-        meta = _ExtractedMetadata(
-            title="Test",
-            date="2024-01-15T10:30:00",
-            correspondent="Acme",
-        )
-        # Field validator should strip the time component
-        assert meta.date == "2024-01-15"
+    def test_iso_datetime_with_time_rejected(self):
+        """ISO datetime with non-zero time is rejected by Pydantic date validation."""
+        with pytest.raises(ValidationError):
+            _ExtractedMetadata(
+                title="Test",
+                date="2024-01-15T10:30:00",
+                correspondent="Acme",
+            )
 
-    def test_invalid_date_preserved(self):
-        """Invalid date format should be preserved (let runner handle validation)."""
-        meta = _ExtractedMetadata(
-            title="Test",
-            date="not a date",
-            correspondent="Acme",
-        )
-        # Validator doesn't enforce strict validation, just strips ISO times
-        assert meta.date == "not a date"
+    def test_invalid_date_raises(self):
+        """Invalid date strings raise a ValidationError."""
+        with pytest.raises(ValidationError):
+            _ExtractedMetadata(
+                title="Test",
+                date="not a date",
+                correspondent="Acme",
+            )

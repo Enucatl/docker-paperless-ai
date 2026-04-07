@@ -10,6 +10,8 @@ dependencies = [
     "Pillow>=10.0",
     "langgraph>=0.2",
     "json-repair>=0.25",
+    "tenacity>=8.0",
+    "pydantic-settings>=2.0",
     "openinference-instrumentation-litellm",
     "openinference-instrumentation-langchain",
     "openinference-instrumentation",
@@ -46,6 +48,3 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
 where = ["src"]
-
-[tool.setuptools.package-data]
-"paperless_ai" = ["*.txt", "eval/*.json", "eval/*.yaml"]

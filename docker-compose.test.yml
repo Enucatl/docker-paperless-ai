@@ -63,6 +63,7 @@ services:
       - PAPERLESS_TOKEN=${TEST_PAPERLESS_TOKEN:-}
       - RERANK_MODEL=openai/gpt-4o-mini
       - OPENAI_API_KEY=dummy-test-key
+      - WEBHOOK_SECRET=test-secret-key-12345
     healthcheck:
       test: ["CMD", "python", "-c",
              "import urllib.request; urllib.request.urlopen('http://localhost:8001/health')"]

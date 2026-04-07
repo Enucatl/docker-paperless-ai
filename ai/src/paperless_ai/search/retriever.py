@@ -11,13 +11,13 @@ Two-Tower architecture:
 import asyncio
 import json
 import logging
+from collections import defaultdict
 from dataclasses import dataclass
 from typing import Optional
 
 import litellm
 import niquests
 from qdrant_client import AsyncQdrantClient
-from qdrant_client.models import NamedVector
 
 from paperless_ai.search.embedder import LocalLazySearchEmbedder
 from paperless_ai.search.qdrant_store import COLLECTION
@@ -55,9 +55,10 @@ async def dense_search(
 
     qdrant = AsyncQdrantClient(url=qdrant_url)
     try:
-        hits = await qdrant.search(
+        hits = await qdrant.query_points(
             collection_name=COLLECTION,
-            query_vector=NamedVector(name="dense", vector=result.dense),
+            query=result.dense,
+            using="dense",
             limit=k,
             with_payload=True,
         )
@@ -128,13 +129,13 @@ def rrf_fuse(
     Returns:
         merged doc_ids sorted descending by RRF score
     """
-    scores: dict[int, float] = {}
+    scores: defaultdict[int, float] = defaultdict(float)
 
     for rank, doc_id in enumerate(dense_ids, start=1):
-        scores[doc_id] = scores.get(doc_id, 0) + 1 / (k + rank)
+        scores[doc_id] += 1 / (k + rank)
 
     for rank, doc_id in enumerate(keyword_ids, start=1):
-        scores[doc_id] = scores.get(doc_id, 0) + 1 / (k + rank)
+        scores[doc_id] += 1 / (k + rank)
 
     # Sort descending by score; ties broken by appearance order (stable sort)
     return sorted(scores.keys(), key=lambda doc_id: scores[doc_id], reverse=True)

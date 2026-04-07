@@ -1,19 +1,19 @@
 """
-Unit tests for paperless_ai.core.hooks — the dynamic embed hook system.
+Unit tests for paperless_ai.core.hooks — chunk situating for embeddings.
 
 All tests are pure unit tests: no Paperless, Redis, or Qdrant required.
 The module-level hook cache is reset before every test via the
 ``reset_hook_cache`` fixture so tests are fully isolated from each other.
 """
 
-import asyncio
 import logging
 import textwrap
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 import paperless_ai.core.hooks as hooks_module
-from paperless_ai.core.hooks import default_embed_hook, get_embed_hook
+from paperless_ai.core.hooks import situate_chunks
 
 
 # ---------------------------------------------------------------------------
@@ -23,41 +23,38 @@ from paperless_ai.core.hooks import default_embed_hook, get_embed_hook
 
 @pytest.fixture(autouse=True)
 def reset_hook_cache(monkeypatch):
-    """Reset the module-level hook cache before every test.
-
-    get_embed_hook() caches its result in _cached_hook / _hook_resolved so the
-    file is only parsed once per process. Without this reset each test would
-    see whatever the previous test cached.
-    """
+    """Reset the module-level hook cache before every test."""
     monkeypatch.setattr(hooks_module, "_hook_resolved", False)
     monkeypatch.setattr(hooks_module, "_cached_hook", None)
 
 
 @pytest.fixture
 def meta():
-    """Minimal duck-typed meta object matching the DocumentMetadata interface."""
+    """Meta object with all fields populated."""
     class _Meta:
         title = "Test Invoice"
         correspondent = "Acme Corp"
         document_date = "2024-01-15"
+        summary = "Invoice for annual software licensing and server maintenance."
 
     return _Meta()
 
 
 @pytest.fixture
 def meta_none_fields():
-    """Meta object where all fields are None (tests Unknown fallback)."""
+    """Meta object where all fields are None."""
     class _Meta:
         title = None
         correspondent = None
         document_date = None
+        summary = None
 
     return _Meta()
 
 
 @pytest.fixture
 def config():
-    """Minimal AgentConfig with no EMBED_HOOK_FILE set."""
+    """AgentConfig with no situation_model and no EMBED_HOOK_FILE."""
     from paperless_ai.core.config import AgentConfig
 
     return AgentConfig(
@@ -66,271 +63,253 @@ def config():
     )
 
 
-# ---------------------------------------------------------------------------
-# default_embed_hook
-# ---------------------------------------------------------------------------
-
-
-async def test_default_hook_prepends_structured_header(meta, config):
-    """Default hook produces Title/Sender/Date header followed by the raw chunk."""
-    result = await default_embed_hook("some chunk text", meta, config)
-
-    assert result.startswith("Title: Test Invoice\n")
-    assert "Sender: Acme Corp\n" in result
-    assert "Date: 2024-01-15\n" in result
-    assert result.endswith("some chunk text")
-    assert "---\n" in result
-
-
-async def test_default_hook_uses_unknown_for_none_fields(meta_none_fields, config):
-    """None metadata fields render as 'Unknown' rather than 'None'."""
-    result = await default_embed_hook("chunk", meta_none_fields, config)
-
-    assert "Title: Unknown" in result
-    assert "Sender: Unknown" in result
-    assert "Date: Unknown" in result
-    assert result.endswith("chunk")
-
-
-async def test_default_hook_preserves_chunk_content(meta, config):
-    """Chunk content is appended verbatim — no truncation or modification."""
-    long_chunk = "word " * 500
-    result = await default_embed_hook(long_chunk, meta, config)
-    assert result.endswith(long_chunk)
-
-
-async def test_default_hook_empty_chunk(meta, config):
-    """Empty chunk still gets a header prepended without error."""
-    result = await default_embed_hook("", meta, config)
-    assert "Title: Test Invoice" in result
-    assert result.endswith("---\n")
+@pytest.fixture
+def config_with_situation(config):
+    """AgentConfig with situation_model set."""
+    return config.model_copy(update={"situation_model": "gemini/test-model"})
 
 
 # ---------------------------------------------------------------------------
-# get_embed_hook — environment not set
+# Tier 1 — static metadata header (default path)
 # ---------------------------------------------------------------------------
 
 
-async def test_returns_default_when_env_not_set(monkeypatch, meta, config):
-    """When EMBED_HOOK_FILE is unset, get_embed_hook returns default_embed_hook."""
-    monkeypatch.delenv("EMBED_HOOK_FILE", raising=False)
-
-    hook = get_embed_hook()
-    assert hook is default_embed_hook
-
-    # Calling it produces the same output as the default directly
-    result = await hook("chunk", meta, config)
-    assert "Title: Test Invoice" in result
-
-
-async def test_returns_default_when_env_empty_string(monkeypatch, meta, config):
-    """Empty string EMBED_HOOK_FILE is treated the same as unset."""
-    monkeypatch.setenv("EMBED_HOOK_FILE", "")
-
-    hook = get_embed_hook()
-    assert hook is default_embed_hook
+async def test_tier1_header_contains_all_fields(meta, config):
+    results = await situate_chunks(["some chunk text"], "full doc", meta, config)
+    assert len(results) == 1
+    r = results[0]
+    assert "Title: Test Invoice" in r
+    assert "Sender: Acme Corp" in r
+    assert "Date: 2024-01-15" in r
+    assert "Summary: Invoice for annual software licensing" in r
+    assert "---" in r
+    assert r.endswith("some chunk text")
 
 
-# ---------------------------------------------------------------------------
-# get_embed_hook — file does not exist
-# ---------------------------------------------------------------------------
+async def test_tier1_summary_omitted_when_none(meta_none_fields, config):
+    results = await situate_chunks(["chunk"], "doc", meta_none_fields, config)
+    assert "Summary:" not in results[0]
+    assert "Title: Unknown" in results[0]
 
 
-async def test_returns_default_when_file_missing(monkeypatch, caplog, meta, config):
-    """Missing file path logs a warning and falls back to the default hook."""
-    monkeypatch.setenv("EMBED_HOOK_FILE", "/nonexistent/path/hook.py")
-
-    with caplog.at_level(logging.WARNING, logger="paperless_ai.core.hooks"):
-        hook = get_embed_hook()
-
-    assert hook is default_embed_hook
-    assert any("does not exist" in rec.message for rec in caplog.records)
+async def test_tier1_unknown_fallback_for_none_fields(meta_none_fields, config):
+    results = await situate_chunks(["chunk"], "doc", meta_none_fields, config)
+    r = results[0]
+    assert "Title: Unknown" in r
+    assert "Sender: Unknown" in r
+    assert "Date: Unknown" in r
 
 
-# ---------------------------------------------------------------------------
-# get_embed_hook — valid custom hook file
-# ---------------------------------------------------------------------------
-
-
-async def test_loads_custom_hook_from_file(monkeypatch, tmp_path, meta, config):
-    """A valid hook file is imported and its format_chunk_for_embedding is used."""
-    hook_file = tmp_path / "my_hook.py"
-    hook_file.write_text(textwrap.dedent("""\
-        async def format_chunk_for_embedding(chunk, meta, config):
-            return f"CUSTOM:{chunk}"
-    """))
-
-    monkeypatch.setenv("EMBED_HOOK_FILE", str(hook_file))
-
-    hook = get_embed_hook()
-    assert hook is not default_embed_hook
-
-    result = await hook("hello", meta, config)
-    assert result == "CUSTOM:hello"
-
-
-async def test_custom_hook_receives_meta_and_config(monkeypatch, tmp_path, meta, config):
-    """The custom hook receives both meta and config correctly."""
-    hook_file = tmp_path / "inspect_hook.py"
-    hook_file.write_text(textwrap.dedent("""\
-        async def format_chunk_for_embedding(chunk, meta, config):
-            return f"{meta.title}|{meta.correspondent}|{chunk}"
-    """))
-    monkeypatch.setenv("EMBED_HOOK_FILE", str(hook_file))
-
-    hook = get_embed_hook()
-    result = await hook("body", meta, config)
-    assert result == "Test Invoice|Acme Corp|body"
-
-
-async def test_logs_info_on_successful_load(monkeypatch, tmp_path, caplog):
-    """A successfully loaded hook is announced in the log at INFO level."""
-    hook_file = tmp_path / "ok_hook.py"
-    hook_file.write_text(textwrap.dedent("""\
-        async def format_chunk_for_embedding(chunk, meta, config):
-            return chunk
-    """))
-    monkeypatch.setenv("EMBED_HOOK_FILE", str(hook_file))
-
-    with caplog.at_level(logging.INFO, logger="paperless_ai.core.hooks"):
-        get_embed_hook()
-
-    assert any("Loaded custom embed hook" in rec.message for rec in caplog.records)
-
-
-# ---------------------------------------------------------------------------
-# get_embed_hook — fallback on broken hook files
-# ---------------------------------------------------------------------------
-
-
-async def test_falls_back_when_function_missing(monkeypatch, tmp_path, caplog, meta, config):
-    """A file that doesn't define format_chunk_for_embedding falls back to default."""
-    hook_file = tmp_path / "no_fn_hook.py"
-    hook_file.write_text("# no function here\n")
-    monkeypatch.setenv("EMBED_HOOK_FILE", str(hook_file))
-
-    with caplog.at_level(logging.ERROR, logger="paperless_ai.core.hooks"):
-        hook = get_embed_hook()
-
-    assert hook is default_embed_hook
-    # The error is logged with exc_info; check the exception text in the record
-    error_records = [r for r in caplog.records if r.levelname == "ERROR"]
-    assert error_records, "Expected an ERROR log record"
-    assert any(
-        "format_chunk_for_embedding" in str(r.exc_info) for r in error_records
-    )
-
-
-async def test_falls_back_on_syntax_error(monkeypatch, tmp_path, caplog, meta, config):
-    """A file with a syntax error is caught, logged, and falls back to default."""
-    hook_file = tmp_path / "bad_syntax.py"
-    hook_file.write_text("def format_chunk_for_embedding(\n  # unclosed\n")
-    monkeypatch.setenv("EMBED_HOOK_FILE", str(hook_file))
-
-    with caplog.at_level(logging.ERROR, logger="paperless_ai.core.hooks"):
-        hook = get_embed_hook()
-
-    assert hook is default_embed_hook
-    # Exception details logged
-    assert any(rec.exc_info is not None for rec in caplog.records)
-
-
-async def test_falls_back_on_runtime_error_at_import(monkeypatch, tmp_path, caplog, meta, config):
-    """A file that raises an exception at module level falls back to default."""
-    hook_file = tmp_path / "explodes.py"
-    hook_file.write_text("raise RuntimeError('boom')\n")
-    monkeypatch.setenv("EMBED_HOOK_FILE", str(hook_file))
-
-    with caplog.at_level(logging.ERROR, logger="paperless_ai.core.hooks"):
-        hook = get_embed_hook()
-
-    assert hook is default_embed_hook
-
-
-# ---------------------------------------------------------------------------
-# get_embed_hook — caching
-# ---------------------------------------------------------------------------
-
-
-def test_hook_is_resolved_only_once(monkeypatch, tmp_path):
-    """get_embed_hook() loads the file exactly once; subsequent calls use the cache."""
-    call_count = 0
-    original_spec = __import__("importlib.util", fromlist=["spec_from_file_location"]).spec_from_file_location
-
-    hook_file = tmp_path / "counted_hook.py"
-    hook_file.write_text(textwrap.dedent("""\
-        async def format_chunk_for_embedding(chunk, meta, config):
-            return chunk
-    """))
-    monkeypatch.setenv("EMBED_HOOK_FILE", str(hook_file))
-
-    import importlib.util
-
-    real_spec_from_file = importlib.util.spec_from_file_location
-
-    def counting_spec(*args, **kwargs):
-        nonlocal call_count
-        call_count += 1
-        return real_spec_from_file(*args, **kwargs)
-
-    monkeypatch.setattr(importlib.util, "spec_from_file_location", counting_spec)
-
-    # Call three times — file should be parsed only on the first call
-    h1 = get_embed_hook()
-    h2 = get_embed_hook()
-    h3 = get_embed_hook()
-
-    assert h1 is h2 is h3
-    assert call_count == 1, f"spec_from_file_location called {call_count} times, expected 1"
-
-
-def test_default_is_cached_too(monkeypatch):
-    """get_embed_hook() with no file set caches default_embed_hook as well."""
-    monkeypatch.delenv("EMBED_HOOK_FILE", raising=False)
-
-    h1 = get_embed_hook()
-    h2 = get_embed_hook()
-
-    assert h1 is h2 is default_embed_hook
-    assert hooks_module._hook_resolved is True
-
-
-# ---------------------------------------------------------------------------
-# asyncio.gather compatibility (mirrors _embed_and_store usage)
-# ---------------------------------------------------------------------------
-
-
-async def test_default_hook_works_with_asyncio_gather(meta, config):
-    """Default hook can be fanned out concurrently via asyncio.gather."""
+async def test_tier1_multiple_chunks_all_get_header(meta, config):
     chunks = ["chunk one", "chunk two", "chunk three"]
-    hook = get_embed_hook()
-
-    results = list(await asyncio.gather(*(hook(c, meta, config) for c in chunks)))
-
+    results = await situate_chunks(chunks, "doc", meta, config)
     assert len(results) == 3
     for chunk, result in zip(chunks, results):
         assert result.endswith(chunk)
         assert "Title: Test Invoice" in result
 
 
-async def test_custom_hook_works_with_asyncio_gather(monkeypatch, tmp_path, meta, config):
-    """Custom async hook integrates correctly with the asyncio.gather call pattern."""
-    hook_file = tmp_path / "gather_hook.py"
+async def test_tier1_preserves_chunk_content_verbatim(meta, config):
+    long_chunk = "word " * 500
+    results = await situate_chunks([long_chunk], "doc", meta, config)
+    assert results[0].endswith(long_chunk)
+
+
+async def test_empty_chunks_returns_empty_list(meta, config):
+    assert await situate_chunks([], "doc", meta, config) == []
+
+
+# ---------------------------------------------------------------------------
+# Tier 2 — per-chunk LLM situating
+# ---------------------------------------------------------------------------
+
+
+async def test_tier2_calls_llm_once_per_chunk(monkeypatch, meta, config_with_situation):
+    mock_response = MagicMock()
+    mock_response.choices[0].message.content = "Context sentence."
+    mock_acompletion = AsyncMock(return_value=mock_response)
+    monkeypatch.setattr("litellm.acompletion", mock_acompletion)
+
+    chunks = ["chunk A", "chunk B", "chunk C"]
+    results = await situate_chunks(chunks, "full document", meta, config_with_situation)
+
+    assert mock_acompletion.call_count == 3
+    assert len(results) == 3
+    for result in results:
+        assert result.startswith("Context sentence.")
+        assert "\n\n" in result
+
+
+async def test_tier2_context_prepended_to_chunk(monkeypatch, meta, config_with_situation):
+    mock_response = MagicMock()
+    mock_response.choices[0].message.content = "This is the context."
+    monkeypatch.setattr("litellm.acompletion", AsyncMock(return_value=mock_response))
+
+    results = await situate_chunks(["my chunk"], "doc", meta, config_with_situation)
+    assert results[0] == "This is the context.\n\nmy chunk"
+
+
+async def test_tier2_context_chars_truncates_full_text(monkeypatch, meta):
+    from paperless_ai.core.config import AgentConfig
+
+    cfg = AgentConfig(
+        paperless_url="http://localhost:8000",
+        paperless_token="test-token",
+        situation_model="gemini/test-model",
+        situation_context_chars=10,
+    )
+
+    captured_prompts = []
+
+    async def capture_call(**kwargs):
+        captured_prompts.append(kwargs["messages"][0]["content"])
+        resp = MagicMock()
+        resp.choices[0].message.content = "ctx"
+        return resp
+
+    monkeypatch.setattr("litellm.acompletion", capture_call)
+
+    full_text = "A" * 100
+    await situate_chunks(["chunk"], full_text, meta, cfg)
+
+    assert len(captured_prompts) == 1
+    # Only first 10 chars of full_text should appear in the prompt
+    assert "A" * 10 in captured_prompts[0]
+    assert "A" * 11 not in captured_prompts[0]
+
+
+# ---------------------------------------------------------------------------
+# Custom hook file
+# ---------------------------------------------------------------------------
+
+
+async def test_custom_hook_is_called_with_batch_signature(monkeypatch, tmp_path, meta, config):
+    hook_file = tmp_path / "my_hook.py"
     hook_file.write_text(textwrap.dedent("""\
-        import asyncio
-        async def format_chunk_for_embedding(chunk, meta, config):
-            await asyncio.sleep(0)   # simulate async work
-            return f"[{meta.title}] {chunk}"
+        async def situate_chunks(chunks, full_text, meta, config):
+            return [f"CUSTOM:{c}" for c in chunks]
     """))
     monkeypatch.setenv("EMBED_HOOK_FILE", str(hook_file))
 
-    hook = get_embed_hook()
-    chunks = ["alpha", "beta", "gamma"]
+    results = await situate_chunks(["hello", "world"], "doc", meta, config)
+    assert results == ["CUSTOM:hello", "CUSTOM:world"]
 
-    results = list(await asyncio.gather(*(hook(c, meta, config) for c in chunks)))
 
-    assert results == [
-        "[Test Invoice] alpha",
-        "[Test Invoice] beta",
-        "[Test Invoice] gamma",
-    ]
+async def test_custom_hook_receives_meta_and_config(monkeypatch, tmp_path, meta, config):
+    hook_file = tmp_path / "inspect_hook.py"
+    hook_file.write_text(textwrap.dedent("""\
+        async def situate_chunks(chunks, full_text, meta, config):
+            return [f"{meta.title}|{c}" for c in chunks]
+    """))
+    monkeypatch.setenv("EMBED_HOOK_FILE", str(hook_file))
+
+    results = await situate_chunks(["body"], "doc", meta, config)
+    assert results == ["Test Invoice|body"]
+
+
+async def test_custom_hook_takes_precedence_over_situation_model(
+    monkeypatch, tmp_path, meta, config_with_situation
+):
+    """Custom hook beats situation_model — explicit override wins."""
+    hook_file = tmp_path / "override_hook.py"
+    hook_file.write_text(textwrap.dedent("""\
+        async def situate_chunks(chunks, full_text, meta, config):
+            return [f"HOOK:{c}" for c in chunks]
+    """))
+    monkeypatch.setenv("EMBED_HOOK_FILE", str(hook_file))
+    mock_llm = AsyncMock()
+    monkeypatch.setattr("litellm.acompletion", mock_llm)
+
+    results = await situate_chunks(["chunk"], "doc", meta, config_with_situation)
+
+    assert results == ["HOOK:chunk"]
+    mock_llm.assert_not_called()
+
+
+async def test_missing_hook_file_falls_back_to_tier1(monkeypatch, caplog, meta, config):
+    monkeypatch.setenv("EMBED_HOOK_FILE", "/nonexistent/hook.py")
+
+    with caplog.at_level(logging.WARNING, logger="paperless_ai.core.hooks"):
+        results = await situate_chunks(["chunk"], "doc", meta, config)
+
+    assert "Title: Test Invoice" in results[0]
+    assert any("does not exist" in r.message for r in caplog.records)
+
+
+async def test_hook_missing_function_falls_back_to_tier1(monkeypatch, tmp_path, caplog, meta, config):
+    hook_file = tmp_path / "no_fn.py"
+    hook_file.write_text("# nothing here\n")
+    monkeypatch.setenv("EMBED_HOOK_FILE", str(hook_file))
+
+    with caplog.at_level(logging.ERROR, logger="paperless_ai.core.hooks"):
+        results = await situate_chunks(["chunk"], "doc", meta, config)
+
+    assert "Title: Test Invoice" in results[0]
+    assert any(r.exc_info for r in caplog.records)
+
+
+async def test_hook_syntax_error_falls_back_to_tier1(monkeypatch, tmp_path, caplog, meta, config):
+    hook_file = tmp_path / "bad_syntax.py"
+    hook_file.write_text("def situate_chunks(\n  # unclosed\n")
+    monkeypatch.setenv("EMBED_HOOK_FILE", str(hook_file))
+
+    with caplog.at_level(logging.ERROR, logger="paperless_ai.core.hooks"):
+        results = await situate_chunks(["chunk"], "doc", meta, config)
+
+    assert "Title: Test Invoice" in results[0]
+
+
+async def test_hook_runtime_error_at_import_falls_back(monkeypatch, tmp_path, caplog, meta, config):
+    hook_file = tmp_path / "explodes.py"
+    hook_file.write_text("raise RuntimeError('boom')\n")
+    monkeypatch.setenv("EMBED_HOOK_FILE", str(hook_file))
+
+    with caplog.at_level(logging.ERROR, logger="paperless_ai.core.hooks"):
+        results = await situate_chunks(["chunk"], "doc", meta, config)
+
+    assert "Title: Test Invoice" in results[0]
+
+
+# ---------------------------------------------------------------------------
+# Caching
+# ---------------------------------------------------------------------------
+
+
+def test_hook_file_loaded_only_once(monkeypatch, tmp_path):
+    hook_file = tmp_path / "counted.py"
+    hook_file.write_text(textwrap.dedent("""\
+        async def situate_chunks(chunks, full_text, meta, config):
+            return chunks
+    """))
+    monkeypatch.setenv("EMBED_HOOK_FILE", str(hook_file))
+
+    import importlib.util
+    real_spec = importlib.util.spec_from_file_location
+    call_count = 0
+
+    def counting_spec(*args, **kwargs):
+        nonlocal call_count
+        call_count += 1
+        return real_spec(*args, **kwargs)
+
+    monkeypatch.setattr(importlib.util, "spec_from_file_location", counting_spec)
+
+    from paperless_ai.core.hooks import _resolve_hook
+    _resolve_hook()
+    _resolve_hook()
+    _resolve_hook()
+
+    assert call_count == 1
+
+
+def test_no_file_cache_state(monkeypatch):
+    monkeypatch.delenv("EMBED_HOOK_FILE", raising=False)
+
+    from paperless_ai.core.hooks import _resolve_hook
+    result1 = _resolve_hook()
+    result2 = _resolve_hook()
+
+    assert result1 is None
+    assert result2 is None
+    assert hooks_module._hook_resolved is True
+    assert hooks_module._cached_hook is None

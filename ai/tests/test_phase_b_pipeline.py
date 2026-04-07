@@ -58,6 +58,7 @@ from paperless_ai.search.webhook import _parse_tags, _route_to_stage
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.requires_redis
 async def test_task_queues_enqueue_and_peek(task_queues):
     """Enqueue to each stage and peek returns the right IDs."""
     await task_queues.enqueue_ocr(1)
@@ -69,6 +70,7 @@ async def test_task_queues_enqueue_and_peek(task_queues):
     assert await task_queues.peek_stage(TaskQueues.KEY_EMBED) == {3}
 
 
+@pytest.mark.requires_redis
 async def test_task_queues_remove(task_queues):
     """Remove takes a doc out of the specified stage only."""
     await task_queues.enqueue_ocr(10)
@@ -80,6 +82,7 @@ async def test_task_queues_remove(task_queues):
     assert await task_queues.peek_stage(TaskQueues.KEY_EMBED) == {10}
 
 
+@pytest.mark.requires_redis
 async def test_task_queues_pending_count(task_queues):
     """pending_count returns per-stage dict."""
     await task_queues.enqueue_ocr(1)
@@ -92,6 +95,7 @@ async def test_task_queues_pending_count(task_queues):
     assert counts["embed"] == 0
 
 
+@pytest.mark.requires_redis
 async def test_task_queues_deduplication(task_queues):
     """Same doc_id enqueued twice stays as a single entry."""
     added1 = await task_queues.enqueue_embed(42)
@@ -149,6 +153,7 @@ def test_route_to_stage_metadata_priority_over_embed():
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.requires_redis
 async def test_ocr_batch_writes_content_and_transitions_tag(
     paperless_client, task_queues
 ):
@@ -202,6 +207,7 @@ async def test_ocr_batch_writes_content_and_transitions_tag(
     await paperless_client._client.delete(f"/api/documents/{doc_id}/")
 
 
+@pytest.mark.requires_redis
 async def test_ocr_batch_skips_missing_document(paperless_client, task_queues, document_queue):
     """Non-existent doc ID is silently removed from OCR queue (no crash)."""
     from paperless_ai.core.config import AgentConfig
@@ -217,6 +223,7 @@ async def test_ocr_batch_skips_missing_document(paperless_client, task_queues, d
     assert await task_queues.peek_stage(TaskQueues.KEY_OCR) == set()
 
 
+@pytest.mark.requires_redis
 async def test_ocr_batch_dry_run(paperless_client, task_queues, document_queue):
     """Dry-run OCR batch: returns success but does not modify Paperless."""
     from paperless_ai.core.config import AgentConfig
@@ -253,6 +260,7 @@ async def test_ocr_batch_dry_run(paperless_client, task_queues, document_queue):
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.requires_redis
 async def test_metadata_batch_writes_metadata_and_transitions_tag(
     paperless_client, task_queues
 ):
@@ -325,6 +333,7 @@ async def test_metadata_batch_writes_metadata_and_transitions_tag(
     await paperless_client._client.delete(f"/api/documents/{doc_id}/")
 
 
+@pytest.mark.requires_redis
 async def test_metadata_batch_skips_empty_content(paperless_client, task_queues, document_queue):
     """Document with no content is removed from metadata queue without processing."""
     from paperless_ai.core.config import AgentConfig
@@ -351,6 +360,7 @@ async def test_metadata_batch_skips_empty_content(paperless_client, task_queues,
     await paperless_client._client.delete(f"/api/documents/{doc_id}/")
 
 
+@pytest.mark.requires_redis
 async def test_metadata_batch_dry_run(paperless_client, task_queues, document_queue):
     """Dry-run metadata batch: returns success but does not modify Paperless."""
     from paperless_ai.core.config import AgentConfig
@@ -396,6 +406,7 @@ async def test_metadata_batch_dry_run(paperless_client, task_queues, document_qu
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.requires_redis
 async def test_embed_batch_upserts_qdrant_and_removes_tag(
     paperless_client, task_queues, mock_embedder, qdrant_store
 ):
@@ -455,6 +466,7 @@ async def test_embed_batch_upserts_qdrant_and_removes_tag(
     await paperless_client._client.delete(f"/api/documents/{doc_id}/")
 
 
+@pytest.mark.requires_redis
 async def test_embed_batch_skips_empty_content(paperless_client, task_queues, qdrant_store, document_queue):
     """Document with empty content is processed (tag removed) but nothing embedded."""
     from paperless_ai.core.config import AgentConfig
@@ -492,6 +504,7 @@ async def test_embed_batch_skips_empty_content(paperless_client, task_queues, qd
     await paperless_client._client.delete(f"/api/documents/{doc_id}/")
 
 
+@pytest.mark.requires_redis
 async def test_embed_batch_dry_run(paperless_client, task_queues, mock_embedder, qdrant_store, document_queue):
     """Dry-run embed batch: returns success but does not remove tag or modify Qdrant."""
     from paperless_ai.core.config import AgentConfig
@@ -536,6 +549,7 @@ async def test_embed_batch_dry_run(paperless_client, task_queues, mock_embedder,
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.requires_redis
 async def test_full_phase_b_pipeline_sequential(
     paperless_client, task_queues, mock_embedder, qdrant_store
 ):

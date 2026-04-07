@@ -2,4 +2,3 @@ Analyze the OCR text of the document below and extract the requested metadata.
 
 Rules for extraction:
 - Use null for any field you cannot determine with confidence. Do not invent or guess information.
-- The "correspondent" is specifically the company, institution, or person who sent, authored, or issued the document (do not use the recipient).

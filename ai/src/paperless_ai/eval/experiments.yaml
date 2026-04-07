@@ -3,7 +3,7 @@
 # Any field omitted will fall back to the defaults defined in AgentConfig.
 #
 # agent_class is the dotted import path to the agent class to instantiate.
-# Omitting it defaults to "agents.smart_graph_agent.SmartDocumentAgent".
+# Omitting it defaults to "paperless_ai.agents.smart_graph_agent.SmartDocumentAgent".
 #
 # llm_judge_model is the model used to evaluate title quality as a single LLM judge.
 # Should be a strong, fixed model independent of the experiment to avoid
@@ -15,34 +15,128 @@
 # Ties in an even-sized jury resolve to 0.0 (conservative / "inappropriate").
 experiments:
   # - name: "gemini-2.5"
-  #   agent_class: "agents.smart_graph_agent.SmartDocumentAgent"
+  #   agent_class: "paperless_ai.agents.smart_graph_agent.SmartDocumentAgent"
   #   ocr_model: "gemini/gemini-2.5-flash-lite"
+  #   ocr_temperature: 1.0
+  #   ocr_reasoning_effort: "minimal"
   #   metadata_model: "gemini/gemini-2.5-flash-lite"
-  #   temperature: 1.0
-  #   ocr_reasoning_effort: "minimal"
+  #   metadata_temperature: 1.0
   #   metadata_reasoning_effort: "minimal"
   #   jury:
   #     - model: "gemini/gemini-2.5-flash-lite"
 
-  # - name: "gemini-3.1"
-  #   agent_class: "agents.smart_graph_agent.SmartDocumentAgent"
-  #   ocr_model: "gemini/gemini-3.1-flash-lite-preview"
-  #   metadata_model: "gemini/gemini-3.1-flash-lite-preview"
-  #   temperature: 1
-  #   ocr_reasoning_effort: "minimal"
-  #   metadata_reasoning_effort: "minimal"
-  #   jury:
-  #     - model: "gemini/gemini-2.5-flash-lite"
-
-  - name: "local"
-    agent_class: "agents.smart_graph_agent.SmartDocumentAgent"
-    # Nanonets-OCR2-3B for vision OCR, served via vLLM on complex.home.arpa:8100.
-    # max-model-len is 16128; cap image dimension to stay within that budget.
+  - name: "nanonets-ocr-gemini-2.5-flash-lite-metadata"
+    agent_class: "paperless_ai.agents.smart_graph_agent.SmartDocumentAgent"
     ocr_model: "openai/nanonets/Nanonets-OCR2-3B"
     ocr_api_base: "http://complex.home.arpa:8100/v1"
     ocr_max_image_dimension: 1920
-    metadata_model: "openai/numind/NuExtract-2.0-8B-GPTQ"
-    metadata_api_base: "http://complex.home.arpa:8103/v1"
-    temperature: 0.0
+    ocr_temperature: 0.0
+    ocr_reasoning_effort: null
+    metadata_model: "gemini/gemini-2.5-flash-lite"
+    metadata_temperature: 1.0
+    metadata_reasoning_effort: "minimal"
     jury:
       - model: "gemini/gemini-2.5-flash-lite"
+
+  - name: "nanonets-ocr-gemini-3.1-flash-lite-metadata"
+    agent_class: "paperless_ai.agents.smart_graph_agent.SmartDocumentAgent"
+    ocr_model: "openai/nanonets/Nanonets-OCR2-3B"
+    ocr_api_base: "http://complex.home.arpa:8100/v1"
+    ocr_max_image_dimension: 1920
+    ocr_temperature: 0.0
+    ocr_reasoning_effort: null
+    metadata_model: "gemini/gemini-3.1-flash-lite-preview"
+    metadata_temperature: 1.0
+    metadata_reasoning_effort: "minimal"
+    jury:
+      - model: "gemini/gemini-2.5-flash-lite"
+
+  # - name: "gemini-3.1-flash-lite"
+  #   agent_class: "paperless_ai.agents.smart_graph_agent.SmartDocumentAgent"
+  #   ocr_model: "gemini/gemini-3.1-flash-lite-preview"
+  #   ocr_temperature: 1.0
+  #   ocr_reasoning_effort: "minimal"
+  #   metadata_model: "gemini/gemini-3.1-flash-lite-preview"
+  #   metadata_temperature: 1.0
+  #   metadata_reasoning_effort: "minimal"
+  #   jury:
+  #     - model: "gemini/gemini-2.5-flash-lite"
+
+  # - name: "local"
+  #   agent_class: "paperless_ai.agents.smart_graph_agent.SmartDocumentAgent"
+  #   # Nanonets-OCR2-3B for vision OCR, served via vLLM on complex.home.arpa:8100.
+  #   # max-model-len is 16128; cap image dimension to stay within that budget.
+  #   ocr_model: "openai/nanonets/Nanonets-OCR2-3B"
+  #   ocr_api_base: "http://complex.home.arpa:8100/v1"
+  #   ocr_max_image_dimension: 1920
+  #   ocr_temperature: 0.0
+  #   metadata_model: "openai/numind/NuExtract-2.0-8B-GPTQ"
+  #   metadata_api_base: "http://complex.home.arpa:8103/v1"
+  #   metadata_temperature: 0.0
+  #   jury:
+  #     - model: "gemini/gemini-2.5-flash-lite"
+
+  # - name: "qwen-3.5-thinking-enabled"
+  #   agent_class: "paperless_ai.agents.smart_graph_agent.SmartDocumentAgent"
+  #   ocr_model: "openai/Qwen/Qwen3.5-9B"
+  #   ocr_api_base: "http://complex.home.arpa:8107/v1"
+  #   ocr_max_image_dimension: 1920
+  #   ocr_temperature: 1.0
+  #   # Qwen-recommended parameters for thinking mode (general tasks).
+  #   # max_tokens must be high enough to cover reasoning tokens + JSON output.
+  #   ocr_extra_kwargs:
+  #     top_p: 0.95
+  #     presence_penalty: 1.5
+  #     extra_body:
+  #       top_k: 20
+  #       min_p: 0.0
+  #       repetition_penalty: 1.0
+  #       chat_template_kwargs:
+  #         enable_thinking: true
+  #   metadata_model: "openai/Qwen/Qwen3.5-9B"
+  #   metadata_api_base: "http://complex.home.arpa:8107/v1"
+  #   metadata_temperature: 1.0
+  #   metadata_max_tokens: 20000
+  #   metadata_extra_kwargs:
+  #     top_p: 0.95
+  #     presence_penalty: 1.5
+  #     extra_body:
+  #       top_k: 20
+  #       min_p: 0.0
+  #       repetition_penalty: 1.0
+  #       chat_template_kwargs:
+  #         enable_thinking: true
+  #   jury:
+  #     - model: "gemini/gemini-2.5-flash-lite"
+
+  # - name: "qwen-3.5-thinking-disabled"
+  #   agent_class: "paperless_ai.agents.smart_graph_agent.SmartDocumentAgent"
+  #   ocr_model: "openai/Qwen/Qwen3.5-9B"
+  #   ocr_api_base: "http://complex.home.arpa:8107/v1"
+  #   ocr_max_image_dimension: 1920
+  #   ocr_temperature: 0.7
+  #   # Qwen-recommended parameters for instruct mode (general tasks)
+  #   ocr_extra_kwargs:
+  #     top_p: 0.8
+  #     presence_penalty: 1.5
+  #     extra_body:
+  #       top_k: 20
+  #       min_p: 0.0
+  #       repetition_penalty: 1.0
+  #       chat_template_kwargs:
+  #         enable_thinking: false
+  #   metadata_model: "openai/Qwen/Qwen3.5-9B"
+  #   metadata_api_base: "http://complex.home.arpa:8107/v1"
+  #   metadata_temperature: 0.7
+  #   metadata_max_tokens: 20000
+  #   metadata_extra_kwargs:
+  #     top_p: 0.8
+  #     presence_penalty: 1.5
+  #     extra_body:
+  #       top_k: 20
+  #       min_p: 0.0
+  #       repetition_penalty: 1.0
+  #       chat_template_kwargs:
+  #         enable_thinking: false
+  #   jury:
+  #     - model: "gemini/gemini-2.5-flash-lite"

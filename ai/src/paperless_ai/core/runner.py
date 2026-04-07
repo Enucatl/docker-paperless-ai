@@ -14,12 +14,15 @@ on the next run.  The embedding step is skipped gracefully when the store or
 embedder are not provided (useful for tests and eval mode).
 """
 
+from __future__ import annotations
+
 import asyncio
 import json
 import logging
 import tempfile
 from datetime import date, datetime, timezone
 from pathlib import Path
+from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Optional
 
 from paperless_ai.agents.base import AgentResult, BaseDocumentAgent
@@ -87,7 +90,6 @@ async def _embed_and_store(
     embedder: "InfinityEmbedder",
 ) -> None:
     """Chunk text, embed via Infinity, and upsert vectors into Qdrant."""
-    from paperless_ai.core.hooks import get_embed_hook
     from paperless_ai.search.chunker import chunk_text
     from paperless_ai.search.qdrant_store import ChunkPayload
 
@@ -96,15 +98,10 @@ async def _embed_and_store(
         log.info("Document %d: no text to embed, skipping Qdrant upsert", doc_id)
         return
 
-    # Apply the embed hook to each chunk concurrently.  The default hook
-    # prepends a structured context header (situated embeddings).  Users may
-    # mount a custom EMBED_HOOK_FILE that does arbitrary async work (e.g. LLM
-    # summarisation) before the chunk reaches the embedding model.
+    # Situate chunks before embedding (see hooks.py for strategy selection).
     # The raw chunk is stored in the Qdrant payload so UI snippets show clean text.
-    hook_fn = get_embed_hook()
-    situated_chunks = list(
-        await asyncio.gather(*(hook_fn(chunk, meta, config) for chunk in chunks))
-    )
+    from paperless_ai.core.hooks import situate_chunks
+    situated_chunks = await situate_chunks(chunks, full_text, meta, config)
 
     log.info("Document %d: embedding %d chunk(s) with situated context…", doc_id, len(chunks))
     embeddings = await embedder.embed(situated_chunks)
@@ -140,7 +137,7 @@ async def process_document(
     custom_field_id: int,
     ai_result_field_id: int,
     queue: "DocumentQueue",
-    store: "Optional[QdrantDocumentStore]" = None,
+    store: QdrantDocumentStore | None = None,
     embedder: "Optional[InfinityEmbedder]" = None,
     tag_pending_id: "Optional[int]" = None,
 ) -> bool:
@@ -325,7 +322,7 @@ async def run_batch(
     custom_field_id: int,
     ai_result_field_id: int,
     queue: "DocumentQueue",
-    store: "Optional[QdrantDocumentStore]" = None,
+    store: QdrantDocumentStore | None = None,
     embedder: "Optional[InfinityEmbedder]" = None,
 ) -> tuple[int, int]:
     """Process all documents in the Redis queue concurrently. Returns (success_count, failure_count)."""
@@ -361,7 +358,7 @@ async def run_batch(
         if doc is None:
             log.warning("Document %d not found in Paperless — removing from queue", doc_id)
             await queue.remove(doc_id)
-            return False
+            return None  # silently removed — not a success, not a failure
         async with sem:
             return await process_document(
                 doc, client, agent, config, custom_field_id, ai_result_field_id,
@@ -373,15 +370,41 @@ async def run_batch(
     if _shutdown_requested:
         log.info("Shutdown requested — batch may be incomplete")
 
-    success = sum(1 for ok in results if ok)
-    failure = sum(1 for ok in results if not ok)
+    success = sum(1 for ok in results if ok is True)
+    failure = sum(1 for ok in results if ok is False)
+    return success, failure
+
+
+async def _run_stage(
+    stage_label: str,
+    preflight_url: str | None,
+    queue_key: str,
+    queues: TaskQueues,
+    process_fn: Callable[[int], Awaitable[bool | None]],
+) -> tuple[int, int]:
+    """Shared scaffolding for the three pipeline stages (OCR / metadata / embed).
+
+    Handles preflight health-check, early-exit on empty queue, gather, and
+    success/failure counting.  Stage-specific logic lives in process_fn.
+    """
+    if preflight_url is not None and not await _check_server_reachable(preflight_url):
+        return 0, 0
+
+    pending_ids = await queues.peek_stage(queue_key)
+    if not pending_ids:
+        return 0, 0
+
+    log.info("%s batch: %d document(s) to process", stage_label, len(pending_ids))
+    results = await asyncio.gather(*(process_fn(doc_id) for doc_id in sorted(pending_ids)))
+    success = sum(1 for ok in results if ok is True)
+    failure = sum(1 for ok in results if ok is False)
     return success, failure
 
 
 async def run_ocr_batch(
     client: PaperlessClient,
     config: AgentConfig,
-    queues: "TaskQueues",
+    queues: TaskQueues,
 ) -> tuple[int, int]:
     """OCR stage: download PDF, run vision OCR, write content, transition tag to ai:run-metadata.
 
@@ -390,17 +413,6 @@ async def run_ocr_batch(
     """
     from paperless_ai.agents.smart_graph_agent import run_vision_ocr_only
     from paperless_ai.search.queue import TaskQueues
-
-    # Preflight: skip the batch when the local OCR server is offline so we
-    # don't download PDFs that we can't process yet.
-    if config.ocr_api_base and not await _check_server_reachable(config.ocr_api_base):
-        return 0, 0
-
-    pending_ids = await queues.peek_stage(TaskQueues.KEY_OCR)
-    if not pending_ids:
-        return 0, 0
-
-    log.info("OCR batch: %d document(s) to process", len(pending_ids))
 
     # Look up tag IDs once for the whole batch
     try:
@@ -413,18 +425,19 @@ async def run_ocr_batch(
         tag_metadata_id = await client.get_tag_id(config.tag_metadata, create=True)
     except Exception as e:
         log.error("Cannot resolve metadata tag '%s': %s", config.tag_metadata, e)
+        pending_ids = await queues.peek_stage(TaskQueues.KEY_OCR)
         return 0, len(pending_ids)
 
     sem = asyncio.Semaphore(config.ocr_concurrency)
 
-    async def _process_one(doc_id: int) -> bool:
+    async def _process_one(doc_id: int) -> bool | None:
         if _shutdown_requested:
             return False
         doc = await client.get_document(doc_id)
         if doc is None:
             log.warning("Document %d not found — removing from OCR queue", doc_id)
             await queues.remove(doc_id, TaskQueues.KEY_OCR)
-            return False
+            return None  # silently removed — not a success, not a failure
 
         async with sem:
             try:
@@ -473,16 +486,15 @@ async def run_ocr_batch(
             log.error("Document %d: PATCH failed: %s", doc_id, e)
             return False
 
-    results = await asyncio.gather(*(_process_one(doc_id) for doc_id in sorted(pending_ids)))
-    success = sum(1 for ok in results if ok)
-    failure = sum(1 for ok in results if not ok)
-    return success, failure
+    # Preflight: skip the batch when the local OCR server is offline so we
+    # don't download PDFs that we can't process yet.
+    return await _run_stage("OCR", config.ocr_api_base or None, TaskQueues.KEY_OCR, queues, _process_one)
 
 
 async def run_metadata_batch(
     client: PaperlessClient,
     config: AgentConfig,
-    queues: "TaskQueues",
+    queues: TaskQueues,
     custom_field_id: int,
     ai_result_field_id: int,
 ) -> tuple[int, int]:
@@ -492,21 +504,6 @@ async def run_metadata_batch(
     """
     from paperless_ai.agents.smart_graph_agent import _select_extraction_strategy
     from paperless_ai.search.queue import TaskQueues
-
-    # Preflight: determine which server drives metadata extraction and bail if
-    # it is offline.  When metadata_model is unset the OCR model (and its
-    # api_base) is reused, so fall back to ocr_api_base in that case.
-    meta_server = config.metadata_api_base or (
-        config.ocr_api_base if config.metadata_model is None else None
-    )
-    if meta_server and not await _check_server_reachable(meta_server):
-        return 0, 0
-
-    pending_ids = await queues.peek_stage(TaskQueues.KEY_METADATA)
-    if not pending_ids:
-        return 0, 0
-
-    log.info("Metadata batch: %d document(s) to process", len(pending_ids))
 
     strategy = _select_extraction_strategy(config)
     log.info("Metadata batch: using %s", strategy.__class__.__name__)
@@ -521,24 +518,25 @@ async def run_metadata_batch(
         tag_embed_id = await client.get_tag_id(config.tag_embed, create=True)
     except Exception as e:
         log.error("Cannot resolve embed tag '%s': %s", config.tag_embed, e)
+        pending_ids = await queues.peek_stage(TaskQueues.KEY_METADATA)
         return 0, len(pending_ids)
 
     sem = asyncio.Semaphore(config.ocr_concurrency)
 
-    async def _process_one(doc_id: int) -> bool:
+    async def _process_one(doc_id: int) -> bool | None:
         if _shutdown_requested:
             return False
         doc = await client.get_document_with_content(doc_id)
         if doc is None:
             log.warning("Document %d not found — removing from metadata queue", doc_id)
             await queues.remove(doc_id, TaskQueues.KEY_METADATA)
-            return False
+            return None  # silently removed — not a success, not a failure
 
         content = doc.get("content") or ""
         if not content.strip():
             log.warning("Document %d: no content — skipping metadata extraction", doc_id)
             await queues.remove(doc_id, TaskQueues.KEY_METADATA)
-            return False
+            return None  # silently skipped — not a success, not a failure
 
         async with sem:
             # Truncate to first 4000 + last 2000 chars (same as SmartDocumentAgent)
@@ -574,14 +572,10 @@ async def run_metadata_batch(
             payload["title"] = str(extracted.title)[:128]
 
         if extracted.date:
-            try:
-                parsed = datetime.fromisoformat(str(extracted.date)).date()
-                if date(1900, 1, 1) <= parsed <= date.today():
-                    payload["created_date"] = parsed.isoformat()
-                else:
-                    log.warning("Document %d: AI date '%s' out of range, skipping", doc_id, extracted.date)
-            except ValueError:
-                log.warning("Document %d: invalid AI date '%s', skipping", doc_id, extracted.date)
+            if date(1900, 1, 1) <= extracted.date <= date.today():
+                payload["created_date"] = extracted.date.isoformat()
+            else:
+                log.warning("Document %d: AI date '%s' out of range, skipping", doc_id, extracted.date)
 
         if extracted.correspondent:
             try:
@@ -600,7 +594,7 @@ async def run_metadata_batch(
                 "paperless_version": client.paperless_version,
                 "ai_metadata": {
                     "title": extracted.title,
-                    "document_date": extracted.date,
+                    "document_date": extracted.date.isoformat() if extracted.date else None,
                     "correspondent": extracted.correspondent,
                 },
             },
@@ -624,36 +618,26 @@ async def run_metadata_batch(
             log.error("Document %d: PATCH failed: %s", doc_id, e)
             return False
 
-    results = await asyncio.gather(*(_process_one(doc_id) for doc_id in sorted(pending_ids)))
-    success = sum(1 for ok in results if ok)
-    failure = sum(1 for ok in results if not ok)
-    return success, failure
+    # Preflight: determine which server drives metadata extraction.
+    # When metadata_model is unset the OCR model (and its api_base) is reused.
+    meta_server = config.metadata_api_base or (
+        config.ocr_api_base if config.metadata_model is None else None
+    )
+    return await _run_stage("Metadata", meta_server, TaskQueues.KEY_METADATA, queues, _process_one)
 
 
 async def run_embed_batch(
     client: PaperlessClient,
     config: AgentConfig,
-    queues: "TaskQueues",
-    store: "Optional[QdrantDocumentStore]" = None,
-    embedder: "Optional[InfinityEmbedder]" = None,
+    queues: TaskQueues,
+    store: QdrantDocumentStore | None = None,
+    embedder: Optional[InfinityEmbedder] = None,
 ) -> tuple[int, int]:
     """Embed stage: read content + metadata from Paperless, embed, upsert Qdrant, remove tag.
 
     Zero LLM calls. Can be used to rebuild the index by pushing any doc IDs to queue:embed.
     """
     from paperless_ai.search.queue import TaskQueues
-
-    # Preflight: the Infinity embedding server is always local/GPU — bail if it
-    # is offline so we don't leave documents stuck in the embed queue with no
-    # way to process them.
-    if embedder is not None and not await _check_server_reachable(config.infinity_url):
-        return 0, 0
-
-    pending_ids = await queues.peek_stage(TaskQueues.KEY_EMBED)
-    if not pending_ids:
-        return 0, 0
-
-    log.info("Embed batch: %d document(s) to process", len(pending_ids))
 
     try:
         tag_embed_id = await client.get_tag_id(config.tag_embed, create=False)
@@ -663,14 +647,14 @@ async def run_embed_batch(
 
     sem = asyncio.Semaphore(config.ocr_concurrency)
 
-    async def _process_one(doc_id: int) -> bool:
+    async def _process_one(doc_id: int) -> bool | None:
         if _shutdown_requested:
             return False
         doc = await client.get_document_with_content(doc_id)
         if doc is None:
             log.warning("Document %d not found — removing from embed queue", doc_id)
             await queues.remove(doc_id, TaskQueues.KEY_EMBED)
-            return False
+            return None  # silently removed — not a success, not a failure
 
         content = doc.get("content") or ""
 
@@ -711,10 +695,10 @@ async def run_embed_batch(
         await queues.remove(doc_id, TaskQueues.KEY_EMBED)
         return True
 
-    results = await asyncio.gather(*(_process_one(doc_id) for doc_id in sorted(pending_ids)))
-    success = sum(1 for ok in results if ok)
-    failure = sum(1 for ok in results if not ok)
-    return success, failure
+    # Preflight: the Infinity embedding server is always local/GPU — bail if it
+    # is offline so we don't leave documents stuck in the embed queue.
+    preflight = config.infinity_url if embedder is not None else None
+    return await _run_stage("Embed", preflight, TaskQueues.KEY_EMBED, queues, _process_one)
 
 
 async def purge_ai_notes(client: PaperlessClient, dry_run: bool) -> None:

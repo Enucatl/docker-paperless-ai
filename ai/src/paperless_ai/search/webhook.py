@@ -36,6 +36,7 @@ from contextlib import asynccontextmanager, suppress
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Query, Request, Response, status
+from fastapi.responses import JSONResponse
 
 from paperless_ai.core.paperless import PaperlessClient
 from paperless_ai.search.embedder import LocalLazySearchEmbedder
@@ -72,7 +73,7 @@ RRF_K = 60  # RRF smoothing constant
 
 # Matches the numeric document ID anywhere in a Paperless document URL.
 # e.g. "https://paperless.home/documents/42/detail" → "42"
-_DOC_URL_ID_RE = re.compile(r"/documents/(\d+)")
+_DOC_URL_ID_RE = re.compile(r"/documents/(\d+)(?:/|$)")
 
 
 def _read_secret(env_var: str) -> str | None:
@@ -223,11 +224,11 @@ async def webhook_document(request: Request) -> Response:
     return Response(status_code=202)
 
 
-@app.get("/search")
+@app.get("/search", response_model=None)
 async def search(
     q: str = Query(..., min_length=1, description="Search query"),
     limit: int = Query(20, ge=1, le=100),
-) -> list[int]:
+) -> JSONResponse:
     """Hybrid semantic + keyword search with optional LLM reranking.
 
     Two-Tower Retrieval:
@@ -242,47 +243,60 @@ async def search(
     if _lazy_embedder is None:
         raise HTTPException(status_code=503, detail="Embedder not ready")
 
-    # 1. Concurrent dense and keyword search
-    dense_task = asyncio.create_task(
-        dense_search(_lazy_embedder, _qdrant_url, q, K)
-    )
+    try:
+        # 1. Concurrent dense and keyword search
+        keyword_coro = _keyword_search_safe(q) if _paperless_client else _empty_list()
 
-    if _paperless_client:
-        keyword_task = asyncio.create_task(
-            _keyword_search_safe(q)
+        dense_result, keyword_result = await asyncio.gather(
+            dense_search(_lazy_embedder, _qdrant_url, q, K),
+            keyword_coro,
+            return_exceptions=True,
         )
-    else:
-        # No-op coroutine for gather
-        async def _no_op() -> list[int]:
-            return []
-        keyword_task = asyncio.create_task(_no_op())
 
-    dense_results, keyword_ids = await asyncio.gather(dense_task, keyword_task)
-    dense_ids = [doc_id for doc_id, _ in dense_results]
-    chunk_map = {doc_id: text for doc_id, text in dense_results}
+        if isinstance(dense_result, BaseException):
+            log.warning(
+                "Search: dense retrieval failed, returning empty results (%s: %s)",
+                type(dense_result).__name__,
+                dense_result,
+            )
+            return JSONResponse(content=[])
+        dense_results: list[tuple[int, str]] = dense_result
+        keyword_ids: list[int] = keyword_result if not isinstance(keyword_result, BaseException) else []
 
-    # 2. RRF fusion or fallback to dense
-    if keyword_ids:
-        log.info("Search: dense=%d results, keyword=%d results → RRF fusion", len(dense_ids), len(keyword_ids))
-        fused_ids = rrf_fuse(dense_ids, keyword_ids, k=RRF_K)
-    else:
-        log.debug("Search: keyword track unavailable, using dense results only")
-        fused_ids = dense_ids
+        dense_ids = [doc_id for doc_id, _ in dense_results]
+        chunk_map = {doc_id: text for doc_id, text in dense_results}
 
-    # 3. Optional LLM reranking on top N candidates
-    if _rerank_model and fused_ids:
-        try:
-            candidates = [
-                ScoredDoc(doc_id, 0.0, chunk_map.get(doc_id))
-                for doc_id in fused_ids[:N]
-            ]
-            fused_ids = await llm_rerank(q, candidates, _rerank_model, _rerank_api_base, N)
-            log.info("Search: reranked %d candidates, final=%d", len(candidates), len(fused_ids))
-        except Exception as e:
-            log.warning("LLM reranking failed, using RRF order: %s", e)
-            # fallback: keep RRF order
+        # 2. RRF fusion or fallback to dense
+        if keyword_ids:
+            log.info("Search: dense=%d results, keyword=%d results → RRF fusion", len(dense_ids), len(keyword_ids))
+            fused_ids = rrf_fuse(dense_ids, keyword_ids, k=RRF_K)
+        else:
+            log.debug("Search: keyword track unavailable, using dense results only")
+            fused_ids = dense_ids
 
-    return fused_ids[:limit]
+        # 3. Optional LLM reranking on top N candidates
+        if _rerank_model and fused_ids:
+            try:
+                candidates = [
+                    ScoredDoc(doc_id, 0.0, chunk_map.get(doc_id))
+                    for doc_id in fused_ids[:N]
+                ]
+                fused_ids = await llm_rerank(q, candidates, _rerank_model, _rerank_api_base, N)
+                log.info("Search: reranked %d candidates, final=%d", len(candidates), len(fused_ids))
+            except Exception as e:
+                log.warning("LLM reranking failed, using RRF order: %s", e)
+
+        return JSONResponse(content=fused_ids[:limit])
+
+    except (SystemExit, KeyboardInterrupt, GeneratorExit):
+        raise
+    except BaseException as exc:
+        log.warning("Search endpoint error (%s: %s) — returning empty results", type(exc).__name__, exc)
+        return JSONResponse(content=[])
+
+
+async def _empty_list() -> list[int]:
+    return []
 
 
 async def _keyword_search_safe(query: str) -> list[int]:

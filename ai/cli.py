@@ -100,7 +100,7 @@ async def main_async(args: argparse.Namespace) -> None:
         log.info("Checking Paperless API connectivity...")
         try:
             from paperless_ai.core.paperless import _raise_for_status
-            r = await client._client.get("/api/", follow_redirects=True)
+            r = await client._client.get("/api/")
             _raise_for_status(r)
             log.info(
                 "Paperless API reachable (version: %s)",
@@ -110,22 +110,24 @@ async def main_async(args: argparse.Namespace) -> None:
             log.error("Cannot reach Paperless API at %s: %s", config.paperless_url, e)
             sys.exit(1)
 
-        log.info("Checking LLM connectivity (model: %s)...", config.effective_metadata_model)
-        try:
-            import litellm
-            _kwargs: dict = {
-                "model": config.effective_metadata_model,
-                "messages": [{"role": "user", "content": "Reply with OK"}],
-                "max_tokens": 5,
-            }
-            if config.metadata_api_base:
-                _kwargs["api_base"] = config.metadata_api_base
-            await litellm.acompletion(**_kwargs)
-            log.info("LLM connectivity OK")
-        except Exception as e:
-            log.warning(
-                "LLM connectivity check failed: %s — will retry during processing", e
-            )
+        # Skip LLM connectivity check for eval mode (experiments define their own models)
+        if not args.eval:
+            log.info("Checking LLM connectivity (model: %s)...", config.effective_metadata_model)
+            try:
+                import litellm
+                _kwargs: dict = {
+                    "model": config.effective_metadata_model,
+                    "messages": [{"role": "user", "content": "Reply with OK"}],
+                    "max_tokens": 5,
+                }
+                if config.metadata_api_base:
+                    _kwargs["api_base"] = config.metadata_api_base
+                await litellm.acompletion(**_kwargs)
+                log.info("LLM connectivity OK")
+            except Exception as e:
+                log.warning(
+                    "LLM connectivity check failed: %s — will retry during processing", e
+                )
 
         if args.purge_notes:
             await purge_ai_notes(client, config.dry_run)

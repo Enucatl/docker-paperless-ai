@@ -23,6 +23,16 @@ import niquests
 import pytest
 import redis as _redis_sync
 
+
+def pytest_configure(config):
+    """Register custom pytest markers."""
+    config.addinivalue_line(
+        "markers", "requires_redis: mark test as requiring Redis to be running"
+    )
+    config.addinivalue_line(
+        "markers", "requires_webhook_listener: mark test as requiring webhook-listener to be running"
+    )
+
 PAPERLESS_URL = os.environ.get("PAPERLESS_URL", "http://webserver:8000")
 REDIS_URL = os.environ.get("REDIS_URL", "redis://broker:6379/1")
 QDRANT_URL = os.environ.get("QDRANT_URL", "http://qdrant:6333")
@@ -96,33 +106,36 @@ def _redis_stage_members(stage: str) -> set[int]:
 # ---------------------------------------------------------------------------
 
 
-def _wait_for_paperless(url: str, timeout: int = 180) -> None:
+def _wait_for_paperless(url: str, timeout: int = 5) -> None:
     """Block until the Paperless API responds to /api/ (or timeout expires)."""
     deadline = time.time() + timeout
     while time.time() < deadline:
         try:
-            r = niquests.get(f"{url}/api/", timeout=5, allow_redirects=True)
+            r = niquests.get(f"{url}/api/", timeout=2, allow_redirects=True)
             if r.status_code < 500:
                 return
         except (niquests.RequestException, niquests.ConnectionError):
             pass
-        time.sleep(3)
+        time.sleep(1)
     raise RuntimeError(f"Paperless not ready at {url} after {timeout}s")
 
 
 def _fetch_token(url: str, user: str, password: str, retries: int = 20) -> str:
     """Obtain an API token via Basic Auth. Retries because user creation is async."""
+    import logging
+    log = logging.getLogger(__name__)
     for attempt in range(retries):
         try:
-            r = httpx.post(
+            r = niquests.post(
                 f"{url}/api/token/",
                 json={"username": user, "password": password},
                 timeout=15,
             )
             if r.status_code == 200:
                 return r.json()["token"]
-        except Exception:
-            pass
+            log.warning("_fetch_token: attempt %d/%d status=%d", attempt + 1, retries, r.status_code)
+        except (niquests.ConnectionError, niquests.Timeout) as e:
+            log.warning("_fetch_token: attempt %d/%d connection error: %s", attempt + 1, retries, e)
         time.sleep(3)
     raise RuntimeError(f"Could not obtain Paperless API token after {retries} attempts")
 
@@ -132,13 +145,61 @@ def _fetch_token(url: str, user: str, password: str, retries: int = 20) -> str:
 # ---------------------------------------------------------------------------
 
 
+def _redis_available() -> bool:
+    """Check if Redis is available."""
+    try:
+        r = _redis_client()
+        r.ping()
+        r.close()
+        return True
+    except Exception:
+        return False
+
+
+def _qdrant_available() -> bool:
+    """Check if Qdrant is available."""
+    try:
+        r = niquests.get(f"{QDRANT_URL}/health", timeout=2.0)
+        return r.status_code < 500
+    except Exception:
+        return False
+
+
+def _webhook_listener_available() -> bool:
+    """Check if webhook-listener is available."""
+    try:
+        r = niquests.get(f"{WEBHOOK_URL}/health", timeout=2.0)
+        return r.status_code < 500
+    except Exception:
+        return False
+
+
+@pytest.fixture(scope="session")
+def redis_available():
+    """Fixture that returns whether Redis is available."""
+    return _redis_available()
+
+
+def pytest_runtest_setup(item):
+    """Skip tests that require infrastructure if not available."""
+    if "requires_redis" in item.keywords:
+        if not _redis_available():
+            pytest.skip("Redis is not available")
+    if "requires_webhook_listener" in item.keywords:
+        if not _webhook_listener_available():
+            pytest.skip("webhook-listener is not available")
+
+
 @pytest.fixture(scope="session")
 def paperless_token() -> str:
-    _wait_for_paperless(PAPERLESS_URL)
-    return _fetch_token(PAPERLESS_URL, TEST_USER, TEST_PASS)
+    try:
+        _wait_for_paperless(PAPERLESS_URL)
+        return _fetch_token(PAPERLESS_URL, TEST_USER, TEST_PASS)
+    except RuntimeError as e:
+        pytest.skip(f"Paperless infrastructure not available: {e}")
 
 
-@pytest.fixture(scope="session")
+@pytest.fixture
 async def paperless_client(paperless_token: str):
     from paperless_ai.core.paperless import PaperlessClient
 
@@ -204,6 +265,9 @@ async def document_queue():
     """
     from paperless_ai.search.queue import DocumentQueue
 
+    if not _redis_available():
+        pytest.skip("Redis is not available")
+
     _clear_redis_queue()
     q = DocumentQueue(REDIS_URL)
     yield q
@@ -220,6 +284,9 @@ async def task_queues():
     """
     from paperless_ai.search.queue import TaskQueues
 
+    if not _redis_available():
+        pytest.skip("Redis is not available")
+
     _clear_redis_queue()
     q = TaskQueues(REDIS_URL)
     yield q
@@ -233,14 +300,24 @@ async def task_queues():
 
 
 @pytest.fixture
-def mock_embedder():
+def mock_embedder(monkeypatch):
     """
     A fake InfinityEmbedder that returns deterministic 1024-d dense vectors
     and sparse BM25 weights without making any network calls.
 
     Pass this directly to run_batch() when testing the embedding pipeline.
     Infinity is not available in the test environment.
+
+    Also patches _check_server_reachable so that run_embed_batch's preflight
+    check doesn't bail early — that check is a production guard and is
+    meaningless when a mock embedder is in use.
     """
+    from paperless_ai.core import runner as _runner
+
+    async def _always_reachable(url: str) -> bool:  # noqa: ARG001
+        return True
+
+    monkeypatch.setattr(_runner, "_check_server_reachable", _always_reachable)
     from paperless_ai.search.embedder import EmbeddingResult
 
     class _MockEmbedder:
@@ -305,6 +382,9 @@ async def qdrant_store():
     within the test run (anonymous volume); `docker compose down -v` wipes it.
     """
     from paperless_ai.search.qdrant_store import QdrantDocumentStore
+
+    if not _qdrant_available():
+        pytest.skip("Qdrant is not available")
 
     store = QdrantDocumentStore(url=QDRANT_URL)
     await store.ensure_collection()

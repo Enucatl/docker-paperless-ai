@@ -197,7 +197,7 @@ class TestChunkerBoundaries:
 
         assert len(result) == 2
         assert len(result[0]) == 100
-        assert len(result[1]) == 1
+        assert len(result[1]) == 11  # Second chunk starts at 100-10=90, so [90:101] = 11 chars
 
     def test_last_chunk_preserved(self):
         """Last chunk should be included even if smaller than max_chars."""
@@ -212,11 +212,8 @@ class TestChunkerBoundaries:
         assert len(result) == 3
         assert len(result[-1]) < 100  # Last chunk is partial
 
-        # Reconstruct and verify
-        # This is tricky due to overlap, but all characters should appear
-        joined = result[0] + result[-1][result[-1].startswith(result[1][-20:]) and 20 or 0:]
-        # Just verify all content is accessible
-        assert "a" * 250 == "a" * len(result[0]) or len(result) > 1
+        # Verify overlap between last two chunks
+        assert result[-2][-20:] == result[-1][:20]
 
     def test_start_calculation_no_negative(self):
         """Start position should never go negative."""
@@ -237,16 +234,19 @@ class TestChunkerReconstructability:
     def test_content_preservation(self):
         """All characters should appear in chunks (with overlap)."""
         text = "The quick brown fox jumps over the lazy dog. " * 50
+        # Note: chunk_text strips the input, so we compare against the stripped version
+        stripped_text = text.strip()
         result = chunk_text(text, max_chars=500, overlap=50)
 
         # Reconstruct by removing overlap from all but first chunk
         reconstructed = result[0]
         for i in range(1, len(result)):
             # Each subsequent chunk overlaps by 50 chars with previous
-            # So skip the first 50 chars (which are the tail of the previous chunk)
-            reconstructed += result[i][50:]
+            # Skip the first 50 chars (the overlap), or less if chunk is smaller
+            skip_chars = min(50, len(result[i]))
+            reconstructed += result[i][skip_chars:]
 
-        assert reconstructed == text
+        assert reconstructed == stripped_text
 
     def test_word_boundaries_soft(self):
         """Chunks may split mid-word (no word boundary logic)."""

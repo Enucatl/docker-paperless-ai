@@ -41,7 +41,7 @@ done
 # ---------------------------------------------------------------------------
 if [ "$SKIP_BUILD" = false ]; then
     echo "=== Building AI test image ==="
-    $COMPOSE build ai
+    $COMPOSE build ai webhook-listener
 fi
 
 # ---------------------------------------------------------------------------

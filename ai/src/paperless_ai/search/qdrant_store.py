@@ -88,11 +88,8 @@ class QdrantDocumentStore:
             PointStruct(
                 id=chunk.doc_id * 10_000 + chunk.chunk_index,
                 vector={
-                    "dense": dense_vecs[i],
-                    "sparse": SparseVector(
-                        indices=sparse_indices[i],
-                        values=sparse_values[i],
-                    ),
+                    "dense": dense,
+                    "sparse": SparseVector(indices=s_idx, values=s_val),
                 },
                 payload={
                     "doc_id": chunk.doc_id,
@@ -103,7 +100,9 @@ class QdrantDocumentStore:
                     "text": chunk.text,
                 },
             )
-            for i, chunk in enumerate(chunks)
+            for chunk, dense, s_idx, s_val in zip(
+                chunks, dense_vecs, sparse_indices, sparse_values
+            )
         ]
         if points:
             await self._client.upsert(collection_name=COLLECTION, points=points)

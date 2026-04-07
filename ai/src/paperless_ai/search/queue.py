@@ -92,9 +92,11 @@ class TaskQueues:
 
     async def pending_count(self) -> dict[str, int]:
         """Return pending counts for all three stages."""
-        ocr = await self._redis.scard(self.KEY_OCR)
-        metadata = await self._redis.scard(self.KEY_METADATA)
-        embed = await self._redis.scard(self.KEY_EMBED)
+        async with self._redis.pipeline() as pipe:
+            pipe.scard(self.KEY_OCR)
+            pipe.scard(self.KEY_METADATA)
+            pipe.scard(self.KEY_EMBED)
+            ocr, metadata, embed = await pipe.execute()
         return {"ocr": int(ocr), "metadata": int(metadata), "embed": int(embed)}
 
     async def close(self) -> None:

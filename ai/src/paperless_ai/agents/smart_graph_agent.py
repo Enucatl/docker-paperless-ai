@@ -9,14 +9,12 @@ Key design decisions:
 - Vision OCR is always used (no native text extraction) for consistent quality
   across all PDF types. PyMuPDF native text is unreliable for scanned/mixed PDFs.
 - PyMuPDF pixmaps are del'd immediately after base64 encoding to avoid leaks.
-- gc.collect() is called after each vision batch to release C-heap memory.
 - LangGraph annotated state uses operator.add to accumulate text chunks without
   holding all images in memory simultaneously.
 """
 
 import asyncio
 import base64
-import gc
 import json
 import logging
 import re
@@ -24,7 +22,7 @@ import time
 from abc import ABC, abstractmethod
 from typing import Optional
 
-from datetime import datetime
+import datetime as _dt
 
 import fitz  # PyMuPDF
 import litellm
@@ -40,8 +38,7 @@ log = logging.getLogger(__name__)
 # Regex patterns for thinking tags emitted by some reasoning models
 # (DeepSeek-R1, Qwen-QwQ, etc.) when thinking is not separated into
 # reasoning_content by the provider/LiteLLM.
-_THINK_TAG_RE = re.compile(r"<think>.*?</think>", re.DOTALL | re.IGNORECASE)
-_THINKING_TAG_RE = re.compile(r"<thinking>.*?</thinking>", re.DOTALL | re.IGNORECASE)
+_THINK_RE = re.compile(r"<(think|thinking)>.*?</\1>", re.DOTALL | re.IGNORECASE)
 
 
 def _get_completion_text(response) -> str:
@@ -81,8 +78,7 @@ def _get_completion_text(response) -> str:
         return content
 
     # Case 2: strip inline thinking tags for providers not yet normalised.
-    content = _THINK_TAG_RE.sub("", content)
-    content = _THINKING_TAG_RE.sub("", content)
+    content = _THINK_RE.sub("", content)
     return content.strip()
 
 
@@ -95,23 +91,47 @@ class _ExtractedMetadata(BaseModel):
             "Do NOT include full sentences, conversational text, disclaimers, or notes about the extraction process."
         ),
     )
-    date: Optional[str] = Field(
+    date: Optional[_dt.date] = Field(
         default=None, description="Primary document date as YYYY-MM-DD."
     )
     correspondent: Optional[str] = Field(
         default=None,
-        description="Name of the issuing organisation — not the recipient.",
+        description=(
+            "Name of the company, institution, organization or person who sent, authored, or issued the document — not the recipient."
+            "Prefer the name of the institution if the document is signed by a specific person on its behalf."
+        ),
+    )
+    summary: Optional[str] = Field(
+        default=None,
+        description=(
+            "One or two sentences summarising the document's content and purpose. "
+            "Used as retrieval context for semantic search. Be specific and factual."
+        ),
     )
 
     @field_validator("date", mode="before")
     @classmethod
-    def strip_time(cls, v):
-        if not isinstance(v, str):
-            return v
-        try:
-            return datetime.fromisoformat(v).date().isoformat()
-        except ValueError:
-            return v
+    def coerce_datetime_to_date(cls, v):
+        """Convert datetime objects to date (strip time component)."""
+        if isinstance(v, _dt.datetime):
+            return v.date()
+        return v
+
+
+def _field_instructions_from_schema() -> str:
+    """Generate prompt instructions from _ExtractedMetadata field descriptions.
+
+    Per Google's vLLM best practice: response_format enforces structure but the
+    model never sees the schema descriptions — those must be in the system prompt.
+    Always append this to the metadata system prompt regardless of which
+    response_format tier is used.
+    """
+    props = _ExtractedMetadata.model_json_schema().get("properties", {})
+    lines = ["Output JSON with these fields:"]
+    for field_name, field_info in props.items():
+        description = field_info.get("description", "")
+        lines.append(f"- {field_name}: {description}")
+    return "\n".join(lines)
 
 
 # ---------------------------------------------------------------------------
@@ -153,8 +173,31 @@ class StructuredOutputStrategy(BaseExtractionStrategy):
 
     async def extract(self, text: str, config: AgentConfig) -> _ExtractedMetadata:
         """Use standard LLM with response_format tiering."""
+        # Tier response_format by what the model actually supports
+        if litellm.supports_response_schema(model=config.effective_metadata_model):
+            # Gemini and similar: reads field descriptions directly from the schema
+            system_prompt = config.metadata_prompt
+            response_format = _ExtractedMetadata
+        elif "response_format" in (
+            litellm.get_supported_openai_params(model=config.effective_metadata_model)
+            or []
+        ):
+            # vLLM / OpenAI-compatible (e.g. Qwen): structural enforcement via json_schema,
+            # but model doesn't see schema descriptions — must include them in the prompt
+            system_prompt = config.metadata_prompt + "\n\n" + _field_instructions_from_schema()
+            response_format = {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "extracted-metadata",
+                    "schema": _ExtractedMetadata.model_json_schema(),
+                },
+            }
+        else:
+            system_prompt = config.metadata_prompt + "\n\n" + _field_instructions_from_schema()
+            response_format = None
+
         messages = [
-            {"role": "system", "content": config.metadata_prompt},
+            {"role": "system", "content": system_prompt},
             {"role": "user", "content": text},
         ]
         kwargs: dict = {
@@ -165,15 +208,8 @@ class StructuredOutputStrategy(BaseExtractionStrategy):
         }
         if "temperature" not in kwargs:
             kwargs["temperature"] = 0
-
-        # Tier response_format by what the model actually supports
-        if litellm.supports_response_schema(model=config.effective_metadata_model):
-            kwargs["response_format"] = _ExtractedMetadata
-        elif "response_format" in (
-            litellm.get_supported_openai_params(model=config.effective_metadata_model)
-            or []
-        ):
-            kwargs["response_format"] = {"type": "json_object"}
+        if response_format is not None:
+            kwargs["response_format"] = response_format
 
         if config.metadata_api_base:
             kwargs["api_base"] = config.metadata_api_base
@@ -187,11 +223,12 @@ class StructuredOutputStrategy(BaseExtractionStrategy):
             return _ExtractedMetadata.model_validate_json(raw)
         except Exception:
             data = self._fallback_parse(raw)
-            return _ExtractedMetadata(
-                title=data.get("title"),
-                date=data.get("date"),
-                correspondent=data.get("correspondent"),
-            )
+            try:
+                return _ExtractedMetadata.model_validate(data)
+            except Exception:
+                # If date is unparseable, drop it and keep the rest
+                data.pop("date", None)
+                return _ExtractedMetadata.model_validate(data)
 
 
 def _select_extraction_strategy(config: AgentConfig) -> BaseExtractionStrategy:
@@ -241,36 +278,41 @@ class NuExtractStrategy(BaseExtractionStrategy):
         if config.metadata_api_base:
             base_kwargs["api_base"] = config.metadata_api_base
 
+        from tenacity import AsyncRetrying, retry_if_exception_type, stop_after_attempt
+
         max_attempts = max(1, config.nuextract_json_retries)
         raw = "{}"
-        for attempt in range(1, max_attempts + 1):
-            # Increase temperature on retries to encourage variation.
-            # Without this, temperature=0 would produce identical output on every attempt,
-            # making retries useless. Temperature=0.1 adds just enough stochasticity
-            # to get different outputs while still keeping them constrained.
-            kwargs = {**base_kwargs, "temperature": 0 if attempt == 1 else 0.1}
-            response = await litellm.acompletion(**kwargs)
-            raw = _get_completion_text(response) or "{}"
-            log.info(
-                "Smart agent: metadata raw response (attempt %d/%d): %s",
-                attempt,
-                max_attempts,
-                raw,
-            )
-            try:
-                data = json.loads(raw)
-                return _ExtractedMetadata(
-                    title=data.get(self.document_title_key),
-                    date=data.get(self.date_key),
-                    correspondent=data.get(self.correspondent_key),
-                )
-            except json.JSONDecodeError:
-                if attempt < max_attempts:
-                    log.warning(
-                        "Smart agent: NuExtract returned invalid JSON on attempt %d/%d, retrying…",
-                        attempt,
+
+        try:
+            async for attempt in AsyncRetrying(
+                stop=stop_after_attempt(max_attempts),
+                retry=retry_if_exception_type(json.JSONDecodeError),
+                reraise=True,
+            ):
+                with attempt:
+                    # Increase temperature on retries to encourage variation.
+                    # Without this, temperature=0 produces identical output every
+                    # attempt. 0.1 adds just enough stochasticity.
+                    attempt_num = attempt.retry_state.attempt_number
+                    kwargs = {**base_kwargs, "temperature": 0 if attempt_num == 1 else 0.1}
+                    response = await litellm.acompletion(**kwargs)
+                    raw = _get_completion_text(response) or "{}"
+                    log.info(
+                        "Smart agent: NuExtract raw (attempt %d/%d): %s",
+                        attempt_num,
                         max_attempts,
+                        raw,
                     )
+                    data = json.loads(raw)
+                    return _ExtractedMetadata.model_validate(
+                        {
+                            "title": data.get(self.document_title_key),
+                            "date": data.get(self.date_key),
+                            "correspondent": data.get(self.correspondent_key),
+                        }
+                    )
+        except json.JSONDecodeError:
+            pass
 
         # All retries exhausted — fall back to heuristic parsing
         log.warning(
@@ -278,10 +320,12 @@ class NuExtractStrategy(BaseExtractionStrategy):
             max_attempts,
         )
         data = self._fallback_parse(raw)
-        return _ExtractedMetadata(
-            title=data.get(self.document_title_key),
-            date=data.get(self.date_key),
-            correspondent=data.get(self.correspondent_key),
+        return _ExtractedMetadata.model_validate(
+            {
+                "title": data.get(self.document_title_key),
+                "date": data.get(self.date_key),
+                "correspondent": data.get(self.correspondent_key),
+            }
         )
 
 
@@ -425,9 +469,6 @@ async def _batched_vision_ocr(state: AgentState, config: AgentConfig) -> dict:
 
     responses = await asyncio.gather(*tasks)
     chunks = [_get_completion_text(r) for r in responses]
-
-    # Force GC to reclaim any remaining image buffers from the event loop
-    gc.collect()
 
     return {
         "extracted_text_chunks": chunks,
@@ -602,6 +643,7 @@ class SmartDocumentAgent(BaseDocumentAgent):
             title=extracted_dict.get("title"),
             document_date=extracted_dict.get("date"),
             correspondent=extracted_dict.get("correspondent"),
+            summary=extracted_dict.get("summary"),
             full_ocr_transcript=full_text,
         )
 

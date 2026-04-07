@@ -22,6 +22,7 @@ Expected response shape:
 
 import asyncio
 import logging
+import threading
 import time
 from dataclasses import dataclass, field
 
@@ -49,7 +50,7 @@ class InfinityEmbedder:
 
     async def aclose(self) -> None:
         """Close the underlying HTTP client connection pool."""
-        await self._client.aclose()
+        await self._client.close()
 
     async def __aenter__(self):
         return self
@@ -99,15 +100,22 @@ class LocalLazySearchEmbedder:
 
     def __init__(self) -> None:
         self.model = None  # sentence_transformers.SentenceTransformer | None
+        self._lock = threading.Lock()
         self._last_used: float = 0.0
 
     def _get_model(self):
-        """Return the SentenceTransformer model, loading it on first call."""
-        if self.model is None:
-            from sentence_transformers import SentenceTransformer
+        """Return the SentenceTransformer model, loading it on first call.
 
-            log.info("Loading SentenceTransformer %s into RAM…", self.MODEL_NAME)
-            self.model = SentenceTransformer(self.MODEL_NAME, trust_remote_code=True)
+        Uses double-checked locking so concurrent threads don't each load the
+        1 GB+ model into RAM simultaneously.
+        """
+        if self.model is None:
+            with self._lock:
+                if self.model is None:
+                    from sentence_transformers import SentenceTransformer
+
+                    log.info("Loading SentenceTransformer %s into RAM…", self.MODEL_NAME)
+                    self.model = SentenceTransformer(self.MODEL_NAME, trust_remote_code=True)
         self._last_used = time.monotonic()
         return self.model
 
@@ -136,4 +144,4 @@ class LocalLazySearchEmbedder:
                 self.model = None
                 import gc
 
-                gc.collect()
+                await asyncio.to_thread(gc.collect)

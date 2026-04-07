@@ -442,7 +442,7 @@ class PaperlessClient:
                         "url": webhook_url,
                         "use_params": True,
                         "as_json": True,
-                        "params": {"doc_url": "{{doc_url}}", "tag_list": "{{tag_list}}"},
+                        "params": {"doc_url": "{{doc_url}}"},
                         "headers": webhook_headers,
                     },
                 },
@@ -466,7 +466,7 @@ class PaperlessClient:
                         "url": webhook_url,
                         "use_params": True,
                         "as_json": True,
-                        "params": {"doc_url": "{{doc_url}}", "tag_list": "{{tag_list}}"},
+                        "params": {"doc_url": "{{doc_url}}"},
                         "headers": webhook_headers,
                     },
                 }

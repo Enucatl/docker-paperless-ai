@@ -148,10 +148,7 @@ async def test_ensure_ai_workflows_creates_added_and_updated_workflows():
         assert added_payload["actions"][0]["type"] == 1
         assert added_payload["actions"][0]["assign_tags"] == [10]
         assert added_payload["actions"][1]["type"] == 4
-        assert added_payload["actions"][1]["webhook"]["params"] == {
-            "doc_url": "{{doc_url}}",
-            "tag_list": "{{tag_list}}",
-        }
+        assert added_payload["actions"][1]["webhook"]["params"] == {"doc_url": "{{doc_url}}"}
         assert added_payload["actions"][1]["webhook"]["headers"] == {"X-Webhook-Token": "secret-123"}
 
         updated_workflow_call = mock_session.post.await_args_list[2]
@@ -160,10 +157,7 @@ async def test_ensure_ai_workflows_creates_added_and_updated_workflows():
         assert updated_payload["triggers"][0]["type"] == 3
         assert updated_payload["triggers"][0]["filter_has_tags"] == [10]
         assert updated_payload["actions"][0]["type"] == 4
-        assert updated_payload["actions"][0]["webhook"]["params"] == {
-            "doc_url": "{{doc_url}}",
-            "tag_list": "{{tag_list}}",
-        }
+        assert updated_payload["actions"][0]["webhook"]["params"] == {"doc_url": "{{doc_url}}"}
 
 
 @pytest.mark.asyncio

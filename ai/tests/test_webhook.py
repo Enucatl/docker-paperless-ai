@@ -486,8 +486,7 @@ async def _create_webhook_workflow(
     filter_has_tags: list | None = None,
 ) -> int:
     """
-    Create a Paperless Workflow that POSTs {"doc_url": "{{doc_url}}",
-    "tag_list": "{{tag_list}}"} to the
+    Create a Paperless Workflow that POSTs {"doc_url": "{{doc_url}}"} to the
     webhook-listener on the given trigger and return the workflow ID.
 
     filter_has_tags: list of tag IDs the document must carry for the trigger
@@ -512,7 +511,7 @@ async def _create_webhook_workflow(
                     "url": _PAPERLESS_FACING_WEBHOOK_ENDPOINT,
                     "use_params": True,
                     "as_json": True,
-                    "params": {"doc_url": "{{doc_url}}", "tag_list": "{{tag_list}}"},
+                    "params": {"doc_url": "{{doc_url}}"},
                     "headers": {"X-Webhook-Token": TEST_WEBHOOK_SECRET},
                 },
             }
@@ -590,7 +589,7 @@ async def test_auto_managed_updated_workflow_routes_tagged_docs_to_ocr_queue(
     paperless_client, document_queue, uploaded_document
 ):
     """
-    Real auto-managed workflow payload preserves tag_list for backfills.
+    Real auto-managed workflow routing uses current Paperless tags for backfills.
 
     This covers the production path that regressed:
     1. Upload a document before workflows exist.

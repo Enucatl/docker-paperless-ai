@@ -225,7 +225,7 @@ services:
 
       # Behaviour tuning (all optional)
       - POLL_INTERVAL
-      - TAG_PENDING=ai-review-pending
+      - TAG_OCR=ai:run-ocr
       - OCR_REASONING_EFFORT
       - OCR_CONCURRENCY
       - LLM_RETRIES

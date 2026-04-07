@@ -28,6 +28,11 @@
     }
   },
   "loggers": {
+    "paperless_ai": {
+      "handlers": ["default"],
+      "level": "INFO",
+      "propagate": false
+    },
     "uvicorn": {
       "handlers": ["default"],
       "level": "INFO",
@@ -43,5 +48,9 @@
       "level": "INFO",
       "propagate": false
     }
+  },
+  "root": {
+    "handlers": ["default"],
+    "level": "INFO"
   }
 }

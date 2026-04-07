@@ -111,3 +111,48 @@ async def test_paperless_client_metadata_resolvers_use_cached_lists():
             assert await client.get_storage_path_name(31) == "Archive/2023"
 
         assert mock_session.get.await_count == 4
+
+
+@pytest.mark.asyncio
+async def test_ensure_ai_workflows_creates_added_and_updated_workflows():
+    with patch("paperless_ai.core.paperless.niquests.AsyncSession") as mock_session_class:
+        mock_session = AsyncMock()
+        mock_session_class.return_value = mock_session
+        mock_session.close = AsyncMock()
+        mock_session.get = AsyncMock(return_value=_paged_response([]))
+        mock_session.post = AsyncMock(
+            side_effect=[
+                MagicMock(status_code=201, ok=True, headers={}, json=MagicMock(return_value={"id": 10})),
+                MagicMock(status_code=201, ok=True, headers={}, json=MagicMock(return_value={"id": 201})),
+                MagicMock(status_code=201, ok=True, headers={}, json=MagicMock(return_value={"id": 202})),
+            ]
+        )
+        mock_session.patch = AsyncMock()
+
+        async with PaperlessClient("http://test:8000", "token123") as client:
+            added_id, updated_id = await client.ensure_ai_workflows(
+                tag_ocr="ai:run-ocr",
+                webhook_url="http://webhook-listener:8001/webhook/document",
+                webhook_secret="secret-123",
+            )
+
+        assert (added_id, updated_id) == (201, 202)
+
+        tag_create_call = mock_session.post.await_args_list[0]
+        assert tag_create_call.args[0] == "/api/tags/"
+        assert tag_create_call.kwargs["json"] == {"name": "ai:run-ocr"}
+
+        added_workflow_call = mock_session.post.await_args_list[1]
+        added_payload = added_workflow_call.kwargs["json"]
+        assert added_payload["name"] == "paperless-ai: document-added"
+        assert added_payload["actions"][0]["type"] == 1
+        assert added_payload["actions"][0]["assign_tags"] == [10]
+        assert added_payload["actions"][1]["type"] == 4
+        assert added_payload["actions"][1]["webhook"]["headers"] == {"X-Webhook-Token": "secret-123"}
+
+        updated_workflow_call = mock_session.post.await_args_list[2]
+        updated_payload = updated_workflow_call.kwargs["json"]
+        assert updated_payload["name"] == "paperless-ai: document-updated"
+        assert updated_payload["triggers"][0]["type"] == 3
+        assert updated_payload["triggers"][0]["filter_has_tags"] == [10]
+        assert updated_payload["actions"][0]["type"] == 4

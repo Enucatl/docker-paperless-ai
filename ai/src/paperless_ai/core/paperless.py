@@ -37,6 +37,7 @@ class PaperlessClient:
         self._tags_cache: list[dict] | None = None
         self._document_types_cache: list[dict] | None = None
         self._storage_paths_cache: list[dict] | None = None
+        self._workflows_cache: list[dict] | None = None
 
     async def aclose(self):
         await self._client.close()
@@ -373,6 +374,94 @@ class PaperlessClient:
         )
         _raise_for_status(r)
         return [doc["id"] for doc in r.json().get("results", [])]
+
+    async def _get_all_workflows(self) -> list[dict]:
+        return await self._get_all_objects("/api/workflows/", "_workflows_cache", force=False)
+
+    async def ensure_workflow(self, name: str, payload: dict) -> int:
+        """Create or update a Paperless workflow by name."""
+        workflows = await self._get_all_workflows()
+        existing = next((wf for wf in workflows if wf.get("name") == name), None)
+        if existing is None:
+            r = await self._client.post("/api/workflows/", json=payload)
+            _raise_for_status(r)
+            workflow = r.json()
+            workflows.append(workflow)
+            log.info("Created workflow '%s' (id=%d)", name, workflow["id"])
+            return workflow["id"]
+
+        r = await self._client.patch(f"/api/workflows/{existing['id']}/", json=payload)
+        _raise_for_status(r)
+        log.info("Updated workflow '%s' (id=%d)", name, existing["id"])
+        return existing["id"]
+
+    async def ensure_ai_workflows(
+        self,
+        *,
+        tag_ocr: str,
+        webhook_url: str,
+        webhook_secret: str | None = None,
+    ) -> tuple[int, int]:
+        """Ensure the Paperless AI workflows exist and are configured correctly."""
+        tag_ocr_id = await self.get_tag_id(tag_ocr, create=True)
+        webhook_headers = {"X-Webhook-Token": webhook_secret} if webhook_secret else {}
+
+        added_payload = {
+            "name": "paperless-ai: document-added",
+            "enabled": True,
+            "order": 0,
+            "triggers": [
+                {
+                    "type": 2,  # DOCUMENT_ADDED
+                    "sources": [],
+                    "filter_has_tags": [],
+                }
+            ],
+            "actions": [
+                {
+                    "type": 1,  # ASSIGNMENT
+                    "assign_tags": [tag_ocr_id],
+                },
+                {
+                    "type": 4,  # WEBHOOK
+                    "webhook": {
+                        "url": webhook_url,
+                        "use_params": True,
+                        "as_json": True,
+                        "params": {"doc_url": "{{doc_url}}"},
+                        "headers": webhook_headers,
+                    },
+                },
+            ],
+        }
+        updated_payload = {
+            "name": "paperless-ai: document-updated",
+            "enabled": True,
+            "order": 1,
+            "triggers": [
+                {
+                    "type": 3,  # DOCUMENT_UPDATED
+                    "sources": [],
+                    "filter_has_tags": [tag_ocr_id],
+                }
+            ],
+            "actions": [
+                {
+                    "type": 4,  # WEBHOOK
+                    "webhook": {
+                        "url": webhook_url,
+                        "use_params": True,
+                        "as_json": True,
+                        "params": {"doc_url": "{{doc_url}}"},
+                        "headers": webhook_headers,
+                    },
+                }
+            ],
+        }
+
+        added_id = await self.ensure_workflow(added_payload["name"], added_payload)
+        updated_id = await self.ensure_workflow(updated_payload["name"], updated_payload)
+        return added_id, updated_id
 
     async def update_tags(self, doc: dict, remove_id: int, add_id: int | None) -> None:
         """Remove pending tag from document, optionally adding another."""

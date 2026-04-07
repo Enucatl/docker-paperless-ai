@@ -126,6 +126,11 @@ class AgentConfig(BaseSettings):
     # Qdrant vector store
     qdrant_url: str = "http://qdrant:6333"
 
+    # Paperless workflow automation
+    manage_paperless_workflows: bool = True
+    paperless_webhook_url: str = "http://webhook-listener:8001/webhook/document"
+    webhook_secret: Optional[str] = None
+
     # Infinity embedding server (bge-m3, dense + sparse)
     infinity_url: str = "http://complex.home.arpa:8102"
     embedding_model: str = "BAAI/bge-m3"

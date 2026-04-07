@@ -286,7 +286,7 @@ async def test_metadata_batch_writes_metadata_and_transitions_tag(
         "ai_processed", data_type="date"
     )
     ai_summary_field_id = await paperless_client.get_or_create_custom_field(
-        "AI Summary", data_type="string"
+        "ai_summary", data_type="string"
     )
     ai_result_field_id = await paperless_client.get_or_create_custom_field(
         "ai_result", data_type="longtext"
@@ -348,7 +348,7 @@ async def test_metadata_batch_skips_empty_content(paperless_client, task_queues,
 
     custom_field_id = await paperless_client.get_or_create_custom_field("ai_processed")
     ai_summary_field_id = await paperless_client.get_or_create_custom_field(
-        "AI Summary", data_type="string"
+        "ai_summary", data_type="string"
     )
     ai_result_field_id = await paperless_client.get_or_create_custom_field("ai_result", data_type="longtext")
 
@@ -382,7 +382,7 @@ async def test_metadata_batch_dry_run(paperless_client, task_queues, document_qu
 
     custom_field_id = await paperless_client.get_or_create_custom_field("ai_processed")
     ai_summary_field_id = await paperless_client.get_or_create_custom_field(
-        "AI Summary", data_type="string"
+        "ai_summary", data_type="string"
     )
     ai_result_field_id = await paperless_client.get_or_create_custom_field("ai_result", data_type="longtext")
 
@@ -590,7 +590,7 @@ async def test_full_phase_b_pipeline_sequential(
         "ai_processed", data_type="date"
     )
     ai_summary_field_id = await paperless_client.get_or_create_custom_field(
-        "AI Summary", data_type="string"
+        "ai_summary", data_type="string"
     )
     ai_result_field_id = await paperless_client.get_or_create_custom_field(
         "ai_result", data_type="longtext"

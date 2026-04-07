@@ -112,34 +112,81 @@ PAPERLESS_TOKEN=        # from paperless UI: Settings → API Tokens
 GOOGLE_API_KEY=         # if using Gemini (default)
 ```
 
-### 2. Create a Paperless Workflow
+### 2. Configure Paperless
 
-In the Paperless UI go to **Settings → Workflows** and create **one** workflow
-with the following configuration:
+In the Paperless UI go to **Settings -> API Tokens** and create an API token
+for the AI services. Put that value into `PAPERLESS_TOKEN` (or
+`PAPERLESS_TOKEN_FILE`).
 
-- **Trigger:** Document Added
+The token must be allowed to:
 
-Then add **two actions in this exact order** (order matters — the tag must be
-assigned before the webhook fires, otherwise the webhook router may not see it):
+- read and patch documents
+- create and update tags
+- create and update custom fields
+- create and update workflows
 
-1. **Action: Assignment** → add tag `ai:run-ocr`
-2. **Action: Webhook** → URL: `http://webhook-listener:8001/webhook/document`
+If the token cannot manage workflows and `MANAGE_PAPERLESS_WORKFLOWS=true`
+(default), the `ai` service will fail on startup instead of running with a
+partially configured Paperless instance.
 
-> **Why one workflow?** If you create two separate workflows (one for the tag,
-> one for the webhook), Paperless may fire them in any order. If the webhook
-> fires first, the router sees no `ai:run-ocr` tag and silently skips OCR.
-> Combining both actions in a single workflow guarantees sequential execution.
+By default the `ai` service creates or updates the required Paperless workflows
+automatically on startup:
+
+- `paperless-ai: document-added`
+- `paperless-ai: document-updated`
+
+The service also creates or updates the required `ai:run-ocr` tag if it does
+not exist. If `WEBHOOK_SECRET` is set, the generated workflows include the
+matching `X-Webhook-Token` header automatically.
+
+If you prefer to manage workflows yourself, set:
+
+```env
+MANAGE_PAPERLESS_WORKFLOWS=false
+```
+
+and create the same two workflows manually:
+
+- `Document Added`: assignment adds `ai:run-ocr`, then webhook posts to `http://webhook-listener:8001/webhook/document`
+- `Document Updated`: filtered on `ai:run-ocr`, webhook posts to `http://webhook-listener:8001/webhook/document`
 
 Tags (`ai:run-ocr`, `ai:run-metadata`, `ai:run-embed`) are created automatically
-on first run if they do not exist.
+on first run if they do not exist. The AI service also creates these custom
+fields automatically on first successful startup:
+
+- `ai_processed` (Date)
+- `ai_summary` (String)
+- `ai_result` (Long text)
 
 ### 3. Start the stack
 
 ```bash
-docker compose up -d
+docker compose --profile ai up -d
 ```
 
-This starts Redis, PostgreSQL, paperless-ngx, Gotenberg, Tika, and the AI worker.
+This starts Redis, PostgreSQL, paperless-ngx, Gotenberg, Tika, Qdrant,
+Phoenix, the webhook listener, and the long-running AI worker.
+
+### 4. Normal operation
+
+After the stack is up and the workflows exist, new documents flow automatically:
+
+1. Paperless imports a file.
+2. The auto-managed `document-added` workflow adds tag `ai:run-ocr`.
+3. The same workflow sends the webhook to `webhook-listener`.
+4. The webhook listener enqueues the document in Redis.
+5. The `ai` service runs OCR -> metadata -> embedding.
+6. The pipeline removes the stage tags when each step completes.
+7. The worker writes:
+   - `ai_processed`
+   - `ai_summary`
+   - `ai_result`
+
+The `webhook-listener` also exposes:
+
+- `/search` for hybrid retrieval
+- `/chat` for the browser chat UI
+- `/ws/chat` for the WebSocket copilot endpoint
 
 ### One-shot run
 
@@ -156,6 +203,23 @@ Preview actions without modifying any documents:
 ```bash
 docker compose run --rm ai --once --dry-run
 ```
+
+### Backfill or process all existing documents
+
+For documents that were already in Paperless before the workflows existed:
+
+1. Make sure the auto-managed `document-updated` workflow exists, or create it manually if workflow automation is disabled.
+2. In the Paperless UI, bulk-select the documents you want to process.
+3. Add the tag `ai:run-ocr`.
+4. Paperless emits `Document Updated`, the webhook fires, and the queue fills.
+5. Leave `ai` running, or drain the queue once with:
+
+```bash
+docker compose run --rm ai --once
+```
+
+If you want to do the whole library in batches, just bulk-assign `ai:run-ocr`
+to increasingly large slices of your archive.
 
 ## Switching models
 
@@ -287,11 +351,22 @@ docker compose restart ai
 
 ## Finding processed documents
 
-On first run the worker creates a custom field **`ai_processed`** (type: Date) and sets it to the processing date on every document it finishes. The field does not appear as a tag — it shows in the document detail panel and is filterable in the search bar (`ai_processed is set` / `ai_processed is not set`).
+On first run the worker creates these custom fields automatically:
+
+- `ai_processed` (Date)
+- `ai_summary` (String)
+- `ai_result` (Long text)
+
+`ai_processed` is set to the processing date on every successfully finished
+document. `ai_summary` stores the extracted 1-2 sentence summary so it can be
+shown directly in the Paperless UI or added as a list column. `ai_result`
+stores the structured JSON payload for debugging and audits.
 
 ## Reprocessing a document
 
-Re-add the `ai:run-ocr` tag and the worker will pick the document up on the next poll, restarting the full three-stage pipeline and overwriting the previous content, title, and date.
+Re-add the `ai:run-ocr` tag and, with Workflow B configured, the worker will
+pick the document up on the next poll, restarting the full three-stage pipeline
+and overwriting the previous content, title, date, summary, and embeddings.
 
 To revert to Tesseract permanently, trigger a reprocess from the paperless UI (More → Reprocess document).
 

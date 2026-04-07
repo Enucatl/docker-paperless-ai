@@ -38,6 +38,10 @@ The test harness:
 3. Runs pytest inside the AI container
 4. Tears down all containers and anonymous volumes on exit
 
+Test-specific workflow note:
+- `docker-compose.test.yml` sets `MANAGE_PAPERLESS_WORKFLOWS=false`.
+- Production startup auto-manages the Paperless workflows, but webhook integration tests create and delete their own workflows and must remain authoritative.
+
 **Important:** Full E2E tests require Docker infrastructure. Use `uv run pytest` for unit-level testing without Docker. `run_tests.sh` is the authoritative check for integration failures.
 
 **API Compatibility Coverage:** Tests cover external library API usage (e.g., niquests AsyncSession methods, Redis async methods) to catch parameter incompatibilities early. This prevents runtime errors like `follow_redirects` (httpx) being used with niquests.

@@ -342,14 +342,14 @@ async def test_webhook_ocr_tag_takes_priority_over_embed(webhook_session, docume
 # End-to-end: Paperless fires the webhook on document events
 # ---------------------------------------------------------------------------
 
-# URL that the Paperless *webserver* container uses to reach the
-# webhook-listener (both on the internal Docker network).
-# This may differ from WEBHOOK_URL (used by the test runner / ai container)
-# if the containers have different DNS views, but in the test compose they
-# share the same `internal` network so the hostname resolves identically.
-_PAPERLESS_FACING_WEBHOOK_URL = os.environ.get(
+# Full webhook endpoint that the Paperless *webserver* container uses to reach
+# the webhook-listener. This may differ from WEBHOOK_URL (used by the test
+# runner / ai container) if the containers have different DNS views, but in the
+# test compose they share the same `internal` network so the hostname resolves
+# identically.
+_PAPERLESS_FACING_WEBHOOK_ENDPOINT = os.environ.get(
     "PAPERLESS_WEBHOOK_URL",
-    WEBHOOK_URL,  # same host/port in the test Docker network
+    f"{WEBHOOK_URL}/webhook/document",
 )
 
 _TRIGGER_DOCUMENT_ADDED = 2
@@ -409,7 +409,7 @@ async def _create_webhook_workflow(
             {
                 "type": 4,  # WEBHOOK
                 "webhook": {
-                    "url": f"{_PAPERLESS_FACING_WEBHOOK_URL}/webhook/document",
+                    "url": _PAPERLESS_FACING_WEBHOOK_ENDPOINT,
                     "use_params": True,
                     "as_json": True,
                     "params": {"doc_url": "{{doc_url}}"},
@@ -450,7 +450,7 @@ async def test_paperless_fires_webhook_on_document_added(
     doc_id = await uploaded_document()
     assert await _wait_for_doc_in_queue(doc_id), (
         f"Document {doc_id} never appeared in the Redis queue within 60 s "
-        f"(trigger=DOCUMENT_ADDED, webhook={_PAPERLESS_FACING_WEBHOOK_URL})"
+        f"(trigger=DOCUMENT_ADDED, webhook={_PAPERLESS_FACING_WEBHOOK_ENDPOINT})"
     )
 
 
@@ -481,7 +481,7 @@ async def test_paperless_fires_webhook_on_document_updated(
     assert r.status_code == 200, f"PATCH failed: {r.status_code} — {r.text}"
     assert await _wait_for_doc_in_queue(doc_id), (
         f"Document {doc_id} never appeared in the Redis queue within 60 s "
-        f"(trigger=DOCUMENT_UPDATED, webhook={_PAPERLESS_FACING_WEBHOOK_URL}). "
+        f"(trigger=DOCUMENT_UPDATED, webhook={_PAPERLESS_FACING_WEBHOOK_ENDPOINT}). "
         "Check that trigger type 3 is DOCUMENT_UPDATED in this Paperless version."
     )
 
@@ -543,7 +543,7 @@ async def test_webhook_loop_broken_by_tag_removal(
     agent = SmartDocumentAgent(config, extraction_strategy=_select_extraction_strategy(config))
 
     custom_field_id = await paperless_client.get_or_create_custom_field("ai_processed", data_type="date")
-    ai_summary_field_id = await paperless_client.get_or_create_custom_field("AI Summary", data_type="string")
+    ai_summary_field_id = await paperless_client.get_or_create_custom_field("ai_summary", data_type="string")
     ai_result_field_id = await paperless_client.get_or_create_custom_field("ai_result", data_type="longtext")
 
     tag_id = await paperless_client.get_tag_id(config.tag_pending)

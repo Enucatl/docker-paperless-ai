@@ -83,6 +83,9 @@ services:
       bash -lc "uv sync --frozen --extra test --extra eval && python -m pytest -v /app/tests/"
     environment:
       - PAPERLESS_URL=http://webserver:8000
+      # Webhook tests manage their own Paperless workflows explicitly.
+      # Disable startup workflow automation here so test fixtures remain authoritative.
+      - MANAGE_PAPERLESS_WORKFLOWS=false
       # Dummy keys guarantee no real LLM API calls even if a mock is misconfigured.
       - GOOGLE_API_KEY=dummy-test-key
       - ANTHROPIC_API_KEY=dummy-test-key

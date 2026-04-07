@@ -138,13 +138,29 @@ async def main_async(args: argparse.Namespace) -> None:
             await run_evals(config, split=args.split)
             return
 
+        if config.manage_paperless_workflows:
+            try:
+                added_wf_id, updated_wf_id = await client.ensure_ai_workflows(
+                    tag_ocr=config.tag_ocr,
+                    webhook_url=config.paperless_webhook_url,
+                    webhook_secret=config.webhook_secret,
+                )
+                log.info(
+                    "Paperless workflows ready: document_added=%d document_updated=%d",
+                    added_wf_id,
+                    updated_wf_id,
+                )
+            except Exception as e:
+                log.error("Failed to ensure Paperless workflows: %s", e)
+                sys.exit(1)
+
         # Set up custom fields
         try:
             custom_field_id = await client.get_or_create_custom_field(
                 "ai_processed", data_type="date"
             )
             ai_summary_field_id = await client.get_or_create_custom_field(
-                "AI Summary", data_type="string"
+                "ai_summary", data_type="string"
             )
             ai_result_field_id = await client.get_or_create_custom_field(
                 "ai_result", data_type="longtext"

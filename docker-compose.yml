@@ -129,6 +129,7 @@ services:
       - QDRANT_URL=http://qdrant:6333
       - PAPERLESS_URL=http://webserver:8000
       - PAPERLESS_TOKEN_FILE=/run/secrets/paperless_token
+      - WEBHOOK_SECRET
       - RERANK_MODEL=${RERANK_MODEL:-}
       - RERANK_API_BASE=${RERANK_API_BASE:-}
       - GOOGLE_API_KEY=${GOOGLE_API_KEY:-}
@@ -174,6 +175,9 @@ services:
       # Paperless connection (required)
       - PAPERLESS_URL=http://webserver:8000
       - PAPERLESS_TOKEN_FILE=/run/secrets/paperless_token
+      - WEBHOOK_SECRET
+      - PAPERLESS_WEBHOOK_URL=http://webhook-listener:8001/webhook/document
+      - MANAGE_PAPERLESS_WORKFLOWS=${MANAGE_PAPERLESS_WORKFLOWS:-true}
 
       # OCR model — any LiteLLM vision model string:
       #   gemini/gemini-2.5-flash          (cloud, default)

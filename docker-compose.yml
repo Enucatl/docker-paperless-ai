@@ -111,6 +111,12 @@ services:
     image: qdrant/qdrant:latest
     restart: unless-stopped
     volumes: [] # storage volume added in docker-compose.override.yml
+    healthcheck:
+      # Bash TCP pseudo-device: fast, no external tooling needed.
+      test: ["CMD", "bash", "-c", ":> /dev/tcp/127.0.0.1/6333"]
+      interval: 3s
+      timeout: 5s
+      retries: 15
     networks:
       - internal
 

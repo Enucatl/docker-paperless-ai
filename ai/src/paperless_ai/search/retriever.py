@@ -25,6 +25,10 @@ from paperless_ai.search.qdrant_store import COLLECTION
 
 log = logging.getLogger(__name__)
 
+K = 25
+N = 50
+RRF_K = 60
+
 
 @dataclass
 class ScoredDoc:
@@ -283,3 +287,70 @@ Respond ONLY with valid JSON, no other text."""
     # Fallback: no relevant docs found, return input order
     log.debug("No docs judged as relevant; returning input order")
     return [cand.doc_id for cand in candidates]
+
+
+async def hybrid_retrieve(
+    *,
+    embedder: LocalLazySearchEmbedder,
+    qdrant_url: str,
+    query: str,
+    client=None,
+    filters: SearchFilters | None = None,
+    rerank_model: str | None = None,
+    rerank_api_base: str | None = None,
+    dense_k: int = K,
+    rerank_candidates: int = N,
+    rrf_k: int = RRF_K,
+) -> tuple[list[int], dict[int, str]]:
+    """Shared hybrid retrieval pipeline for chat and the HTTP search endpoint."""
+    resolved_filters = filters or SearchFilters()
+    has_metadata_filters = any(
+        [
+            resolved_filters.correspondent,
+            resolved_filters.document_type,
+            resolved_filters.storage_path,
+            resolved_filters.tags,
+            resolved_filters.year,
+        ]
+    )
+
+    keyword_coro = (
+        asyncio.sleep(0, result=[])
+        if has_metadata_filters or client is None
+        else client.search_documents(query, page_size=rerank_candidates)
+    )
+
+    dense_result, keyword_result = await asyncio.gather(
+        dense_search(embedder, qdrant_url, query, dense_k, filters=resolved_filters),
+        keyword_coro,
+        return_exceptions=True,
+    )
+
+    if isinstance(dense_result, BaseException):
+        raise dense_result
+
+    dense_results: list[tuple[int, str]] = dense_result
+    keyword_ids: list[int] = keyword_result if not isinstance(keyword_result, BaseException) else []
+
+    dense_ids = [doc_id for doc_id, _ in dense_results]
+    chunk_map = {doc_id: text for doc_id, text in dense_results}
+
+    if keyword_ids:
+        fused_ids = rrf_fuse(dense_ids, keyword_ids, k=rrf_k)
+    else:
+        fused_ids = dense_ids
+
+    if rerank_model and fused_ids:
+        candidates = [
+            ScoredDoc(doc_id, 0.0, chunk_map.get(doc_id))
+            for doc_id in fused_ids[:rerank_candidates]
+        ]
+        fused_ids = await llm_rerank(
+            query,
+            candidates,
+            rerank_model,
+            rerank_api_base,
+            rerank_candidates,
+        )
+
+    return fused_ids, chunk_map

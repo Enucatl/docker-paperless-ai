@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass, field
 from typing import Any
 
 from qdrant_client import AsyncQdrantClient
+from qdrant_client import models
 
 from paperless_ai.core.paperless import PaperlessClient
 from paperless_ai.search.embedder import LocalLazySearchEmbedder
@@ -13,8 +15,22 @@ from paperless_ai.search.qdrant_store import COLLECTION
 from paperless_ai.search.retriever import (
     SearchFilters,
     _extract_qdrant_hits,
-    build_qdrant_filter,
+    hybrid_retrieve,
 )
+
+
+@dataclass
+class ToolSourceRef:
+    doc_id: int
+    source_type: str
+
+
+@dataclass
+class ToolExecutionResult:
+    content: str
+    summary: str
+    preview: str
+    source_refs: list[ToolSourceRef] = field(default_factory=list)
 
 TOOL_SCHEMAS = [
     {
@@ -45,7 +61,7 @@ TOOL_SCHEMAS = [
                     "storage_path": {"type": "string"},
                     "tags": {"type": "array", "items": {"type": "string"}},
                     "year": {"type": "string", "description": "4-digit year"},
-                    "limit": {"type": "integer", "minimum": 1, "maximum": 10},
+                    "limit": {"type": "integer", "minimum": 1, "maximum": 100},
                 },
                 "required": ["query"],
             },
@@ -106,9 +122,11 @@ async def search_documents(
     tags: list[str] | None = None,
     year: str | None = None,
     limit: int = 5,
+    client: PaperlessClient | None = None,
+    rerank_model: str | None = None,
+    rerank_api_base: str | None = None,
 ) -> str:
-    """Run filtered semantic search against Qdrant and return formatted snippets."""
-    result = await embedder.embed_query(query)
+    """Run hybrid retrieval against Qdrant and Paperless and return formatted snippets."""
     filters = SearchFilters(
         correspondent=correspondent,
         document_type=document_type,
@@ -116,36 +134,111 @@ async def search_documents(
         tags=tags,
         year=year,
     )
+    fused_ids, chunk_map = await hybrid_retrieve(
+        embedder=embedder,
+        qdrant_url=qdrant_url,
+        query=query,
+        client=client,
+        filters=filters,
+        rerank_model=rerank_model,
+        rerank_api_base=rerank_api_base,
+    )
+    if not fused_ids:
+        return "No matching documents found."
 
     qdrant = AsyncQdrantClient(url=qdrant_url)
     try:
-        hits = await qdrant.query_points(
-            collection_name=COLLECTION,
-            query=result.dense,
-            using="dense",
-            limit=max(1, min(limit * 4, 40)),
-            with_payload=True,
-            query_filter=build_qdrant_filter(filters),
-        )
+        seen_doc_ids: set[int] = set()
+        formatted: list[str] = []
+        doc_ids = fused_ids[:limit]
+        if doc_ids:
+            hits = await qdrant.scroll(
+                collection_name=COLLECTION,
+                scroll_filter=models.Filter(
+                    must=[
+                        models.FieldCondition(
+                            key="doc_id",
+                            match=models.MatchAny(any=doc_ids),
+                        )
+                    ]
+                ),
+                with_payload=True,
+                limit=max(limit * 8, 20),
+            )
+        else:
+            hits = ([], None)
     finally:
         await qdrant.close()
-    hits = _extract_qdrant_hits(hits)
 
-    seen_doc_ids: set[int] = set()
-    formatted: list[str] = []
-    for hit in hits:
-        payload = hit.payload or {}
-        doc_id = payload.get("doc_id")
-        if doc_id is None or doc_id in seen_doc_ids:
+    points = _extract_qdrant_hits(hits)
+    payload_by_doc_id = {
+        int(point.payload["doc_id"]): point.payload
+        for point in points
+        if point.payload and point.payload.get("doc_id") is not None
+    }
+
+    for doc_id in fused_ids:
+        if doc_id in seen_doc_ids or len(formatted) >= limit:
             continue
         seen_doc_ids.add(int(doc_id))
+        payload = payload_by_doc_id.get(int(doc_id), {"doc_id": int(doc_id), "text": chunk_map.get(int(doc_id), "")})
         formatted.append(_format_hit(payload))
-        if len(formatted) >= limit:
-            break
 
     if not formatted:
         return "No matching documents found."
     return "\n".join(formatted)
+
+
+async def search_documents_detailed(
+    query: str,
+    *,
+    embedder: LocalLazySearchEmbedder,
+    qdrant_url: str,
+    correspondent: str | None = None,
+    document_type: str | None = None,
+    storage_path: str | None = None,
+    tags: list[str] | None = None,
+    year: str | None = None,
+    limit: int = 5,
+    client: PaperlessClient | None = None,
+    rerank_model: str | None = None,
+    rerank_api_base: str | None = None,
+) -> ToolExecutionResult:
+    """Run hybrid search and return both prompt text and UI metadata."""
+    content = await search_documents(
+        query,
+        embedder=embedder,
+        qdrant_url=qdrant_url,
+        correspondent=correspondent,
+        document_type=document_type,
+        storage_path=storage_path,
+        tags=tags,
+        year=year,
+        limit=limit,
+        client=client,
+        rerank_model=rerank_model,
+        rerank_api_base=rerank_api_base,
+    )
+    if content == "No matching documents found.":
+        return ToolExecutionResult(
+            content=content,
+            summary="No documents matched the search.",
+            preview="No matching documents found.",
+        )
+    source_refs = []
+    for line in content.splitlines():
+        if line.startswith("[Doc "):
+            try:
+                doc_id = int(line.split()[1])
+            except (ValueError, IndexError):
+                continue
+            source_refs.append(ToolSourceRef(doc_id=doc_id, source_type="search"))
+    return ToolExecutionResult(
+        content=content,
+        summary=f"Found {len(source_refs)} matching document(s).",
+        preview=_snippet(content, limit=420),
+        source_refs=source_refs,
+    )
 
 
 async def read_full_document(
@@ -169,6 +262,26 @@ async def read_full_document(
     return f"[Doc {doc_id} | {title}]\n{content}"
 
 
+async def read_full_document_detailed(
+    doc_id: int,
+    *,
+    client: PaperlessClient,
+    max_chars: int = 8000,
+) -> ToolExecutionResult:
+    """Read OCR text and return both prompt text and UI metadata."""
+    content = await read_full_document(doc_id, client=client, max_chars=max_chars)
+    if content.startswith("Document ") and (
+        content.endswith(" was not found.") or content.endswith(" has no OCR content.")
+    ):
+        return ToolExecutionResult(content=content, summary=content, preview=content)
+    return ToolExecutionResult(
+        content=content,
+        summary=f"Read OCR text for document {doc_id}.",
+        preview=_snippet(content, limit=420),
+        source_refs=[ToolSourceRef(doc_id=int(doc_id), source_type="read")],
+    )
+
+
 async def get_available_metadata(*, client: PaperlessClient) -> str:
     """Return exact Paperless metadata names for agent-side discovery."""
     metadata = await client.get_available_metadata()
@@ -180,6 +293,20 @@ async def get_available_metadata(*, client: PaperlessClient) -> str:
             f"Available Tags: {', '.join(metadata['tags']) or '(none)'}",
         ]
     )
+
+
+async def get_available_metadata_detailed(*, client: PaperlessClient) -> ToolExecutionResult:
+    """Return exact Paperless metadata names with a concise summary for the UI."""
+    content = await get_available_metadata(client=client)
+    metadata = await client.get_available_metadata()
+    summary = (
+        "Loaded metadata names "
+        f"({len(metadata['correspondents'])} correspondents, "
+        f"{len(metadata['document_types'])} document types, "
+        f"{len(metadata['storage_paths'])} storage paths, "
+        f"{len(metadata['tags'])} tags)."
+    )
+    return ToolExecutionResult(content=content, summary=summary, preview=_snippet(content, limit=420))
 
 
 async def execute_tool_call(
@@ -198,6 +325,7 @@ async def execute_tool_call(
             arguments.get("query", ""),
             embedder=embedder,
             qdrant_url=qdrant_url,
+            client=client,
             correspondent=arguments.get("correspondent"),
             document_type=arguments.get("document_type"),
             storage_path=arguments.get("storage_path"),
@@ -207,6 +335,43 @@ async def execute_tool_call(
         )
     if name == "read_full_document":
         return await read_full_document(
+            int(arguments["doc_id"]),
+            client=client,
+            max_chars=int(arguments.get("max_chars", 8000)),
+        )
+    raise ValueError(f"Unknown tool: {name}")
+
+
+async def execute_tool_call_detailed(
+    name: str,
+    arguments: dict[str, Any],
+    *,
+    client: PaperlessClient,
+    embedder: LocalLazySearchEmbedder,
+    qdrant_url: str,
+    rerank_model: str | None = None,
+    rerank_api_base: str | None = None,
+) -> ToolExecutionResult:
+    """Dispatch a tool call with UI-friendly metadata for the chat frontend."""
+    if name == "get_available_metadata":
+        return await get_available_metadata_detailed(client=client)
+    if name == "search_documents":
+        return await search_documents_detailed(
+            arguments.get("query", ""),
+            embedder=embedder,
+            qdrant_url=qdrant_url,
+            client=client,
+            correspondent=arguments.get("correspondent"),
+            document_type=arguments.get("document_type"),
+            storage_path=arguments.get("storage_path"),
+            tags=arguments.get("tags"),
+            year=arguments.get("year"),
+            limit=int(arguments.get("limit", 5)),
+            rerank_model=rerank_model,
+            rerank_api_base=rerank_api_base,
+        )
+    if name == "read_full_document":
+        return await read_full_document_detailed(
             int(arguments["doc_id"]),
             client=client,
             max_chars=int(arguments.get("max_chars", 8000)),

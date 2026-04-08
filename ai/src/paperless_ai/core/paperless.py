@@ -27,8 +27,9 @@ def _raise_for_status(r: niquests.Response) -> None:
 
 class PaperlessClient:
     def __init__(self, base_url: str, token: str):
+        self._base_url = base_url.rstrip("/")
         self._client = niquests.AsyncSession(
-            base_url=base_url,
+            base_url=self._base_url,
             headers={"Authorization": f"Token {token}"},
             timeout=60,
         )
@@ -93,6 +94,22 @@ class PaperlessClient:
             f"/api/documents/{doc_id}/",
             params={
                 "fields": "id,title,correspondent,document_type,storage_path,created,custom_fields,tags,language,content"
+            },
+        )
+        if r.status_code == 404:
+            return None
+        _raise_for_status(r)
+        return r.json()
+
+    async def get_document_for_chat(self, doc_id: int) -> dict | None:
+        """Fetch a document with the fields needed for chat source cards."""
+        r = await self._client.get(
+            f"/api/documents/{doc_id}/",
+            params={
+                "fields": (
+                    "id,title,correspondent,document_type,storage_path,created,tags,"
+                    "archive_serial_number,original_filename"
+                )
             },
         )
         if r.status_code == 404:
@@ -374,6 +391,35 @@ class PaperlessClient:
             "tags": sorted(
                 label for item in tags if (label := self._resource_label(item))
             ),
+        }
+
+    async def get_document_chat_metadata(self, doc_id: int) -> dict[str, Any] | None:
+        """Resolve display metadata for a document source card."""
+        doc = await self.get_document_for_chat(doc_id)
+        if doc is None:
+            return None
+
+        correspondent_id = doc.get("correspondent")
+        document_type_id = doc.get("document_type")
+        storage_path_id = doc.get("storage_path")
+        tag_ids = doc.get("tags") or []
+
+        return {
+            "id": int(doc["id"]),
+            "title": doc.get("title") or "Untitled",
+            "created": doc.get("created"),
+            "correspondent_name": (
+                await self.get_correspondent_name(correspondent_id) if correspondent_id else None
+            ),
+            "document_type_name": (
+                await self.get_document_type_name(document_type_id) if document_type_id else None
+            ),
+            "storage_path_name": (
+                await self.get_storage_path_name(storage_path_id) if storage_path_id else None
+            ),
+            "tag_names": await self.get_tag_names(tag_ids),
+            "archive_serial_number": doc.get("archive_serial_number"),
+            "original_filename": doc.get("original_filename"),
         }
 
     async def search_documents(

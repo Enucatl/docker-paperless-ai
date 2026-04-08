@@ -85,7 +85,7 @@ async def main_async(args: argparse.Namespace) -> None:
     )
     log.info(
         "Metadata model: %s%s",
-        config.effective_metadata_model,
+        config.metadata_model,
         f" (api_base={config.metadata_api_base})" if config.metadata_api_base else "",
     )
     log.info("Embedding: %s @ %s", config.embedding_model, config.embedding_api_base)
@@ -112,11 +112,11 @@ async def main_async(args: argparse.Namespace) -> None:
 
         # Skip LLM connectivity check for eval mode (experiments define their own models)
         if not args.eval:
-            log.info("Checking LLM connectivity (model: %s)...", config.effective_metadata_model)
+            log.info("Checking LLM connectivity (model: %s)...", config.metadata_model)
             try:
                 import litellm
                 _kwargs: dict = {
-                    "model": config.effective_metadata_model,
+                    "model": config.metadata_model,
                     "messages": [{"role": "user", "content": "Reply with OK"}],
                     "max_tokens": 5,
                 }

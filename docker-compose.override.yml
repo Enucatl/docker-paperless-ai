@@ -53,6 +53,8 @@ services:
       - hf_token
 
   phoenix:
+    environment:
+      - PHOENIX_DEFAULT_RETENTION_POLICY_DAYS=30
     volumes:
       - phoenixdata:/root/.phoenix
 

@@ -9,6 +9,7 @@ from paperless_ai.search.tools import (
     TOOL_SCHEMAS,
     ToolExecutionResult,
     ToolSourceRef,
+    _chat_completion_kwargs,
     execute_tool_call,
     execute_tool_call_detailed,
     get_available_metadata,
@@ -181,6 +182,25 @@ def test_search_tool_schema_exposes_mode_enum():
     )
     assert schema["parameters"]["properties"]["mode"]["enum"] == ["precision", "recall"]
     assert "always provide an explicit limit" in schema["description"]
+
+
+def test_chat_completion_kwargs_respects_configured_chat_temperature():
+    config = MagicMock()
+    config.chat_model = "gemini/gemini-3.1-flash-lite-preview"
+    config.chat_api_base = "http://llm:4000"
+    config.get_chat_litellm_kwargs.return_value = {
+        "max_tokens": 321,
+        "temperature": 1.0,
+        "reasoning_effort": "low",
+    }
+
+    kwargs = _chat_completion_kwargs(config, [{"role": "user", "content": "hello"}])
+
+    assert kwargs["model"] == config.chat_model
+    assert kwargs["temperature"] == 1.0
+    assert kwargs["max_tokens"] == 321
+    assert kwargs["reasoning_effort"] == "low"
+    assert kwargs["api_base"] == "http://llm:4000"
 
 
 @pytest.mark.asyncio

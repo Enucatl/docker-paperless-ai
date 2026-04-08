@@ -111,7 +111,8 @@ def _chat_completion_kwargs(config: AgentConfig, messages: list[dict[str, Any]])
         "messages": messages,
         **config.get_chat_litellm_kwargs(),
     }
-    kwargs["temperature"] = 0.0
+    if "temperature" not in kwargs:
+        kwargs["temperature"] = 0.0
     kwargs.pop("tools", None)
     kwargs.pop("tool_choice", None)
     if config.chat_api_base:

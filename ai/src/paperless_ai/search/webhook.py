@@ -538,9 +538,72 @@ async def chat_ui() -> HTMLResponse:
       background: #fff;
       border: 1px solid var(--chat-border);
       border-bottom-left-radius: 0.3rem;
+      white-space: normal;
     }
     .bubble.assistant.is-pending {
       color: var(--chat-muted);
+    }
+    .markdown-body > :first-child {
+      margin-top: 0;
+    }
+    .markdown-body > :last-child {
+      margin-bottom: 0;
+    }
+    .markdown-body p,
+    .markdown-body ul,
+    .markdown-body ol,
+    .markdown-body pre,
+    .markdown-body table,
+    .markdown-body blockquote {
+      margin: 0 0 0.85rem;
+    }
+    .markdown-body ul,
+    .markdown-body ol {
+      padding-left: 1.35rem;
+    }
+    .markdown-body li + li {
+      margin-top: 0.25rem;
+    }
+    .markdown-body code {
+      padding: 0.1rem 0.35rem;
+      border-radius: 0.35rem;
+      background: #f3f5f3;
+      font-size: 0.92em;
+    }
+    .markdown-body pre {
+      padding: 0.85rem 0.95rem;
+      border-radius: 0.7rem;
+      background: #f8f9fa;
+      border: 1px solid var(--chat-border);
+      overflow-x: auto;
+    }
+    .markdown-body pre code {
+      padding: 0;
+      background: transparent;
+      border-radius: 0;
+    }
+    .markdown-body blockquote {
+      padding-left: 0.9rem;
+      border-left: 3px solid #cfe0d1;
+      color: var(--chat-muted);
+    }
+    .markdown-body table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.94rem;
+    }
+    .markdown-body th,
+    .markdown-body td {
+      padding: 0.45rem 0.55rem;
+      border: 1px solid var(--chat-border);
+      vertical-align: top;
+    }
+    .markdown-body th {
+      background: #f8f9fa;
+      font-weight: 600;
+    }
+    .markdown-body a {
+      color: var(--chat-primary);
     }
     .turn-meta {
       display: grid;
@@ -846,6 +909,8 @@ async def chat_ui() -> HTMLResponse:
       </aside>
     </div>
   </main>
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/dompurify@3/dist/purify.min.js"></script>
   <script>
     const conversation = document.getElementById("conversation");
     const form = document.getElementById("chat-form");
@@ -877,6 +942,18 @@ async def chat_ui() -> HTMLResponse:
     function clearSocketBanner() {
       socketBanner.className = "socket-banner alert alert-warning mb-0";
       socketBanner.textContent = "";
+    }
+
+    function renderMarkdown(text) {
+      const source = String(text || "").trim();
+      if (!source) {
+        return "<p>(no response)</p>";
+      }
+      const rendered = marked.parse(source, {
+        gfm: true,
+        breaks: false,
+      });
+      return DOMPurify.sanitize(rendered);
     }
 
     function addUserBubble(content) {
@@ -1155,7 +1232,7 @@ async def chat_ui() -> HTMLResponse:
     function setAssistantMessage(turnId, content) {
       const turn = getTurn(turnId);
       turn.answer.classList.remove("is-pending");
-      turn.answer.textContent = content || "(no response)";
+      turn.answer.innerHTML = `<div class="markdown-body">${renderMarkdown(content)}</div>`;
       scrollConversation();
     }
 

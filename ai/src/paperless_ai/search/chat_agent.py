@@ -22,8 +22,10 @@ SYSTEM_PROMPT = (
     "Before filtering by metadata like tags, correspondents, document types, or storage paths, "
     "call get_available_metadata to confirm the exact names. "
     "Use search_documents with mode=precision for singular lookups and fact-finding, and "
-    "mode=recall for exhaustive listing requests. After a precision search, read the top "
-    "document before answering if the answer depends on document contents."
+    "mode=recall for exhaustive listing requests. When using mode=recall, always pass an explicit "
+    "limit large enough for the requested count. After a precision search, read the top relevant "
+    "document(s) before answering if the answer depends on document contents. Read more than one "
+    "when multiple candidates remain plausible."
 )
 
 

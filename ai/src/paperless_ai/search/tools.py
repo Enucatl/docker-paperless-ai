@@ -60,7 +60,8 @@ TOOL_SCHEMAS = [
             "description": (
                 "Search Paperless documents using semantic search with optional exact metadata "
                 "filters for correspondent, document type, storage path, tags, and year. "
-                "Use mode=precision for singular lookups and mode=recall for exhaustive lists."
+                "Use mode=precision for singular lookups and mode=recall for exhaustive lists. "
+                "When mode=recall, always provide an explicit limit."
             ),
             "parameters": {
                 "type": "object",
@@ -251,7 +252,7 @@ async def search_documents(
     storage_path: str | None = None,
     tags: list[str] | None = None,
     year: str | None = None,
-    limit: int = 20,
+    limit: int | None = None,
     mode: RetrievalMode = "precision",
     client: PaperlessClient | None = None,
 ) -> ToolExecutionResult:
@@ -264,6 +265,11 @@ async def search_documents(
             "paperless_ai.search.query": query,
         },
     ) as span:
+        if mode == "recall" and limit is None:
+            content = "Recall searches require an explicit limit."
+            set_span_attributes(span, **{"paperless_ai.tool.validation_error": content})
+            return ToolExecutionResult(content=content, summary=content, preview=content)
+        resolved_limit = 20 if limit is None else limit
         filters = SearchFilters(
             correspondent=correspondent,
             document_type=document_type,
@@ -278,7 +284,7 @@ async def search_documents(
             client=client,
             filters=filters,
             dense_k=RETRIEVAL_MODE_DENSE_K[mode],
-            rerank_candidates=max(limit, 50),
+            rerank_candidates=max(resolved_limit, 50),
             mode=mode,
         )
         set_span_attributes(span, **{"paperless_ai.tool.prejudge_doc_count": len(fused_ids)})
@@ -296,10 +302,10 @@ async def search_documents(
                 preview="No matching documents found.",
             )
 
-        payload_by_doc_id = await _lookup_payloads(qdrant_url, fused_ids[:limit], limit)
+        payload_by_doc_id = await _lookup_payloads(qdrant_url, fused_ids[:resolved_limit], resolved_limit)
         formatted: list[str] = []
         source_refs: list[ToolSourceRef] = []
-        for doc_id in fused_ids[:limit]:
+        for doc_id in fused_ids[:resolved_limit]:
             payload = payload_by_doc_id.get(int(doc_id), {"doc_id": int(doc_id), "text": chunk_map.get(int(doc_id), "")})
             formatted.append(_format_hit(payload))
             source_refs.append(ToolSourceRef(doc_id=int(doc_id), source_type="search"))
@@ -439,7 +445,7 @@ async def execute_tool_call_detailed(
             storage_path=arguments.get("storage_path"),
             tags=arguments.get("tags"),
             year=arguments.get("year"),
-            limit=int(arguments.get("limit", 20)),
+            limit=(None if "limit" not in arguments else int(arguments["limit"])),
             mode=str(arguments.get("mode", "precision")),
         )
     if name == "read_full_document":

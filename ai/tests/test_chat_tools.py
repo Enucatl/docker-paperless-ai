@@ -86,6 +86,7 @@ async def test_search_documents_formats_qdrant_hits():
             client=client,
             correspondent="Acme Corp",
             mode="recall",
+            limit=20,
         )
 
     assert "Doc 42" in result.content
@@ -118,6 +119,7 @@ async def test_search_documents_uses_chunk_map_when_scroll_payload_missing():
             config=MagicMock(),
             client=client,
             mode="recall",
+            limit=20,
         )
 
     assert "Doc 99" in result.content
@@ -177,6 +179,35 @@ def test_search_tool_schema_exposes_mode_enum():
         if tool["function"]["name"] == "search_documents"
     )
     assert schema["parameters"]["properties"]["mode"]["enum"] == ["precision", "recall"]
+    assert "always provide an explicit limit" in schema["description"]
+
+
+@pytest.mark.asyncio
+async def test_search_documents_recall_requires_explicit_limit():
+    result = await search_documents(
+        "youtube premium",
+        embedder=AsyncMock(),
+        qdrant_url="http://qdrant:6333",
+        config=MagicMock(),
+        client=AsyncMock(),
+        mode="recall",
+    )
+
+    assert result.summary == "Recall searches require an explicit limit."
+
+
+@pytest.mark.asyncio
+async def test_execute_tool_call_detailed_recall_requires_explicit_limit():
+    result = await execute_tool_call_detailed(
+        "search_documents",
+        {"query": "youtube premium", "mode": "recall"},
+        client=AsyncMock(),
+        embedder=AsyncMock(),
+        qdrant_url="http://qdrant:6333",
+        config=MagicMock(),
+    )
+
+    assert result.content == "Recall searches require an explicit limit."
 
 
 @pytest.mark.asyncio

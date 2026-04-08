@@ -10,6 +10,7 @@ import litellm
 
 from paperless_ai.core.config import AgentConfig
 from paperless_ai.core.paperless import PaperlessClient
+from paperless_ai.core.telemetry import set_span_attributes, start_span
 from paperless_ai.search.chat_state import ChatState
 from paperless_ai.search.embedder import LocalLazySearchEmbedder
 from paperless_ai.search.tools import TOOL_SCHEMAS, ToolExecutionResult, execute_tool_call_detailed, parse_tool_arguments
@@ -19,7 +20,10 @@ SYSTEM_PROMPT = (
     "Use tools to search documents and inspect source text before answering specific factual questions. "
     "Always cite relevant document IDs in your answer. "
     "Before filtering by metadata like tags, correspondents, document types, or storage paths, "
-    "call get_available_metadata to confirm the exact names."
+    "call get_available_metadata to confirm the exact names. "
+    "Use search_documents with mode=precision for singular lookups and fact-finding, and "
+    "mode=recall for exhaustive listing requests. After a precision search, read the top "
+    "document before answering if the answer depends on document contents."
 )
 
 
@@ -89,15 +93,12 @@ class ChatCopilot:
         client: PaperlessClient,
         embedder: LocalLazySearchEmbedder,
         qdrant_url: str,
-        rerank_model: str | None = None,
-        rerank_api_base: str | None = None,
     ):
         self._config = config
         self._client = client
         self._embedder = embedder
         self._qdrant_url = qdrant_url
-        self._rerank_model = rerank_model
-        self._rerank_api_base = rerank_api_base
+
     async def _emit(self, callback: EventCallback | None, event: dict[str, Any]) -> None:
         if callback is not None:
             await callback(event)
@@ -134,108 +135,147 @@ class ChatCopilot:
         event_callback: EventCallback | None = None,
     ) -> ChatTurnResult:
         """Run one user turn and return the assistant reply, history, sources, and usage."""
-        messages = [{"role": "system", "content": SYSTEM_PROMPT}]
-        if history:
-            messages.extend(history)
-        messages.append({"role": "user", "content": user_message})
-        aggregated_usage = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
-        sources: dict[int, dict[str, bool]] = {}
+        with start_span(
+            "paperless_ai.chat.turn",
+            **{
+                "paperless_ai.chat.model": self._config.chat_model,
+                "paperless_ai.chat.history_messages": len(history or []),
+                "paperless_ai.chat.user_message_length": len(user_message),
+            },
+        ) as turn_span:
+            messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+            if history:
+                messages.extend(history)
+            messages.append({"role": "user", "content": user_message})
+            aggregated_usage = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+            sources: dict[int, dict[str, bool]] = {}
 
-        while True:
-            await self._emit(
-                event_callback,
-                {"type": "status", "phase": "model", "content": "Thinking about the next step."},
-            )
-            response = await litellm.acompletion(**self._model_kwargs(messages))
-            usage = _extract_usage(response)
-            model = self._config.chat_model
-            if usage is None:
+            while True:
                 await self._emit(
                     event_callback,
-                    {
-                        "type": "usage",
-                        "scope": "step",
-                        "model": model,
-                        "available": False,
-                    },
+                    {"type": "status", "phase": "model", "content": "Thinking about the next step."},
                 )
-            else:
-                for key, value in usage.items():
-                    aggregated_usage[key] += value
-                await self._emit(
-                    event_callback,
-                    {
-                        "type": "usage",
-                        "scope": "step",
-                        "model": model,
-                        "available": True,
-                        **usage,
-                    },
-                )
+                response = await litellm.acompletion(**self._model_kwargs(messages))
+                usage = _extract_usage(response)
+                model = self._config.chat_model
+                if usage is None:
+                    await self._emit(
+                        event_callback,
+                        {
+                            "type": "usage",
+                            "scope": "step",
+                            "model": model,
+                            "available": False,
+                        },
+                    )
+                else:
+                    for key, value in usage.items():
+                        aggregated_usage[key] += value
+                    await self._emit(
+                        event_callback,
+                        {
+                            "type": "usage",
+                            "scope": "step",
+                            "model": model,
+                            "available": True,
+                            **usage,
+                        },
+                    )
 
-            assistant_message = _message_to_dict(response.choices[0].message)
-            messages.append(assistant_message)
-            tool_calls = assistant_message.get("tool_calls") or []
-            if not tool_calls:
-                assistant_text = str(assistant_message.get("content") or "").strip()
-                total_usage = aggregated_usage if aggregated_usage["total_tokens"] else None
-                return ChatTurnResult(
-                    reply=assistant_text,
-                    history=messages[1:],
-                    sources=sources,
-                    usage=total_usage,
+                assistant_message = _message_to_dict(response.choices[0].message)
+                messages.append(assistant_message)
+                tool_calls = assistant_message.get("tool_calls") or []
+                set_span_attributes(
+                    turn_span,
+                    **{
+                        "paperless_ai.chat.tool_call_count": len(tool_calls),
+                        "paperless_ai.chat.prompt_tokens": aggregated_usage["prompt_tokens"],
+                        "paperless_ai.chat.completion_tokens": aggregated_usage["completion_tokens"],
+                        "paperless_ai.chat.total_tokens": aggregated_usage["total_tokens"],
+                    },
                 )
+                if not tool_calls:
+                    assistant_text = str(assistant_message.get("content") or "").strip()
+                    total_usage = aggregated_usage if aggregated_usage["total_tokens"] else None
+                    set_span_attributes(
+                        turn_span,
+                        **{
+                            "paperless_ai.chat.final_sources": len(sources),
+                            "paperless_ai.chat.reply_length": len(assistant_text),
+                        },
+                    )
+                    return ChatTurnResult(
+                        reply=assistant_text,
+                        history=messages[1:],
+                        sources=sources,
+                        usage=total_usage,
+                    )
 
-            for tool_call in tool_calls:
-                function = tool_call.get("function", {})
-                name = str(function.get("name") or "unknown_tool")
-                args = parse_tool_arguments(function.get("arguments"))
-                await self._emit(
-                    event_callback,
-                    {
-                        "type": "tool_call_started",
-                        "tool_call_id": tool_call.get("id"),
-                        "name": name,
-                        "arguments": args,
-                    },
-                )
-                start = time.perf_counter()
-                result = await execute_tool_call_detailed(
-                    name,
-                    args,
-                    client=self._client,
-                    embedder=self._embedder,
-                    qdrant_url=self._qdrant_url,
-                    rerank_model=self._rerank_model,
-                    rerank_api_base=self._rerank_api_base,
-                )
-                duration_ms = int((time.perf_counter() - start) * 1000)
-                self._merge_source_flags(sources, result)
-                messages.append(
-                    {
-                        "role": "tool",
-                        "tool_call_id": tool_call["id"],
-                        "name": name,
-                        "content": result.content,
-                    }
-                )
-                await self._emit(
-                    event_callback,
-                    {
-                        "type": "tool_call_completed",
-                        "tool_call_id": tool_call.get("id"),
-                        "name": name,
-                        "arguments": args,
-                        "summary": result.summary,
-                        "preview": result.preview or _snippet(result.content),
-                        "duration_ms": duration_ms,
-                    },
-                )
-                await self._emit(
-                    event_callback,
-                    {
-                        "type": "status",
-                        "phase": "tool",
-                        "content": result.summary,
-                    },
-                )
+                for tool_call in tool_calls:
+                    function = tool_call.get("function", {})
+                    name = str(function.get("name") or "unknown_tool")
+                    args = parse_tool_arguments(function.get("arguments"))
+                    await self._emit(
+                        event_callback,
+                        {
+                            "type": "tool_call_started",
+                            "tool_call_id": tool_call.get("id"),
+                            "name": name,
+                            "arguments": args,
+                        },
+                    )
+                    start = time.perf_counter()
+                    with start_span(
+                        "paperless_ai.chat.tool_call",
+                        **{
+                            "paperless_ai.tool.name": name,
+                            "paperless_ai.tool.call_id": str(tool_call.get("id") or ""),
+                        },
+                    ) as tool_span:
+                        result = await execute_tool_call_detailed(
+                            name,
+                            args,
+                            client=self._client,
+                            embedder=self._embedder,
+                            qdrant_url=self._qdrant_url,
+                            config=self._config,
+                        )
+                        duration_ms = int((time.perf_counter() - start) * 1000)
+                        set_span_attributes(
+                            tool_span,
+                            **{
+                                "paperless_ai.tool.duration_ms": duration_ms,
+                                "paperless_ai.tool.summary": result.summary,
+                                "paperless_ai.tool.source_ref_count": len(result.source_refs),
+                                "paperless_ai.tool.preview_length": len(result.preview or ""),
+                            },
+                        )
+                    self._merge_source_flags(sources, result)
+                    messages.append(
+                        {
+                            "role": "tool",
+                            "tool_call_id": tool_call["id"],
+                            "name": name,
+                            "content": result.content,
+                        }
+                    )
+                    await self._emit(
+                        event_callback,
+                        {
+                            "type": "tool_call_completed",
+                            "tool_call_id": tool_call.get("id"),
+                            "name": name,
+                            "arguments": args,
+                            "summary": result.summary,
+                            "preview": result.preview or _snippet(result.content),
+                            "duration_ms": duration_ms,
+                        },
+                    )
+                    await self._emit(
+                        event_callback,
+                        {
+                            "type": "status",
+                            "phase": "tool",
+                            "content": result.summary,
+                        },
+                    )

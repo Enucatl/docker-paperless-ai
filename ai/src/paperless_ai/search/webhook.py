@@ -47,9 +47,7 @@ from paperless_ai.search.embedder import LocalLazySearchEmbedder
 from paperless_ai.search.queue import TaskQueues
 from paperless_ai.search.retriever import (
     SearchFilters,
-    ScoredDoc,
     hybrid_retrieve,
-    llm_rerank,
 )
 
 log = logging.getLogger(__name__)
@@ -66,13 +64,11 @@ _tag_embed: str = "ai:run-embed"
 # Hybrid search
 _paperless_client: PaperlessClient | None = None
 _qdrant_url: str = "http://qdrant:6333"
-_rerank_model: str | None = None
-_rerank_api_base: str | None = None
 _chat_copilot: ChatCopilot | None = None
 
 # Retrieval hyperparameters
 K = 25  # max chunks from dense search
-N = 50  # max candidates for RRF before LLM reranking
+N = 50  # min candidate pool size before local reranking
 RRF_K = 60  # RRF smoothing constant
 
 # Matches the numeric document ID anywhere in a Paperless document URL.
@@ -100,7 +96,6 @@ def _read_secret(env_var: str) -> str | None:
 async def lifespan(app: FastAPI):
     global _queues, _webhook_secret, _tag_ocr, _tag_metadata, _tag_embed
     global _lazy_embedder, _idle_task, _paperless_client, _qdrant_url
-    global _rerank_model, _rerank_api_base
     global _chat_copilot
 
     redis_url = os.environ.get("REDIS_URL", "redis://broker:6379/1")
@@ -131,10 +126,10 @@ async def lifespan(app: FastAPI):
             "set" if paperless_token else "missing",
         )
 
-    _rerank_model = os.environ.get("RERANK_MODEL") or os.environ.get("METADATA_MODEL") or None
-    _rerank_api_base = os.environ.get("RERANK_API_BASE") or os.environ.get("METADATA_API_BASE") or None
-    if _rerank_model:
-        log.info("LLM reranking enabled (model=%s)", _rerank_model)
+    log.info(
+        "Local reranking enabled (model=%s)",
+        LocalLazySearchEmbedder.LOCAL_RERANKER_MODEL_NAME,
+    )
 
     config = AgentConfig.from_env()
     setup_telemetry(service_name=config.name, project_name=config.name)
@@ -153,8 +148,6 @@ async def lifespan(app: FastAPI):
             _paperless_client,
             _lazy_embedder,
             _qdrant_url,
-            rerank_model=_rerank_model,
-            rerank_api_base=_rerank_api_base,
         )
         log.info("Chat copilot enabled")
     else:
@@ -356,15 +349,15 @@ async def search(
     tags: list[str] | None = Query(None),
     year: str | None = Query(None),
 ) -> JSONResponse:
-    """Hybrid semantic + keyword search with optional LLM reranking.
+    """Hybrid semantic + keyword search with local BGE reranking.
 
     Two-Tower Retrieval:
       - Dense: Local CPU embedding (FastEmbed) → Qdrant cosine search
       - Keyword: Paperless full-text API
       - Merge: Reciprocal Rank Fusion (RRF) to combine incompatible score scales
-      - Rerank: LLM-as-a-Judge (optional) filters false positives and reorders
+      - Rerank: local bge-reranker-v2-m3 reorders fused candidates
 
-    Returns doc_ids in final rank order (RRF or LLM score, descending).
+    Returns doc_ids in final rank order (reranker score, descending).
     Gracefully degrades to dense-only search if Paperless is unavailable.
     """
     if _lazy_embedder is None:
@@ -385,10 +378,8 @@ async def search(
                 query=q,
                 client=_paperless_client,
                 filters=filters,
-                rerank_model=_rerank_model,
-                rerank_api_base=_rerank_api_base,
                 dense_k=K,
-                rerank_candidates=N,
+                rerank_candidates=max(N, limit),
                 rrf_k=RRF_K,
             )
         except Exception as exc:

@@ -2,7 +2,6 @@
 Paperless-ngx REST API client.
 
 Handles polling, downloading, and patching documents via the API.
-This module is intentionally kept unchanged from the original implementation.
 """
 
 import logging
@@ -10,6 +9,8 @@ from difflib import SequenceMatcher
 from typing import Any
 
 import niquests
+
+from paperless_ai.core.telemetry import set_span_attributes, start_span
 
 log = logging.getLogger(__name__)
 
@@ -422,6 +423,80 @@ class PaperlessClient:
             "original_filename": doc.get("original_filename"),
         }
 
+    async def _resolve_correspondent_id(self, name: str) -> int | None:
+        for correspondent in await self._get_all_correspondents():
+            if self._resource_label(correspondent) == name:
+                return int(correspondent["id"])
+        return None
+
+    async def _resolve_document_type_id(self, name: str) -> int | None:
+        for document_type in await self._get_all_document_types():
+            if self._resource_label(document_type) == name:
+                return int(document_type["id"])
+        return None
+
+    async def _resolve_storage_path_id(self, path: str) -> int | None:
+        for storage_path in await self._get_all_storage_paths():
+            if self._resource_label(storage_path) == path:
+                return int(storage_path["id"])
+        return None
+
+    async def _resolve_tag_ids(self, names: list[str]) -> list[int] | None:
+        if not names:
+            return []
+        by_name = {
+            label: int(tag["id"])
+            for tag in await self._get_all_tags()
+            if (label := self._resource_label(tag)) is not None
+        }
+        resolved = [by_name[name] for name in names if name in by_name]
+        if len(resolved) != len(names):
+            return None
+        return resolved
+
+    async def _build_search_params(
+        self,
+        query: str,
+        *,
+        correspondent: str | None = None,
+        document_type: str | None = None,
+        storage_path: str | None = None,
+        tags: list[str] | None = None,
+        year: str | None = None,
+        page_size: int = 250,
+        page: int = 1,
+    ) -> dict[str, Any] | None:
+        params: dict[str, Any] = {
+            "query": query,
+            "fields": "id",
+            "page_size": page_size,
+            "page": page,
+        }
+        if correspondent:
+            correspondent_id = await self._resolve_correspondent_id(correspondent)
+            if correspondent_id is None:
+                return None
+            params["correspondent__id"] = correspondent_id
+        if document_type:
+            document_type_id = await self._resolve_document_type_id(document_type)
+            if document_type_id is None:
+                return None
+            params["document_type__id"] = document_type_id
+        if storage_path:
+            storage_path_id = await self._resolve_storage_path_id(storage_path)
+            if storage_path_id is None:
+                return None
+            params["storage_path__id"] = storage_path_id
+        if tags:
+            tag_ids = await self._resolve_tag_ids(tags)
+            if tag_ids is None:
+                return None
+            if tag_ids:
+                params["tags__id__in"] = ",".join(str(tag_id) for tag_id in tag_ids)
+        if year:
+            params["created__year"] = str(year)
+        return params
+
     async def search_documents(
         self,
         query: str,
@@ -434,6 +509,73 @@ class PaperlessClient:
         )
         _raise_for_status(r)
         return [doc["id"] for doc in r.json().get("results", [])]
+
+    async def search_documents_all(
+        self,
+        query: str,
+        *,
+        correspondent: str | None = None,
+        document_type: str | None = None,
+        storage_path: str | None = None,
+        tags: list[str] | None = None,
+        year: str | None = None,
+    ) -> list[int]:
+        """Search via Paperless and return all matching doc IDs in relevance order."""
+        with start_span(
+            "paperless_ai.search.keyword_search",
+            **{
+                "paperless_ai.search.query": query,
+                "paperless_ai.search.filter.correspondent": correspondent,
+                "paperless_ai.search.filter.document_type": document_type,
+                "paperless_ai.search.filter.storage_path": storage_path,
+                "paperless_ai.search.filter.year": str(year) if year is not None else None,
+                "paperless_ai.search.filter.tag_count": len(tags or []),
+            },
+        ) as span:
+            page = 1
+            pages_fetched = 0
+            doc_ids: list[int] = []
+            seen: set[int] = set()
+            while True:
+                params = await self._build_search_params(
+                    query,
+                    correspondent=correspondent,
+                    document_type=document_type,
+                    storage_path=storage_path,
+                    tags=tags,
+                    year=year,
+                    page_size=250,
+                    page=page,
+                )
+                if params is None:
+                    set_span_attributes(
+                        span,
+                        **{
+                            "paperless_ai.search.filter_resolution_failed": True,
+                            "paperless_ai.search.keyword_result_count": 0,
+                        },
+                    )
+                    return []
+                r = await self._client.get("/api/documents/", params=params)
+                _raise_for_status(r)
+                data = r.json()
+                pages_fetched += 1
+                for doc in data.get("results", []):
+                    doc_id = int(doc["id"])
+                    if doc_id not in seen:
+                        seen.add(doc_id)
+                        doc_ids.append(doc_id)
+                if not data.get("next"):
+                    break
+                page += 1
+            set_span_attributes(
+                span,
+                **{
+                    "paperless_ai.search.keyword_pages_fetched": pages_fetched,
+                    "paperless_ai.search.keyword_result_count": len(doc_ids),
+                },
+            )
+            return doc_ids
 
     async def _get_all_workflows(self) -> list[dict]:
         return await self._get_all_objects("/api/workflows/", "_workflows_cache", force=False)

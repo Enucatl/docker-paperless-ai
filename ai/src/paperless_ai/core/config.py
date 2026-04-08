@@ -195,7 +195,14 @@ class AgentConfig(BaseSettings):
     # when a model transcribes embedded binary data (e.g. base64 images in
     # web-archive documents) instead of summarising it.
     ocr_max_tokens: int = 4096
-    metadata_max_tokens: int = 1000
+    metadata_max_tokens: int = Field(
+        default=1000,
+        validation_alias=AliasChoices("metadata_max_tokens", "METADATA_MAX_TOKENS"),
+    )
+    chat_max_tokens: int = Field(
+        default=1000,
+        validation_alias=AliasChoices("chat_max_tokens", "CHAT_MAX_TOKENS"),
+    )
 
     # Dotted import path to the agent class to use in eval experiments.
     agent_class: str = "paperless_ai.agents.smart_graph_agent.SmartDocumentAgent"
@@ -215,13 +222,22 @@ class AgentConfig(BaseSettings):
     # Extra kwargs to forward to LiteLLM for OCR calls.
     # Supports any parameter the downstream API accepts (e.g., top_p, top_k,
     # presence_penalty, or vLLM-specific fields via extra_body).
-    ocr_extra_kwargs: Optional[Dict[str, Any]] = None
+    ocr_extra_kwargs: Optional[Dict[str, Any]] = Field(
+        default=None,
+        validation_alias=AliasChoices("ocr_extra_kwargs", "OCR_EXTRA_KWARGS"),
+    )
 
     # Extra kwargs to forward to LiteLLM for metadata extraction calls.
-    metadata_extra_kwargs: Optional[Dict[str, Any]] = None
+    metadata_extra_kwargs: Optional[Dict[str, Any]] = Field(
+        default=None,
+        validation_alias=AliasChoices("metadata_extra_kwargs", "METADATA_EXTRA_KWARGS"),
+    )
 
     # Extra kwargs to forward to LiteLLM for chat calls.
-    chat_extra_kwargs: Optional[Dict[str, Any]] = None
+    chat_extra_kwargs: Optional[Dict[str, Any]] = Field(
+        default=None,
+        validation_alias=AliasChoices("chat_extra_kwargs", "CHAT_EXTRA_KWARGS"),
+    )
 
     # LLM-based chunk situating for embeddings (contextual retrieval).
     # When situation_model is set, each chunk is prefixed with a short LLM-
@@ -259,15 +275,12 @@ class AgentConfig(BaseSettings):
 
     def get_chat_litellm_kwargs(self) -> dict:
         """Hyperparameter kwargs for the chat LiteLLM call."""
-        kwargs: dict = {"max_tokens": self.metadata_max_tokens}
+        kwargs: dict = {"max_tokens": self.chat_max_tokens}
         if self.chat_temperature is not None:
             kwargs["temperature"] = self.chat_temperature
-        elif self.metadata_temperature is not None:
-            kwargs["temperature"] = self.metadata_temperature
 
-        effort = self.chat_reasoning_effort or self.metadata_reasoning_effort or self.ocr_reasoning_effort
-        if effort:
-            kwargs["reasoning_effort"] = effort
+        if self.chat_reasoning_effort:
+            kwargs["reasoning_effort"] = self.chat_reasoning_effort
         if self.chat_extra_kwargs:
             kwargs.update(self.chat_extra_kwargs)
         return kwargs

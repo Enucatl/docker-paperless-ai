@@ -17,6 +17,7 @@ import litellm
 import niquests
 
 from paperless_ai.core.telemetry import add_litellm_metadata
+from paperless_ai.search.flag_reranker import FlagReranker
 
 log = logging.getLogger(__name__)
 
@@ -100,11 +101,17 @@ class LocalLazySearchEmbedder:
     """
 
     MODEL_NAME = "BAAI/bge-m3"
+    LOCAL_RERANKER_MODEL_NAME = "BAAI/bge-reranker-v2-m3"
 
     def __init__(self) -> None:
         self.model = None  # sentence_transformers.SentenceTransformer | None
+        self._reranker = None
+        self._reranker_model_name: str | None = None
         self._lock = threading.Lock()
         self._last_used: float = 0.0
+
+    def _mark_used(self) -> None:
+        self._last_used = time.monotonic()
 
     def _get_model(self):
         """Return the SentenceTransformer model, loading it on first call.
@@ -119,8 +126,24 @@ class LocalLazySearchEmbedder:
 
                     log.info("Loading SentenceTransformer %s into RAM…", self.MODEL_NAME)
                     self.model = SentenceTransformer(self.MODEL_NAME, trust_remote_code=True)
-        self._last_used = time.monotonic()
+        self._mark_used()
         return self.model
+
+    def _get_reranker(self, model_name: str):
+        """Return the local FlagEmbedding reranker, loading on first call."""
+        if self._reranker is None or self._reranker_model_name != model_name:
+            with self._lock:
+                if self._reranker is None or self._reranker_model_name != model_name:
+                    import torch
+
+                    log.info("Loading local reranker %s into RAM…", model_name)
+                    self._reranker = FlagReranker(
+                        model_name,
+                        use_fp16=torch.cuda.is_available(),
+                    )
+                    self._reranker_model_name = model_name
+        self._mark_used()
+        return self._reranker
 
     async def embed_query(self, query: str) -> EmbeddingResult:
         """Embed a single search query.
@@ -136,15 +159,40 @@ class LocalLazySearchEmbedder:
         dense = await asyncio.to_thread(_embed)
         return EmbeddingResult(dense=dense)
 
+    async def rerank(
+        self,
+        query: str,
+        passages: list[str],
+        *,
+        model_name: str,
+        normalize: bool = False,
+    ) -> list[float]:
+        """Score query/passage pairs with the local FlagEmbedding reranker."""
+
+        def _score() -> list[float]:
+            reranker = self._get_reranker(model_name)
+            pairs = [[query, passage] for passage in passages]
+            scores = reranker.compute_score(pairs, normalize=normalize)
+            if isinstance(scores, float):
+                return [scores]
+            return list(scores)
+
+        return await asyncio.to_thread(_score)
+
     async def idle_watcher(self, timeout_seconds: int = 300) -> None:
         """Background task: unload the model after it has been idle."""
         while True:
             await asyncio.sleep(60)
-            if self.model is not None and (time.monotonic() - self._last_used) > timeout_seconds:
+            if (
+                (self.model is not None or self._reranker is not None)
+                and (time.monotonic() - self._last_used) > timeout_seconds
+            ):
                 log.info(
-                    "FastEmbed model idle for >%ds — freeing RAM", timeout_seconds
+                    "Local search models idle for >%ds — freeing RAM", timeout_seconds
                 )
                 self.model = None
+                self._reranker = None
+                self._reranker_model_name = None
                 import gc
 
                 await asyncio.to_thread(gc.collect)

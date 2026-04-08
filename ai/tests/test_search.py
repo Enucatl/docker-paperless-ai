@@ -37,6 +37,7 @@ CI gate.  The right combination for this use case is:
 
 import asyncio
 import gc
+import math
 import time
 import tracemalloc
 import weakref
@@ -48,6 +49,7 @@ import pytest
 
 from tests.conftest import QDRANT_URL, WEBHOOK_URL
 from paperless_ai.search.embedder import EmbeddingResult, LocalLazySearchEmbedder
+from paperless_ai.search.retriever import ChunkCandidate, hybrid_retrieve
 
 # ---------------------------------------------------------------------------
 # Fake SentenceTransformer model (no download, tracks allocation)
@@ -78,6 +80,29 @@ class _FakeSentenceTransformer:
         return np.array([0.1] * _DENSE_DIM, dtype=np.float32)
 
 
+class _FakeFlagReranker:
+    """Drop-in for FlagEmbedding.FlagReranker."""
+
+    def __init__(self, model_name: str, use_fp16: bool = False):
+        self._model_name = model_name
+        self._use_fp16 = use_fp16
+
+    def compute_score(self, pairs, normalize: bool = False):
+        normalized_pairs = pairs if pairs and isinstance(pairs[0], list) else [pairs]
+        scores = []
+        for _query, passage in normalized_pairs:
+            if "best" in passage:
+                score = 8.0
+            elif "mid" in passage:
+                score = 0.0
+            else:
+                score = -8.0
+            if normalize:
+                score = 1.0 / (1.0 + math.exp(-score))
+            scores.append(score)
+        return scores[0] if len(scores) == 1 else scores
+
+
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
@@ -93,6 +118,12 @@ def patched_sentence_transformer():
     """Patch sentence_transformers.SentenceTransformer globally for the duration of the test."""
     with patch("sentence_transformers.SentenceTransformer", _FakeSentenceTransformer):
         yield _FakeSentenceTransformer
+
+
+@pytest.fixture
+def patched_flag_reranker():
+    with patch("paperless_ai.search.embedder.FlagReranker", _FakeFlagReranker):
+        yield _FakeFlagReranker
 
 
 # ---------------------------------------------------------------------------
@@ -177,6 +208,21 @@ async def test_embed_query_does_not_block_event_loop(embedder, patched_sentence_
     assert counter == 1, "Event loop was blocked during embed_query"
 
 
+async def test_rerank_returns_normalized_scores(embedder, patched_flag_reranker):
+    scores = await embedder.rerank(
+        "what is panda?",
+        ["worst passage", "best passage"],
+        model_name=embedder.LOCAL_RERANKER_MODEL_NAME,
+        normalize=True,
+    )
+
+    assert len(scores) == 2
+    assert 0.0 < scores[0] < 1.0
+    assert 0.0 < scores[1] < 1.0
+    assert scores[1] > scores[0]
+    assert embedder._reranker is not None
+
+
 # ---------------------------------------------------------------------------
 # Unit: idle_watcher
 # ---------------------------------------------------------------------------
@@ -222,6 +268,26 @@ async def test_idle_watcher_unloads_stale_model(embedder, patched_sentence_trans
     assert embedder.model is None, "Stale model should have been unloaded"
 
 
+async def test_idle_watcher_unloads_stale_reranker(embedder, patched_flag_reranker):
+    embedder._get_reranker(embedder.LOCAL_RERANKER_MODEL_NAME)
+    embedder._last_used = 0.0
+
+    tick = 0
+
+    async def fast_sleep(_seconds):
+        nonlocal tick
+        tick += 1
+        if tick >= 2:
+            raise asyncio.CancelledError
+
+    with patch("asyncio.sleep", fast_sleep):
+        with pytest.raises(asyncio.CancelledError):
+            await embedder.idle_watcher(timeout_seconds=0)
+
+    assert embedder._reranker is None
+    assert embedder._reranker_model_name is None
+
+
 async def test_idle_watcher_calls_gc_collect(embedder, patched_sentence_transformer):
     """gc.collect() must be called after model is unloaded."""
     embedder._get_model()
@@ -262,6 +328,94 @@ async def test_idle_watcher_logs_eviction(embedder, patched_sentence_transformer
                 await embedder.idle_watcher(timeout_seconds=0)
 
     assert any("freeing RAM" in r.message or "idle" in r.message.lower() for r in caplog.records)
+
+
+async def test_hybrid_retrieve_uses_local_reranker():
+    class _FakeClient:
+        def __init__(self):
+            self.calls: list[tuple[str, dict]] = []
+
+        async def search_documents_all(self, query: str, **kwargs):
+            self.calls.append((query, kwargs))
+            return [3, 2]
+
+    client = _FakeClient()
+    embedder = MagicMock(spec=LocalLazySearchEmbedder)
+
+    with patch(
+        "paperless_ai.search.retriever.dense_search",
+        AsyncMock(
+            return_value=[
+                ChunkCandidate(2, "best dense passage"),
+                ChunkCandidate(1, "worst dense passage"),
+            ]
+        ),
+    ), patch(
+        "paperless_ai.search.retriever.fetch_document_chunks",
+        AsyncMock(return_value=[ChunkCandidate(3, "mid keyword passage")]),
+    ), patch(
+        "paperless_ai.search.retriever.local_rerank",
+        AsyncMock(
+            return_value=[
+                ChunkCandidate(2, "best dense passage"),
+                ChunkCandidate(3, "mid keyword passage"),
+                ChunkCandidate(1, "worst dense passage"),
+            ]
+        ),
+    ) as rerank_mock:
+        fused_ids, chunk_map = await hybrid_retrieve(
+            embedder=embedder,
+            qdrant_url="http://qdrant:6333",
+            query="youtube premium",
+            client=client,
+            rerank_candidates=100,
+            mode="recall",
+        )
+
+    assert fused_ids == [2, 3, 1]
+    assert chunk_map == {2: "best dense passage", 3: "mid keyword passage", 1: "worst dense passage"}
+    assert client.calls == [("youtube premium", {"correspondent": None, "document_type": None, "storage_path": None, "tags": None, "year": None})]
+    rerank_mock.assert_awaited_once()
+
+
+async def test_hybrid_retrieve_precision_prunes_bottom_half():
+    class _FakeClient:
+        async def search_documents_all(self, query: str, **kwargs):
+            return []
+
+    embedder = MagicMock(spec=LocalLazySearchEmbedder)
+
+    with patch(
+        "paperless_ai.search.retriever.dense_search",
+        AsyncMock(
+            return_value=[
+                ChunkCandidate(1, "best dense passage"),
+                ChunkCandidate(2, "mid dense passage"),
+                ChunkCandidate(3, "worst dense passage"),
+                ChunkCandidate(4, "worst dense passage two"),
+            ]
+        ),
+    ), patch(
+        "paperless_ai.search.retriever.local_rerank",
+        AsyncMock(
+            return_value=[
+                ChunkCandidate(1, "best dense passage"),
+                ChunkCandidate(2, "mid dense passage"),
+                ChunkCandidate(3, "worst dense passage"),
+                ChunkCandidate(4, "worst dense passage two"),
+            ]
+        ),
+    ):
+        fused_ids, chunk_map = await hybrid_retrieve(
+            embedder=embedder,
+            qdrant_url="http://qdrant:6333",
+            query="youtube premium",
+            client=_FakeClient(),
+            mode="precision",
+        )
+
+    assert fused_ids == [1, 2]
+    assert chunk_map == {1: "best dense passage", 2: "mid dense passage"}
 
 
 # ---------------------------------------------------------------------------
@@ -533,4 +687,4 @@ async def test_dense_search_applies_metadata_filters(qdrant_store):
         await qdrant_store.delete_document(9101)
         await qdrant_store.delete_document(9102)
 
-    assert [doc_id for doc_id, _ in results] == [9101]
+    assert [item.doc_id for item in results] == [9101]

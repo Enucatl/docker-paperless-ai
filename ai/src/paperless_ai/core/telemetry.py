@@ -7,6 +7,7 @@ OTEL_EXPORTER_OTLP_ENDPOINT is not set or packages are unavailable.
 
 import logging
 import os
+from contextlib import contextmanager
 
 log = logging.getLogger(__name__)
 
@@ -21,6 +22,33 @@ def add_litellm_metadata(kwargs: dict, **fields: str) -> dict:
     metadata["paperless_ai"] = paperless_ai
     kwargs["metadata"] = metadata
     return kwargs
+
+
+@contextmanager
+def start_span(name: str, **attributes):
+    """Start an OTEL span when telemetry is available, otherwise no-op."""
+    try:
+        from opentelemetry import trace
+
+        tracer = trace.get_tracer("paperless_ai")
+        with tracer.start_as_current_span(name) as span:
+            set_span_attributes(span, **attributes)
+            yield span
+    except Exception:
+        yield None
+
+
+def set_span_attributes(span, **attributes) -> None:
+    """Set span attributes, skipping null values and swallowing OTEL errors."""
+    if span is None:
+        return
+    for key, value in attributes.items():
+        if value is None:
+            continue
+        try:
+            span.set_attribute(key, value)
+        except Exception:
+            continue
 
 
 def setup_telemetry(*, service_name: str | None = None, project_name: str | None = None) -> None:

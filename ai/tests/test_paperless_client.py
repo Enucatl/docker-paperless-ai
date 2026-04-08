@@ -68,13 +68,13 @@ async def test_paperless_client_aclose_method_exists():
         mock_session.close.assert_called_once()
 
 
-def _paged_response(results):
+def _paged_response(results, *, next_value=None):
     response = MagicMock()
     response.status_code = 200
     response.ok = True
     response.headers = {}
     response.raise_for_status = MagicMock()
-    response.json = MagicMock(return_value={"results": results, "next": None})
+    response.json = MagicMock(return_value={"results": results, "next": next_value})
     return response
 
 
@@ -181,3 +181,61 @@ async def test_get_or_create_custom_field_updates_existing_field_type():
             "/api/custom_fields/3/",
             json={"data_type": "longtext"},
         )
+
+
+@pytest.mark.asyncio
+async def test_search_documents_all_paginates_and_applies_filters():
+    with patch("paperless_ai.core.paperless.niquests.AsyncSession") as mock_session_class:
+        mock_session = AsyncMock()
+        mock_session_class.return_value = mock_session
+        mock_session.close = AsyncMock()
+        mock_session.get = AsyncMock(
+            side_effect=[
+                _paged_response([{"id": 41, "name": "Acme Corp"}]),
+                _paged_response([{"id": 21, "name": "Invoice"}]),
+                _paged_response([{"id": 31, "path": "Archive/2024"}]),
+                _paged_response([{"id": 11, "name": "Urgent"}]),
+                _paged_response([{"id": 501}, {"id": 502}], next_value="/api/documents/?page=2"),
+                _paged_response([{"id": 503}]),
+            ]
+        )
+
+        async with PaperlessClient("http://test:8000", "token123") as client:
+            results = await client.search_documents_all(
+                "invoice",
+                correspondent="Acme Corp",
+                document_type="Invoice",
+                storage_path="Archive/2024",
+                tags=["Urgent"],
+                year="2024",
+            )
+
+        assert results == [501, 502, 503]
+        search_call = mock_session.get.await_args_list[4]
+        assert search_call.args[0] == "/api/documents/"
+        assert search_call.kwargs["params"] == {
+            "query": "invoice",
+            "fields": "id",
+            "page_size": 250,
+            "page": 1,
+            "correspondent__id": 41,
+            "document_type__id": 21,
+            "storage_path__id": 31,
+            "tags__id__in": "11",
+            "created__year": "2024",
+        }
+
+
+@pytest.mark.asyncio
+async def test_search_documents_all_returns_empty_when_filter_name_unknown():
+    with patch("paperless_ai.core.paperless.niquests.AsyncSession") as mock_session_class:
+        mock_session = AsyncMock()
+        mock_session_class.return_value = mock_session
+        mock_session.close = AsyncMock()
+        mock_session.get = AsyncMock(return_value=_paged_response([]))
+
+        async with PaperlessClient("http://test:8000", "token123") as client:
+            results = await client.search_documents_all("invoice", correspondent="Missing Corp")
+
+        assert results == []
+        assert mock_session.get.await_count == 1

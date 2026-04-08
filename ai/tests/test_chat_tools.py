@@ -5,6 +5,7 @@ import pytest
 
 from paperless_ai.search.chat_agent import ChatCopilot, route_tools
 from paperless_ai.search.tools import (
+    TOOL_SCHEMAS,
     ToolExecutionResult,
     ToolSourceRef,
     execute_tool_call,
@@ -47,10 +48,10 @@ async def test_get_available_metadata_formats_lists():
         "tags": ["Paid", "Tax"],
     }
     result = await get_available_metadata(client=client)
-    assert "Available Correspondents: Acme Corp" in result
-    assert "Available Document Types: Invoice" in result
-    assert "Available Storage Paths: Archive/2024" in result
-    assert "Available Tags: Paid, Tax" in result
+    assert "Available Correspondents: Acme Corp" in result.content
+    assert "Available Document Types: Invoice" in result.content
+    assert "Available Storage Paths: Archive/2024" in result.content
+    assert "Available Tags: Paid, Tax" in result.content
 
 
 @pytest.mark.asyncio
@@ -81,15 +82,17 @@ async def test_search_documents_formats_qdrant_hits():
             "invoice",
             embedder=embedder,
             qdrant_url="http://qdrant:6333",
+            config=MagicMock(),
             client=client,
             correspondent="Acme Corp",
+            mode="recall",
         )
 
-    assert "Doc 42" in result
-    assert "Invoice 42" in result
-    assert "Acme Corp" in result
-    assert "Type: Invoice" in result
-    assert "Tags: Paid" in result
+    assert "Doc 42" in result.content
+    assert "Invoice 42" in result.content
+    assert "Acme Corp" in result.content
+    assert "Type: Invoice" in result.content
+    assert "Tags: Paid" in result.content
     qdrant.close.assert_awaited_once()
 
 
@@ -112,11 +115,13 @@ async def test_search_documents_uses_chunk_map_when_scroll_payload_missing():
             "zoo",
             embedder=embedder,
             qdrant_url="http://qdrant:6333",
+            config=MagicMock(),
             client=client,
+            mode="recall",
         )
 
-    assert "Doc 99" in result
-    assert "Family admission tickets purchased online" in result
+    assert "Doc 99" in result.content
+    assert "Family admission tickets purchased online" in result.content
     qdrant.close.assert_awaited_once()
 
 
@@ -136,6 +141,7 @@ async def test_execute_tool_call_reads_document():
         client=client,
         embedder=embedder,
         qdrant_url="http://qdrant:6333",
+        config=MagicMock(),
     )
 
     assert result == "[Doc 7 | Receipt]\nFull OCR text"
@@ -157,10 +163,20 @@ async def test_execute_tool_call_detailed_collects_source_refs():
         client=client,
         embedder=embedder,
         qdrant_url="http://qdrant:6333",
+        config=MagicMock(),
     )
 
     assert result.summary == "Read OCR text for document 7."
     assert result.source_refs == [ToolSourceRef(doc_id=7, source_type="read")]
+
+
+def test_search_tool_schema_exposes_mode_enum():
+    schema = next(
+        tool["function"]
+        for tool in TOOL_SCHEMAS
+        if tool["function"]["name"] == "search_documents"
+    )
+    assert schema["parameters"]["properties"]["mode"]["enum"] == ["precision", "recall"]
 
 
 @pytest.mark.asyncio

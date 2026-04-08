@@ -25,6 +25,7 @@ from paperless_ai.search.retriever import (
 
 JUDGE_DOC_MAX_CHARS = 12000
 JUDGE_BATCH_SIZE = 5
+VALID_RETRIEVAL_MODES = tuple(RETRIEVAL_MODE_DENSE_K)
 
 
 @dataclass
@@ -265,6 +266,13 @@ async def search_documents(
             "paperless_ai.search.query": query,
         },
     ) as span:
+        if mode not in VALID_RETRIEVAL_MODES:
+            content = (
+                f"Invalid search mode {mode!r}. "
+                f"Allowed values: {', '.join(VALID_RETRIEVAL_MODES)}."
+            )
+            set_span_attributes(span, **{"paperless_ai.tool.validation_error": content})
+            return ToolExecutionResult(content=content, summary=content, preview=content)
         if mode == "recall" and limit is None:
             content = "Recall searches require an explicit limit."
             set_span_attributes(span, **{"paperless_ai.tool.validation_error": content})

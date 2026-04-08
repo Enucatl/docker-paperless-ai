@@ -31,11 +31,12 @@ def start_span(name: str, **attributes):
         from opentelemetry import trace
 
         tracer = trace.get_tracer("paperless_ai")
-        with tracer.start_as_current_span(name) as span:
-            set_span_attributes(span, **attributes)
-            yield span
     except Exception:
         yield None
+        return
+    with tracer.start_as_current_span(name) as span:
+        set_span_attributes(span, **attributes)
+        yield span
 
 
 def set_span_attributes(span, **attributes) -> None:

@@ -3,6 +3,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from paperless_ai.core.telemetry import start_span
 from paperless_ai.search.chat_agent import ChatCopilot, route_tools
 from paperless_ai.search.tools import (
     TOOL_SCHEMAS,
@@ -197,6 +198,23 @@ async def test_search_documents_recall_requires_explicit_limit():
 
 
 @pytest.mark.asyncio
+async def test_search_documents_rejects_invalid_mode_without_retrieval():
+    with patch("paperless_ai.search.tools.hybrid_retrieve", AsyncMock()) as hybrid_retrieve_mock:
+        result = await search_documents(
+            "youtube premium",
+            embedder=AsyncMock(),
+            qdrant_url="http://qdrant:6333",
+            config=MagicMock(),
+            client=AsyncMock(),
+            mode="recall,precision",
+            limit=20,
+        )
+
+    assert result.summary == "Invalid search mode 'recall,precision'. Allowed values: precision, recall."
+    hybrid_retrieve_mock.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_execute_tool_call_detailed_recall_requires_explicit_limit():
     result = await execute_tool_call_detailed(
         "search_documents",
@@ -208,6 +226,28 @@ async def test_execute_tool_call_detailed_recall_requires_explicit_limit():
     )
 
     assert result.content == "Recall searches require an explicit limit."
+
+
+@pytest.mark.asyncio
+async def test_execute_tool_call_detailed_rejects_invalid_mode():
+    with patch("paperless_ai.search.tools.hybrid_retrieve", AsyncMock()) as hybrid_retrieve_mock:
+        result = await execute_tool_call_detailed(
+            "search_documents",
+            {"query": "youtube premium", "mode": "recall,precision"},
+            client=AsyncMock(),
+            embedder=AsyncMock(),
+            qdrant_url="http://qdrant:6333",
+            config=MagicMock(),
+        )
+
+    assert result.content == "Invalid search mode 'recall,precision'. Allowed values: precision, recall."
+    hybrid_retrieve_mock.assert_not_called()
+
+
+def test_start_span_preserves_original_exception():
+    with pytest.raises(ValueError, match="boom"):
+        with start_span("paperless_ai.test.span"):
+            raise ValueError("boom")
 
 
 @pytest.mark.asyncio

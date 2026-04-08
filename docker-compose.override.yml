@@ -38,6 +38,13 @@ services:
     volumes:
       - ./ai/eval:/app/eval
 
+  webhook-listener:
+    environment:
+      - LOCAL_SEARCH_IDLE_TIMEOUT_SECONDS=${LOCAL_SEARCH_IDLE_TIMEOUT_SECONDS:-180}
+      - LOCAL_SEARCH_WARM_ON_CHAT_LOAD=${LOCAL_SEARCH_WARM_ON_CHAT_LOAD:-true}
+      - LOCAL_SEARCH_WARM_ON_STARTUP=${LOCAL_SEARCH_WARM_ON_STARTUP:-false}
+      - LOCAL_SEARCH_START_METHOD=${LOCAL_SEARCH_START_METHOD:-spawn}
+
   phoenix:
     volumes:
       - phoenixdata:/root/.phoenix

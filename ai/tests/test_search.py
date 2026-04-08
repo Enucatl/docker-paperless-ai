@@ -49,7 +49,8 @@ import pytest
 
 from tests.conftest import QDRANT_URL, WEBHOOK_URL
 from paperless_ai.search.embedder import EmbeddingResult, LocalLazySearchEmbedder
-from paperless_ai.search.retriever import ChunkCandidate, hybrid_retrieve
+from paperless_ai.search.local_search_process import ProcessLocalSearchEmbedder
+from paperless_ai.search.retriever import MAX_RERANK_CANDIDATES, ChunkCandidate, hybrid_retrieve
 
 # ---------------------------------------------------------------------------
 # Fake SentenceTransformer model (no download, tracks allocation)
@@ -101,6 +102,28 @@ class _FakeFlagReranker:
                 score = 1.0 / (1.0 + math.exp(-score))
             scores.append(score)
         return scores[0] if len(scores) == 1 else scores
+
+
+def _fake_worker(conn, idle_timeout_seconds: int):
+    while True:
+        if not conn.poll(idle_timeout_seconds):
+            break
+        request = conn.recv()
+        action = request.get("action")
+        if action == "shutdown":
+            conn.send({"ok": True})
+            break
+        if action == "warmup":
+            conn.send({"ok": True})
+            continue
+        if action == "embed_query":
+            conn.send({"ok": True, "dense": [0.1, 0.2], "sparse_indices": [], "sparse_values": []})
+            continue
+        if action == "rerank":
+            conn.send({"ok": True, "scores": [float(idx) for idx, _ in enumerate(request["passages"], start=1)]})
+            continue
+        conn.send({"ok": False, "error": f"bad action: {action}"})
+    conn.close()
 
 
 # ---------------------------------------------------------------------------
@@ -418,6 +441,81 @@ async def test_hybrid_retrieve_precision_prunes_bottom_half():
     assert chunk_map == {1: "best dense passage", 2: "mid dense passage"}
 
 
+async def test_hybrid_retrieve_caps_rerank_candidates():
+    class _FakeClient:
+        async def search_documents_all(self, query: str, **kwargs):
+            return [3, 4, 5]
+
+    embedder = MagicMock(spec=LocalLazySearchEmbedder)
+    dense_chunks = [
+        ChunkCandidate(1, "dense 1"),
+        ChunkCandidate(2, "dense 2"),
+    ]
+    keyword_chunks = [
+        ChunkCandidate(3, "keyword 3"),
+        ChunkCandidate(4, "keyword 4"),
+        ChunkCandidate(5, "keyword 5"),
+    ]
+
+    with patch(
+        "paperless_ai.search.retriever.dense_search",
+        AsyncMock(return_value=dense_chunks),
+    ), patch(
+        "paperless_ai.search.retriever.fetch_document_chunks",
+        AsyncMock(return_value=keyword_chunks),
+    ), patch(
+        "paperless_ai.search.retriever.local_rerank",
+        AsyncMock(return_value=[ChunkCandidate(1, "dense 1"), ChunkCandidate(3, "keyword 3")]),
+    ) as rerank_mock:
+        await hybrid_retrieve(
+            embedder=embedder,
+            qdrant_url="http://qdrant:6333",
+            query="invoice",
+            client=_FakeClient(),
+            rerank_candidates=2,
+            mode="recall",
+        )
+
+    rerank_candidates = rerank_mock.await_args.args[2]
+    assert len(rerank_candidates) == 2
+    assert {candidate.doc_id for candidate in rerank_candidates} <= {1, 2, 3, 4, 5}
+
+
+async def test_hybrid_retrieve_enforces_global_rerank_cap():
+    class _FakeClient:
+        async def search_documents_all(self, query: str, **kwargs):
+            return list(range(1001, 2501))
+
+    embedder = MagicMock(spec=LocalLazySearchEmbedder)
+    dense_chunks = [ChunkCandidate(doc_id, f"dense {doc_id}") for doc_id in range(1, 101)]
+    keyword_chunks = [
+        ChunkCandidate(doc_id, f"keyword {doc_id}")
+        for doc_id in range(1001, 2501)
+    ]
+
+    with patch(
+        "paperless_ai.search.retriever.dense_search",
+        AsyncMock(return_value=dense_chunks),
+    ), patch(
+        "paperless_ai.search.retriever.fetch_document_chunks",
+        AsyncMock(return_value=keyword_chunks),
+    ), patch(
+        "paperless_ai.search.retriever.local_rerank",
+        AsyncMock(return_value=dense_chunks[:5]),
+    ) as rerank_mock:
+        await hybrid_retrieve(
+            embedder=embedder,
+            qdrant_url="http://qdrant:6333",
+            query="invoice",
+            client=_FakeClient(),
+            rerank_candidates=5000,
+            mode="recall",
+        )
+
+    rerank_candidates = rerank_mock.await_args.args[2]
+    assert len(rerank_candidates) == MAX_RERANK_CANDIDATES
+
+
 # ---------------------------------------------------------------------------
 # Memory lifecycle: tracemalloc + weakref
 #
@@ -508,6 +606,55 @@ def test_memory_lifecycle_allocate_and_free():
         f"[memory] fake model size: {_ALLOC_BYTES / 1024 / 1024:.0f} MiB\n"
         f"[memory] weakref alive after unload: {wr() is not None}"
     )
+
+
+async def test_process_embedder_restarts_after_idle_exit():
+    embedder = ProcessLocalSearchEmbedder(
+        idle_timeout_seconds=0,
+        start_method="fork",
+        worker_target=_fake_worker,
+    )
+    first = await embedder.embed_query("alpha")
+    first_pid = embedder._process.pid
+    assert first.dense == [0.1, 0.2]
+
+    await asyncio.sleep(0.1)
+
+    second = await embedder.embed_query("beta")
+    second_pid = embedder._process.pid
+    assert second.dense == [0.1, 0.2]
+    assert first_pid != second_pid
+
+    await embedder.aclose()
+
+
+async def test_process_embedder_rerank_round_trip():
+    embedder = ProcessLocalSearchEmbedder(
+        idle_timeout_seconds=5,
+        start_method="fork",
+        worker_target=_fake_worker,
+    )
+    scores = await embedder.rerank(
+        "query",
+        ["a", "b", "c"],
+        model_name=embedder.LOCAL_RERANKER_MODEL_NAME,
+    )
+    assert scores == [1.0, 2.0, 3.0]
+    await embedder.aclose()
+
+
+async def test_process_embedder_warmup_reuses_worker():
+    embedder = ProcessLocalSearchEmbedder(
+        idle_timeout_seconds=5,
+        start_method="fork",
+        worker_target=_fake_worker,
+    )
+    await embedder.warmup()
+    first_pid = embedder._process.pid
+    result = await embedder.embed_query("alpha")
+    assert result.dense == [0.1, 0.2]
+    assert embedder._process.pid == first_pid
+    await embedder.aclose()
 
 
 # ---------------------------------------------------------------------------

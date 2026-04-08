@@ -11,22 +11,15 @@ import logging
 import os
 import threading
 import time
-from dataclasses import dataclass, field
 
 import litellm
 import niquests
 
 from paperless_ai.core.telemetry import add_litellm_metadata
+from paperless_ai.search.embedder_types import EmbeddingResult
 from paperless_ai.search.flag_reranker import FlagReranker
 
 log = logging.getLogger(__name__)
-
-
-@dataclass
-class EmbeddingResult:
-    dense: list[float]
-    sparse_indices: list[int] = field(default_factory=list)
-    sparse_values: list[float] = field(default_factory=list)
 
 
 class EmbeddingAPIEmbedder:

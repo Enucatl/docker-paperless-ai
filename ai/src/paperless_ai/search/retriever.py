@@ -18,13 +18,14 @@ from qdrant_client import AsyncQdrantClient
 from qdrant_client.models import FieldCondition, Filter, MatchAny, MatchValue
 
 from paperless_ai.core.telemetry import set_span_attributes, start_span
-from paperless_ai.search.embedder import LocalLazySearchEmbedder
+from paperless_ai.search.embedder_types import SearchEmbedder
 from paperless_ai.search.qdrant_store import COLLECTION
 
 log = logging.getLogger(__name__)
 
 K = 25
 N = 50
+MAX_RERANK_CANDIDATES = 1000
 RRF_K = 60
 RETRIEVAL_MODE_DENSE_K = {"precision": 40, "recall": 100}
 PRECISION_PRUNE_FRACTION = 0.50
@@ -106,7 +107,7 @@ def _chunk_map_from_chunks(chunks: list[ChunkCandidate]) -> dict[int, str]:
 
 
 async def dense_search(
-    embedder: LocalLazySearchEmbedder,
+    embedder: SearchEmbedder,
     qdrant_url: str,
     query: str,
     k: int,
@@ -244,7 +245,7 @@ def _order_chunk_candidates(
 
 
 async def local_rerank(
-    embedder: LocalLazySearchEmbedder,
+    embedder: SearchEmbedder,
     query: str,
     candidates: list[ChunkCandidate],
 ) -> list[ChunkCandidate]:
@@ -297,7 +298,7 @@ def _dedupe_documents(candidates: list[ChunkCandidate]) -> tuple[list[int], dict
 
 async def hybrid_retrieve(
     *,
-    embedder: LocalLazySearchEmbedder,
+    embedder: SearchEmbedder,
     qdrant_url: str,
     query: str,
     client=None,
@@ -365,16 +366,20 @@ async def hybrid_retrieve(
             filters=resolved_filters,
         )
         chunk_candidates = _order_chunk_candidates(fused_ids, dense_chunks, keyword_chunks)
+        bounded_rerank_candidates = min(MAX_RERANK_CANDIDATES, max(1, rerank_candidates))
+        bounded_chunk_candidates = chunk_candidates[:bounded_rerank_candidates]
         set_span_attributes(
             span,
             **{
                 "paperless_ai.search.chunk_candidate_count": len(chunk_candidates),
+                "paperless_ai.search.rerank_candidate_limit": bounded_rerank_candidates,
+                "paperless_ai.search.rerank_candidate_count": len(bounded_chunk_candidates),
             },
         )
-        if not chunk_candidates:
+        if not bounded_chunk_candidates:
             return fused_ids, {}
 
-        reranked_chunks = await local_rerank(embedder, query, chunk_candidates)
+        reranked_chunks = await local_rerank(embedder, query, bounded_chunk_candidates)
         if mode == "precision":
             before_prune = len(reranked_chunks)
             reranked_chunks = _prune_precision_chunks(reranked_chunks)

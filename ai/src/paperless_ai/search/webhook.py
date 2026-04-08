@@ -33,7 +33,7 @@ import os
 import re
 import secrets
 import uuid
-from contextlib import asynccontextmanager, suppress
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Query, Request, Response, WebSocket, WebSocketDisconnect, status
@@ -43,7 +43,7 @@ from paperless_ai.core.config import AgentConfig
 from paperless_ai.core.paperless import PaperlessClient
 from paperless_ai.core.telemetry import setup_telemetry
 from paperless_ai.search.chat_agent import ChatCopilot
-from paperless_ai.search.embedder import LocalLazySearchEmbedder
+from paperless_ai.search.local_search_process import ProcessLocalSearchEmbedder
 from paperless_ai.search.queue import TaskQueues
 from paperless_ai.search.retriever import (
     SearchFilters,
@@ -55,8 +55,7 @@ log = logging.getLogger(__name__)
 # Task queue and webhooks
 _queues: TaskQueues | None = None
 _webhook_secret: str | None = None
-_lazy_embedder: LocalLazySearchEmbedder | None = None
-_idle_task: asyncio.Task | None = None
+_lazy_embedder: ProcessLocalSearchEmbedder | None = None
 _tag_ocr: str = "ai:run-ocr"
 _tag_metadata: str = "ai:run-metadata"
 _tag_embed: str = "ai:run-embed"
@@ -65,6 +64,11 @@ _tag_embed: str = "ai:run-embed"
 _paperless_client: PaperlessClient | None = None
 _qdrant_url: str = "http://qdrant:6333"
 _chat_copilot: ChatCopilot | None = None
+_local_search_idle_timeout_seconds: int = 300
+_local_search_start_method: str = "spawn"
+_local_search_warm_on_startup: bool = False
+_local_search_warm_on_chat_load: bool = True
+_local_search_warmup_task: asyncio.Task | None = None
 
 # Retrieval hyperparameters
 K = 25  # max chunks from dense search
@@ -95,8 +99,11 @@ def _read_secret(env_var: str) -> str | None:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global _queues, _webhook_secret, _tag_ocr, _tag_metadata, _tag_embed
-    global _lazy_embedder, _idle_task, _paperless_client, _qdrant_url
+    global _lazy_embedder, _paperless_client, _qdrant_url
     global _chat_copilot
+    global _local_search_idle_timeout_seconds, _local_search_start_method
+    global _local_search_warm_on_startup, _local_search_warm_on_chat_load
+    global _local_search_warmup_task
 
     redis_url = os.environ.get("REDIS_URL", "redis://broker:6379/1")
     _webhook_secret = _read_secret("WEBHOOK_SECRET") or None
@@ -108,13 +115,27 @@ async def lifespan(app: FastAPI):
     _qdrant_url = os.environ.get("QDRANT_URL", "http://qdrant:6333")
     paperless_url = os.environ.get("PAPERLESS_URL")
     paperless_token = _read_secret("PAPERLESS_TOKEN")
+    _local_search_idle_timeout_seconds = int(
+        os.environ.get("LOCAL_SEARCH_IDLE_TIMEOUT_SECONDS", "300")
+    )
+    _local_search_start_method = os.environ.get("LOCAL_SEARCH_START_METHOD", "spawn")
+    _local_search_warm_on_startup = (
+        os.environ.get("LOCAL_SEARCH_WARM_ON_STARTUP", "false").lower() == "true"
+    )
+    _local_search_warm_on_chat_load = (
+        os.environ.get("LOCAL_SEARCH_WARM_ON_CHAT_LOAD", "true").lower() == "true"
+    )
     log.info(
-        "Startup config: redis=%s qdrant=%s paperless_url=%r paperless_token=%s webhook_secret=%s",
+        "Startup config: redis=%s qdrant=%s paperless_url=%r paperless_token=%s webhook_secret=%s local_search_idle_timeout=%ss local_search_start_method=%s warm_on_startup=%s warm_on_chat_load=%s",
         redis_url,
         _qdrant_url,
         paperless_url,
         "loaded" if paperless_token else "missing",
         "loaded" if _webhook_secret else "missing",
+        _local_search_idle_timeout_seconds,
+        _local_search_start_method,
+        _local_search_warm_on_startup,
+        _local_search_warm_on_chat_load,
     )
     if paperless_url and paperless_token:
         _paperless_client = PaperlessClient(paperless_url, paperless_token)
@@ -128,7 +149,7 @@ async def lifespan(app: FastAPI):
 
     log.info(
         "Local reranking enabled (model=%s)",
-        LocalLazySearchEmbedder.LOCAL_RERANKER_MODEL_NAME,
+        ProcessLocalSearchEmbedder.LOCAL_RERANKER_MODEL_NAME,
     )
 
     config = AgentConfig.from_env()
@@ -140,8 +161,10 @@ async def lifespan(app: FastAPI):
         log.warning("WEBHOOK_SECRET not set — webhook endpoint is unauthenticated")
 
     _queues = TaskQueues(redis_url)
-    _lazy_embedder = LocalLazySearchEmbedder()
-    _idle_task = asyncio.create_task(_lazy_embedder.idle_watcher())
+    _lazy_embedder = ProcessLocalSearchEmbedder(
+        idle_timeout_seconds=_local_search_idle_timeout_seconds,
+        start_method=_local_search_start_method,
+    )
     if _paperless_client is not None:
         _chat_copilot = ChatCopilot(
             config,
@@ -155,10 +178,13 @@ async def lifespan(app: FastAPI):
         log.warning("Chat copilot disabled (Paperless client unavailable)")
     log.info("Webhook listener ready (redis=%s, tags: ocr=%r metadata=%r embed=%r)",
              redis_url, _tag_ocr, _tag_metadata, _tag_embed)
+    if _local_search_warm_on_startup:
+        _schedule_local_search_warmup("startup")
     yield
-    _idle_task.cancel()
-    with suppress(asyncio.CancelledError):
-        await _idle_task
+    if _local_search_warmup_task is not None:
+        _local_search_warmup_task.cancel()
+    if _lazy_embedder is not None:
+        await _lazy_embedder.aclose()
     if _queues:
         await _queues.close()
     if _paperless_client:
@@ -167,6 +193,26 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(lifespan=lifespan)
+
+
+def _schedule_local_search_warmup(reason: str) -> None:
+    global _local_search_warmup_task
+    if _lazy_embedder is None:
+        return
+    if _local_search_warmup_task is not None and not _local_search_warmup_task.done():
+        return
+
+    async def _run() -> None:
+        try:
+            log.info("Scheduling local search warmup (%s)", reason)
+            await _lazy_embedder.warmup()
+            log.info("Local search warmup complete (%s)", reason)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            log.warning("Local search warmup failed (%s): %s", reason, exc)
+
+    _local_search_warmup_task = asyncio.create_task(_run())
 
 
 def _extract_doc_id(body: dict) -> int | None:
@@ -447,6 +493,8 @@ async def _build_chat_sources(source_flags: dict[int, dict[str, bool]]) -> list[
 @app.get("/chat")
 async def chat_ui() -> HTMLResponse:
     """Serve the browser UI for the Paperless copilot."""
+    if _local_search_warm_on_chat_load:
+        _schedule_local_search_warmup("chat-ui")
     return HTMLResponse(
         r"""
 <!doctype html>

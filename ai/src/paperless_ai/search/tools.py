@@ -13,7 +13,7 @@ from qdrant_client import models
 from paperless_ai.core.config import AgentConfig
 from paperless_ai.core.paperless import PaperlessClient
 from paperless_ai.core.telemetry import set_span_attributes, start_span
-from paperless_ai.search.embedder import LocalLazySearchEmbedder
+from paperless_ai.search.embedder_types import SearchEmbedder
 from paperless_ai.search.qdrant_store import COLLECTION
 from paperless_ai.search.retriever import (
     RETRIEVAL_MODE_DENSE_K,
@@ -246,7 +246,7 @@ async def _judge_precision_documents(
 async def search_documents(
     query: str,
     *,
-    embedder: LocalLazySearchEmbedder,
+    embedder: SearchEmbedder,
     qdrant_url: str,
     config: AgentConfig,
     correspondent: str | None = None,
@@ -414,7 +414,7 @@ async def execute_tool_call(
     arguments: dict[str, Any],
     *,
     client: PaperlessClient,
-    embedder: LocalLazySearchEmbedder,
+    embedder: SearchEmbedder,
     qdrant_url: str,
     config: AgentConfig,
 ) -> str:
@@ -435,7 +435,7 @@ async def execute_tool_call_detailed(
     arguments: dict[str, Any],
     *,
     client: PaperlessClient,
-    embedder: LocalLazySearchEmbedder,
+    embedder: SearchEmbedder,
     qdrant_url: str,
     config: AgentConfig,
 ) -> ToolExecutionResult:

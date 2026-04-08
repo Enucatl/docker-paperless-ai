@@ -56,13 +56,20 @@ services:
 
   # Webhook listener — receives document events and pushes to Redis DB 1.
   webhook-listener:
+    command: >
+      bash -lc '
+        python /app/fetch_paperless_token.py >/tmp/paperless-token
+        export PAPERLESS_TOKEN="$(cat /tmp/paperless-token)"
+        exec python -m paperless_listener.server
+      '
     environment:
       - REDIS_URL=redis://broker:6379/1
-      - QDRANT_URL=http://qdrant:6333
       - PAPERLESS_URL=http://webserver:8000
-      - PAPERLESS_TOKEN=${TEST_PAPERLESS_TOKEN:-}
-      - OPENAI_API_KEY=dummy-test-key
+      - PAPERLESS_TOKEN_FILE=
       - WEBHOOK_SECRET=test-secret-key-12345
+      - WEBHOOK_SECRET_FILE=
+      - TEST_PAPERLESS_USER=admin
+      - TEST_PAPERLESS_PASS=admin
     healthcheck:
       test: ["CMD", "python", "-c",
              "import urllib.request; urllib.request.urlopen('http://localhost:8001/health')"]
@@ -72,18 +79,19 @@ services:
     depends_on:
       broker:
         condition: service_healthy
-      qdrant:
-        condition: service_healthy
 
   ai:
-    # Override entrypoint+command to install test deps then run pytest.
-    entrypoint: []
     command: >
-      bash -lc "uv sync --frozen --extra test --extra eval && python -m pytest -v /app/tests/"
+      bash -lc '
+        python /app/fetch_paperless_token.py >/tmp/paperless-token
+        export PAPERLESS_TOKEN="$(cat /tmp/paperless-token)"
+        exec python -m paperless_ai.search.copilot_server
+      '
     environment:
       - PAPERLESS_URL=http://webserver:8000
-      # Webhook tests manage their own Paperless workflows explicitly.
-      # Disable startup workflow automation here so test fixtures remain authoritative.
+      - PAPERLESS_TOKEN_FILE=
+      - WEBHOOK_SECRET=test-secret-key-12345
+      - WEBHOOK_SECRET_FILE=
       - MANAGE_PAPERLESS_WORKFLOWS=false
       # Dummy keys guarantee no real LLM API calls even if a mock is misconfigured.
       - GOOGLE_API_KEY=dummy-test-key
@@ -101,9 +109,6 @@ services:
       - QDRANT_URL=http://qdrant:6333
       # The embeddings API is not available in tests; connectivity check will fail gracefully.
       - EMBEDDING_API_BASE=http://nonexistent-embeddings:8102
-      # Webhook listener endpoint (for webhook integration tests)
-      - WEBHOOK_URL=http://webhook-listener:8001
-      # Used by conftest.py to fetch an ephemeral API token at test startup.
       - TEST_PAPERLESS_USER=admin
       - TEST_PAPERLESS_PASS=admin
     # secrets: [] moved to override if needed, but not needed in tests
@@ -114,3 +119,49 @@ services:
         condition: service_healthy
       webhook-listener:
         condition: service_healthy
+
+  ai-test:
+    build:
+      context: .
+      dockerfile: ./ai/Dockerfile
+      target: runtime
+    entrypoint: []
+    command: >
+      bash -lc "uv sync --frozen --extra test --extra eval && python -m pytest -v /app/tests/"
+    environment:
+      - PAPERLESS_URL=http://webserver:8000
+      - MANAGE_PAPERLESS_WORKFLOWS=false
+      - PAPERLESS_TOKEN_FILE=
+      - GOOGLE_API_KEY=dummy-test-key
+      - ANTHROPIC_API_KEY=dummy-test-key
+      - OPENAI_API_KEY=dummy-test-key
+      - OCR_MODEL=gemini/gemini-2.5-flash
+      - METADATA_MODEL=gemini/gemini-2.5-flash
+      - CHAT_MODEL=gemini/gemini-2.5-flash
+      - OCR_API_BASE=
+      - METADATA_API_BASE=
+      - CHAT_API_BASE=
+      - REDIS_URL=redis://broker:6379/1
+      - QDRANT_URL=http://qdrant:6333
+      - EMBEDDING_API_BASE=http://nonexistent-embeddings:8102
+      - WEBHOOK_URL=http://webhook-listener:8001
+      - COPILOT_URL=http://ai:8001
+      - TEST_PAPERLESS_USER=admin
+      - TEST_PAPERLESS_PASS=admin
+    depends_on:
+      webserver:
+        condition: service_healthy
+      qdrant:
+        condition: service_healthy
+      webhook-listener:
+        condition: service_healthy
+      ai:
+        condition: service_healthy
+    networks:
+      - internal
+
+secrets:
+  paperless_token:
+    file: ./secrets/paperless_token.txt
+  webhook_secret:
+    file: ./secrets/webhook_secret.txt

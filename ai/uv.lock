@@ -1849,6 +1849,7 @@ dependencies = [
     { name = "openinference-instrumentation-litellm" },
     { name = "opentelemetry-exporter-otlp" },
     { name = "opentelemetry-sdk" },
+    { name = "paperless-common" },
     { name = "pillow" },
     { name = "pydantic" },
     { name = "pydantic-settings" },
@@ -1873,6 +1874,7 @@ eval = [
     { name = "pandas" },
 ]
 test = [
+    { name = "paperless-listener" },
     { name = "pytest" },
     { name = "pytest-asyncio" },
 ]
@@ -1897,6 +1899,8 @@ requires-dist = [
     { name = "opentelemetry-exporter-otlp" },
     { name = "opentelemetry-sdk" },
     { name = "pandas", marker = "extra == 'eval'" },
+    { name = "paperless-common", directory = "../common" },
+    { name = "paperless-listener", marker = "extra == 'test'", directory = "../listener" },
     { name = "pillow", specifier = ">=10.0" },
     { name = "pydantic", specifier = ">=2.0" },
     { name = "pydantic-settings", specifier = ">=2.0" },
@@ -1912,6 +1916,38 @@ requires-dist = [
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.30" },
 ]
 provides-extras = ["eval", "test"]
+
+[[package]]
+name = "paperless-common"
+version = "0.1.0"
+source = { directory = "../common" }
+dependencies = [
+    { name = "niquests" },
+    { name = "redis", extra = ["hiredis"] },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "niquests", specifier = ">=3.0" },
+    { name = "redis", extras = ["hiredis"], specifier = ">=5.0" },
+]
+
+[[package]]
+name = "paperless-listener"
+version = "0.1.0"
+source = { directory = "../listener" }
+dependencies = [
+    { name = "fastapi" },
+    { name = "paperless-common" },
+    { name = "uvicorn", extra = ["standard"] },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "fastapi", specifier = ">=0.115" },
+    { name = "paperless-common", directory = "../common" },
+    { name = "uvicorn", extras = ["standard"], specifier = ">=0.30" },
+]
 
 [[package]]
 name = "pillow"

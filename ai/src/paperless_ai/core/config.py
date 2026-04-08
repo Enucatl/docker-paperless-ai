@@ -88,6 +88,14 @@ class AgentConfig(BaseSettings):
     def strip_trailing_slash(cls, v: str) -> str:
         return v.rstrip("/")
 
+    @field_validator("ocr_api_base", "metadata_api_base", "chat_api_base", mode="before")
+    @classmethod
+    def empty_api_base_is_none(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        stripped = str(value).strip()
+        return stripped or None
+
     ocr_model: str = "gemini/gemini-2.5-flash"
     metadata_model: str
     chat_model: str = Field(
@@ -118,10 +126,6 @@ class AgentConfig(BaseSettings):
     tag_embed: str = "ai:run-embed"
     dry_run: bool = False
 
-    @property
-    def tag_pending(self) -> str:
-        """Backward-compat alias — the OCR tag is the pipeline entry point."""
-        return self.tag_ocr
     # TEMPERATURE is a generic fallback when specific ones are not set
     ocr_temperature: Optional[float] = Field(
         default=None,

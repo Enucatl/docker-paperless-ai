@@ -14,7 +14,7 @@ Unit (no Docker required):
   test_idle_watcher_calls_gc_collect
   test_memory_lifecycle_allocate_and_free   ← tracemalloc + weakref
 
-Endpoint integration (webhook-listener + Qdrant running):
+Endpoint integration (ai copilot service + Qdrant running):
   test_search_missing_q_returns_422
   test_search_empty_string_returns_422
   test_search_returns_list
@@ -47,7 +47,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import niquests
 import pytest
 
-from tests.conftest import QDRANT_URL, WEBHOOK_URL
+from tests.conftest import COPILOT_URL, QDRANT_URL
 from paperless_ai.search.embedder import EmbeddingResult, LocalLazySearchEmbedder
 from paperless_ai.search.local_search_process import ProcessLocalSearchEmbedder
 from paperless_ai.search.retriever import MAX_RERANK_CANDIDATES, ChunkCandidate, hybrid_retrieve
@@ -658,59 +658,59 @@ async def test_process_embedder_warmup_reuses_worker():
 
 
 # ---------------------------------------------------------------------------
-# Endpoint integration tests (require running webhook-listener + Qdrant)
+# Endpoint integration tests (require running ai copilot service + Qdrant)
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.requires_webhook_listener
+@pytest.mark.requires_copilot
 async def test_search_missing_q_returns_422():
     """/search without ?q must return 422 Unprocessable Entity."""
     async with niquests.AsyncSession() as client:
-        r = await client.get(f"{WEBHOOK_URL}/search")
+        r = await client.get(f"{COPILOT_URL}/search")
     assert r.status_code == 422
 
 
-@pytest.mark.requires_webhook_listener
+@pytest.mark.requires_copilot
 async def test_search_empty_string_returns_422():
     """/search?q= (empty string) must be rejected by the min_length=1 constraint."""
     async with niquests.AsyncSession() as client:
-        r = await client.get(f"{WEBHOOK_URL}/search", params={"q": ""})
+        r = await client.get(f"{COPILOT_URL}/search", params={"q": ""})
     assert r.status_code == 422
 
 
-@pytest.mark.requires_webhook_listener
+@pytest.mark.requires_copilot
 async def test_search_returns_list():
     """/search?q=... must return a JSON array (possibly empty when Qdrant is empty)."""
     async with niquests.AsyncSession(timeout=30) as client:
-        r = await client.get(f"{WEBHOOK_URL}/search", params={"q": "invoice"})
+        r = await client.get(f"{COPILOT_URL}/search", params={"q": "invoice"})
     assert r.status_code == 200
     body = r.json()
     assert isinstance(body, list)
     assert all(isinstance(doc_id, int) for doc_id in body)
 
 
-@pytest.mark.requires_webhook_listener
+@pytest.mark.requires_copilot
 async def test_search_respects_limit():
     """/search?limit=1 must return at most 1 result."""
     async with niquests.AsyncSession(timeout=30) as client:
         r = await client.get(
-            f"{WEBHOOK_URL}/search", params={"q": "document", "limit": 1}
+            f"{COPILOT_URL}/search", params={"q": "document", "limit": 1}
         )
     assert r.status_code == 200
     assert len(r.json()) <= 1
 
 
-@pytest.mark.requires_webhook_listener
+@pytest.mark.requires_copilot
 async def test_search_limit_too_large_returns_422():
     """/search?limit=999 exceeds the max of 100 and must be rejected."""
     async with niquests.AsyncSession() as client:
         r = await client.get(
-            f"{WEBHOOK_URL}/search", params={"q": "test", "limit": 999}
+            f"{COPILOT_URL}/search", params={"q": "test", "limit": 999}
         )
     assert r.status_code == 422
 
 
-@pytest.mark.requires_webhook_listener
+@pytest.mark.requires_copilot
 async def test_search_deduplicates_chunks_across_same_doc(qdrant_store):
     """
     When multiple chunks from the same doc_id score highly, the /search
@@ -758,7 +758,7 @@ async def test_search_deduplicates_chunks_across_same_doc(qdrant_store):
 
     async with niquests.AsyncSession(timeout=30) as client:
         r = await client.get(
-            f"{WEBHOOK_URL}/search", params={"q": "dedup test", "limit": 20}
+            f"{COPILOT_URL}/search", params={"q": "dedup test", "limit": 20}
         )
 
     assert r.status_code == 200

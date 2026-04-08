@@ -1,5 +1,7 @@
 """Tests for EmbeddingAPIEmbedder connectivity and LiteLLM embeddings calls."""
 
+import os
+
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -10,6 +12,7 @@ from paperless_ai.search.embedder import EmbeddingAPIEmbedder
 async def test_embedding_api_embedder_context_manager():
     """Verify EmbeddingAPIEmbedder routes embedding calls through LiteLLM."""
     with (
+        patch.dict(os.environ, {"OPENAI_API_KEY": "dummy"}, clear=False),
         patch("paperless_ai.search.embedder.niquests.AsyncSession") as mock_session_class,
         patch("paperless_ai.search.embedder.litellm.aembedding", new_callable=AsyncMock) as mock_aembedding,
     ):

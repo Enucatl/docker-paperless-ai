@@ -87,6 +87,11 @@ class QdrantDocumentStore:
         else:
             log.debug("Qdrant collection '%s' already exists", COLLECTION)
 
+    async def has_any_points(self) -> bool:
+        """Return True when the collection contains at least one stored chunk."""
+        response = await self._client.count(collection_name=COLLECTION, exact=False)
+        return bool(response.count)
+
     async def upsert_chunks(
         self,
         chunks: list[ChunkPayload],

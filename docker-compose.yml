@@ -126,12 +126,13 @@ services:
   #   URL: http://webhook-listener:8001/webhook/document
   webhook-listener:
     build:
-      context: ./ai
+      context: .
+      dockerfile: ./listener/Dockerfile
     restart: unless-stopped
     sysctls:
       - net.ipv6.bindv6only=0
     entrypoint: []
-    command: "python -m paperless_ai.search.webhook_server"
+    command: "python -m paperless_listener.server"
     healthcheck:
       test:
         [
@@ -145,60 +146,18 @@ services:
       retries: 5
       start_period: 15s
     environment:
-      - AGENT_NAME=paperless-copilot
+      - AGENT_NAME=paperless-webhook-ingress
       - REDIS_URL=redis://broker:6379/1
-      - QDRANT_URL=http://qdrant:6333
       - PAPERLESS_URL=http://webserver:8000
       - PAPERLESS_TOKEN_FILE=/run/secrets/paperless_token
       - WEBHOOK_SECRET_FILE=/run/secrets/webhook_secret
-      - METADATA_MODEL
-      - METADATA_API_BASE
-      - METADATA_TEMPERATURE
-      - METADATA_REASONING_EFFORT
-      - METADATA_MAX_TOKENS
-      - METADATA_EXTRA_KWARGS
-      - CHAT_MODEL
-      - CHAT_API_BASE
-      - CHAT_TEMPERATURE
-      - CHAT_REASONING_EFFORT
-      - CHAT_MAX_TOKENS
-      - CHAT_EXTRA_KWARGS
-      - GOOGLE_API_KEY
-      - ANTHROPIC_API_KEY
-      - OPENAI_API_KEY
-      - HF_TOKEN
-      - GOOGLE_API_KEY_FILE=/run/secrets/google_api_key
-      - ANTHROPIC_API_KEY_FILE=/run/secrets/anthropic_api_key
-      - OPENAI_API_KEY_FILE=/run/secrets/openai_api_key
-      - HF_TOKEN_FILE=/run/secrets/hf_token
-      - OTEL_EXPORTER_OTLP_ENDPOINT=http://phoenix:6006/v1/traces
-      - PHOENIX_CLIENT_HEADERS=api_key=local
     secrets:
       - paperless_token
       - webhook_secret
-      - google_api_key
-      - anthropic_api_key
-      - openai_api_key
-      - hf_token
     networks:
       - internal
-      - traefik_proxy
-    labels:
-      - "checkmk_monitor=true"
-      - "traefik.enable=true"
-      - "traefik.docker.network=traefik_proxy"
-      - "traefik.http.routers.paperless-ai.rule=Host(`paperless.${DOCKER_DOMAIN}`) && PathPrefix(`/ai`)"
-      - "traefik.http.routers.paperless-ai.entrypoints=https"
-      - "traefik.http.routers.paperless-ai.tls=true"
-      - "traefik.http.routers.paperless-ai.priority=200"
-      - "traefik.http.routers.paperless-ai.middlewares=paperless-ai-strip,authelia@docker,secured@file"
-      - "traefik.http.routers.paperless-ai.service=paperless-ai"
-      - "traefik.http.middlewares.paperless-ai-strip.stripprefix.prefixes=/ai"
-      - "traefik.http.services.paperless-ai.loadbalancer.server.port=8001"
     depends_on:
       broker:
-        condition: service_healthy
-      qdrant:
         condition: service_healthy
 
   # AI batch post-processing — runs permanently alongside paperless.
@@ -222,15 +181,29 @@ services:
   # See ai/README.md for full setup instructions.
   ai:
     build:
-      context: ./ai
+      context: .
+      dockerfile: ./ai/Dockerfile
       target: runtime
-    profiles: [ai]
     restart: unless-stopped
     extra_hosts:
       - "${DOCKER_DOMAIN}:host-gateway"
+    entrypoint: []
+    command: "python -m paperless_ai.search.copilot_server"
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://[::1]:8001/health', timeout=2)"
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 120s
     # secrets: [paperless_token] moved to override
     environment:
-      - AGENT_NAME=paperless-ai-worker
+      - AGENT_NAME=paperless-ai
       # Paperless connection (required)
       - PAPERLESS_URL=http://webserver:8000
       - PAPERLESS_TOKEN_FILE=/run/secrets/paperless_token
@@ -294,6 +267,10 @@ services:
       - CHAT_REASONING_EFFORT
       - CHAT_MAX_TOKENS
       - CHAT_EXTRA_KWARGS
+      - LOCAL_SEARCH_IDLE_TIMEOUT_SECONDS
+      - LOCAL_SEARCH_WARM_ON_CHAT_LOAD
+      - LOCAL_SEARCH_WARM_ON_STARTUP
+      - LOCAL_SEARCH_START_METHOD
       - OCR_CONCURRENCY
       - LLM_RETRIES
       # - DRY_RUN=false
@@ -304,6 +281,19 @@ services:
     volumes: []
     networks:
       - internal
+      - traefik_proxy
+    labels:
+      - "checkmk_monitor=true"
+      - "traefik.enable=true"
+      - "traefik.docker.network=traefik_proxy"
+      - "traefik.http.routers.paperless-ai.rule=Host(`paperless.${DOCKER_DOMAIN}`) && PathPrefix(`/ai`)"
+      - "traefik.http.routers.paperless-ai.entrypoints=https"
+      - "traefik.http.routers.paperless-ai.tls=true"
+      - "traefik.http.routers.paperless-ai.priority=200"
+      - "traefik.http.routers.paperless-ai.middlewares=paperless-ai-strip,authelia@docker,secured@file"
+      - "traefik.http.routers.paperless-ai.service=paperless-ai"
+      - "traefik.http.middlewares.paperless-ai-strip.stripprefix.prefixes=/ai"
+      - "traefik.http.services.paperless-ai.loadbalancer.server.port=8001"
     depends_on:
       webserver:
         condition: service_healthy
@@ -316,7 +306,8 @@ services:
 
   ai-cleanup:
     build:
-      context: ./ai
+      context: .
+      dockerfile: ./ai/Dockerfile
       target: runtime
     profiles: [cleanup]
     restart: "no"
@@ -363,7 +354,8 @@ services:
   ai-eval:
     image: paperless-ai-ai-eval
     build:
-      context: ./ai
+      context: .
+      dockerfile: ./ai/Dockerfile
       target: eval
     profiles: [eval]
     extra_hosts:

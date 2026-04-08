@@ -1,42 +1,15 @@
-"""
-FastAPI webhook listener for Paperless-ngx document events.
-
-Paperless-ngx sends a POST request whose body is fully user-configured via
-key-value pairs with Jinja2 placeholders.  Configure in Paperless:
-
-  Settings → Workflows
-    Trigger:  Document Added / Document Updated
-    Action:   Webhook
-      URL:    http://webhook-listener:8001/webhook/document
-      Body (JSON, key-value):
-        doc_url          →  {{doc_url}}
-      Headers:
-        X-Webhook-Token: <WEBHOOK_SECRET value>
-
-Routing (tag-driven):
-  ai:run-ocr      → queue:ocr      (vision OCR stage)
-  ai:run-metadata → queue:metadata (LLM metadata extraction stage)
-  ai:run-embed    → queue:embed    (embedding stage)
-  (no ai:run-*)   → ignored        (no implicit re-index on unrelated updates)
-
-Authentication is optional: if WEBHOOK_SECRET is set, the endpoint validates
-the X-Webhook-Token header using constant-time comparison.
-
-Health endpoint:
-    GET /health → {"status": "ok", "pending": {"ocr": N, "metadata": N, "embed": N}}
-"""
+"""Interactive copilot and search app hosted by the always-on AI service."""
 
 import asyncio
 import json
 import logging
 import os
-import re
-import secrets
+import time
 import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException, Query, Request, Response, WebSocket, WebSocketDisconnect, status
+from fastapi import FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse, JSONResponse
 
 from paperless_ai.core.config import AgentConfig
@@ -52,32 +25,33 @@ from paperless_ai.search.retriever import (
 
 log = logging.getLogger(__name__)
 
-# Task queue and webhooks
 _queues: TaskQueues | None = None
-_webhook_secret: str | None = None
 _lazy_embedder: ProcessLocalSearchEmbedder | None = None
-_tag_ocr: str = "ai:run-ocr"
-_tag_metadata: str = "ai:run-metadata"
-_tag_embed: str = "ai:run-embed"
-
-# Hybrid search
 _paperless_client: PaperlessClient | None = None
+_qdrant_store = None
 _qdrant_url: str = "http://qdrant:6333"
 _chat_copilot: ChatCopilot | None = None
+_config: AgentConfig | None = None
 _local_search_idle_timeout_seconds: int = 300
 _local_search_start_method: str = "spawn"
 _local_search_warm_on_startup: bool = False
 _local_search_warm_on_chat_load: bool = True
 _local_search_warmup_task: asyncio.Task | None = None
+_worker_tasks: list[asyncio.Task] = []
+_worker_heartbeats: dict[str, float] = {
+    "ocr": 0.0,
+    "metadata": 0.0,
+    "embed": 0.0,
+    "refresh": 0.0,
+}
+_worker_ready: bool = False
+_worker_setup_error: str | None = None
+_search_request_timeout_seconds: float = 20.0
 
 # Retrieval hyperparameters
 K = 25  # max chunks from dense search
 N = 50  # min candidate pool size before local reranking
 RRF_K = 60  # RRF smoothing constant
-
-# Matches the numeric document ID anywhere in a Paperless document URL.
-# e.g. "https://paperless.home/documents/42/detail" → "42"
-_DOC_URL_ID_RE = re.compile(r"/documents/(\d+)(?:/|$)")
 
 
 def _read_secret(env_var: str) -> str | None:
@@ -98,20 +72,14 @@ def _read_secret(env_var: str) -> str | None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global _queues, _webhook_secret, _tag_ocr, _tag_metadata, _tag_embed
-    global _lazy_embedder, _paperless_client, _qdrant_url
-    global _chat_copilot
+    global _queues, _lazy_embedder, _paperless_client, _qdrant_store, _qdrant_url, _chat_copilot, _config
     global _local_search_idle_timeout_seconds, _local_search_start_method
     global _local_search_warm_on_startup, _local_search_warm_on_chat_load
     global _local_search_warmup_task
+    global _worker_tasks, _worker_heartbeats, _worker_ready, _worker_setup_error
+    global _search_request_timeout_seconds
 
     redis_url = os.environ.get("REDIS_URL", "redis://broker:6379/1")
-    _webhook_secret = _read_secret("WEBHOOK_SECRET") or None
-    _tag_ocr = os.environ.get("TAG_OCR", os.environ.get("TAG_PENDING", "ai:run-ocr"))
-    _tag_metadata = os.environ.get("TAG_METADATA", "ai:run-metadata")
-    _tag_embed = os.environ.get("TAG_EMBED", "ai:run-embed")
-
-    # Hybrid search configuration
     _qdrant_url = os.environ.get("QDRANT_URL", "http://qdrant:6333")
     paperless_url = os.environ.get("PAPERLESS_URL")
     paperless_token = _read_secret("PAPERLESS_TOKEN")
@@ -125,71 +93,220 @@ async def lifespan(app: FastAPI):
     _local_search_warm_on_chat_load = (
         os.environ.get("LOCAL_SEARCH_WARM_ON_CHAT_LOAD", "true").lower() == "true"
     )
+    _search_request_timeout_seconds = float(
+        os.environ.get("SEARCH_REQUEST_TIMEOUT_SECONDS", "20")
+    )
     log.info(
-        "Startup config: redis=%s qdrant=%s paperless_url=%r paperless_token=%s webhook_secret=%s local_search_idle_timeout=%ss local_search_start_method=%s warm_on_startup=%s warm_on_chat_load=%s",
+        "Startup config: redis=%s qdrant=%s paperless_url=%r paperless_token=%s local_search_idle_timeout=%ss local_search_start_method=%s warm_on_startup=%s warm_on_chat_load=%s",
         redis_url,
         _qdrant_url,
         paperless_url,
         "loaded" if paperless_token else "missing",
-        "loaded" if _webhook_secret else "missing",
         _local_search_idle_timeout_seconds,
         _local_search_start_method,
         _local_search_warm_on_startup,
         _local_search_warm_on_chat_load,
     )
-    if paperless_url and paperless_token:
-        _paperless_client = PaperlessClient(paperless_url, paperless_token)
-        log.info("Paperless keyword search enabled (%s)", paperless_url)
-    else:
-        log.warning(
-            "Paperless search disabled (paperless_url=%s paperless_token=%s)",
-            "set" if paperless_url else "missing",
-            "set" if paperless_token else "missing",
-        )
+    if not paperless_url:
+        raise RuntimeError("PAPERLESS_URL is not set for the copilot service")
+    if not paperless_token:
+        raise RuntimeError("PAPERLESS_TOKEN (or PAPERLESS_TOKEN_FILE) is not set for the copilot service")
+
+    _paperless_client = PaperlessClient(paperless_url, paperless_token)
+    log.info("Paperless keyword search enabled (%s)", paperless_url)
 
     log.info(
         "Local reranking enabled (model=%s)",
         ProcessLocalSearchEmbedder.LOCAL_RERANKER_MODEL_NAME,
     )
 
-    config = AgentConfig.from_env()
-    setup_telemetry(service_name=config.name, project_name=config.name)
-
-    if _webhook_secret:
-        log.info("Webhook authentication enabled")
-    else:
-        log.warning("WEBHOOK_SECRET not set — webhook endpoint is unauthenticated")
-
+    _config = AgentConfig.from_env()
+    setup_telemetry(service_name=_config.name, project_name=_config.name)
     _queues = TaskQueues(redis_url)
     _lazy_embedder = ProcessLocalSearchEmbedder(
         idle_timeout_seconds=_local_search_idle_timeout_seconds,
         start_method=_local_search_start_method,
     )
-    if _paperless_client is not None:
-        _chat_copilot = ChatCopilot(
-            config,
-            _paperless_client,
-            _lazy_embedder,
-            _qdrant_url,
+    _chat_copilot = ChatCopilot(
+        _config,
+        _paperless_client,
+        _lazy_embedder,
+        _qdrant_url,
+    )
+    log.info("Chat copilot enabled")
+
+    from paperless_ai.core.paperless import _raise_for_status
+    from paperless_ai.core.runner import (
+        run_embed_batch,
+        run_metadata_batch,
+        run_ocr_batch,
+        run_refresh_batch,
+    )
+    from paperless_ai.search.embedder import EmbeddingAPIEmbedder
+    from paperless_ai.search.qdrant_store import QdrantDocumentStore
+
+    _worker_ready = False
+    _worker_setup_error = None
+    _worker_heartbeats = {"ocr": 0.0, "metadata": 0.0, "embed": 0.0, "refresh": 0.0}
+    _worker_tasks = []
+
+    log.info("Checking Paperless API connectivity...")
+    response = await _paperless_client._client.get("/api/")
+    _raise_for_status(response)
+    log.info("Paperless API reachable (version: %s)", response.headers.get("x-version", "unknown"))
+
+    if _config.manage_paperless_workflows:
+        added_wf_id, updated_wf_id = await _paperless_client.ensure_ai_workflows(
+            tag_ocr=_config.tag_ocr,
+            webhook_url=_config.paperless_webhook_url,
+            webhook_secret=_config.webhook_secret,
         )
-        log.info("Chat copilot enabled")
-    else:
-        _chat_copilot = None
-        log.warning("Chat copilot disabled (Paperless client unavailable)")
-    log.info("Webhook listener ready (redis=%s, tags: ocr=%r metadata=%r embed=%r)",
-             redis_url, _tag_ocr, _tag_metadata, _tag_embed)
+        log.info(
+            "Paperless workflows ready: document_added=%d document_updated=%d",
+            added_wf_id,
+            updated_wf_id,
+        )
+
+    custom_field_id = await _paperless_client.get_or_create_custom_field("ai_processed", data_type="date")
+    ai_summary_field_id = await _paperless_client.get_or_create_custom_field("ai_summary", data_type="longtext")
+    ai_result_field_id = await _paperless_client.get_or_create_custom_field("ai_result", data_type="longtext")
+    log.info(
+        "Custom fields: ai_processed=%d ai_summary=%d ai_result=%d",
+        custom_field_id,
+        ai_summary_field_id,
+        ai_result_field_id,
+    )
+
+    store = QdrantDocumentStore(_config.qdrant_url)
+    try:
+        await store.ensure_collection()
+        log.info("Qdrant collection ready (%s)", _config.qdrant_url)
+    except Exception as exc:
+        log.warning("Qdrant not reachable: %s — embedding will be skipped", exc)
+        store = None
+    _qdrant_store = store
+
+    embedder = EmbeddingAPIEmbedder(_config.embedding_api_base, _config.embedding_model)
+    if not await embedder.check_connectivity():
+        log.warning(
+            "Embedding API not reachable at %s — embedding will be skipped",
+            _config.embedding_api_base,
+        )
+        await embedder.aclose()
+        embedder = None
+
+    def _mark_worker_heartbeat(stage: str) -> None:
+        _worker_heartbeats[stage] = time.time()
+
+    async def _sleep_or_stop() -> bool:
+        try:
+            await asyncio.sleep(_config.poll_interval)
+            return False
+        except asyncio.CancelledError:
+            return True
+
+    async def _ocr_worker() -> None:
+        while True:
+            try:
+                success, failure = await run_ocr_batch(_paperless_client, _config, _queues)
+                if success or failure:
+                    log.info("OCR worker: %d ok / %d failed", success, failure)
+            except Exception as exc:
+                log.error("OCR worker error: %s", exc)
+            _mark_worker_heartbeat("ocr")
+            if await _sleep_or_stop():
+                return
+
+    async def _metadata_worker() -> None:
+        while True:
+            try:
+                success, failure = await run_metadata_batch(
+                    _paperless_client,
+                    _config,
+                    _queues,
+                    custom_field_id,
+                    ai_summary_field_id,
+                    ai_result_field_id,
+                )
+                if success or failure:
+                    log.info("Metadata worker: %d ok / %d failed", success, failure)
+            except Exception as exc:
+                log.error("Metadata worker error: %s", exc)
+            _mark_worker_heartbeat("metadata")
+            if await _sleep_or_stop():
+                return
+
+    async def _embed_worker() -> None:
+        while True:
+            try:
+                success, failure = await run_embed_batch(
+                    _paperless_client,
+                    _config,
+                    _queues,
+                    store,
+                    embedder,
+                )
+                if success or failure:
+                    log.info("Embed worker: %d ok / %d failed", success, failure)
+            except Exception as exc:
+                log.error("Embed worker error: %s", exc)
+            _mark_worker_heartbeat("embed")
+            if await _sleep_or_stop():
+                return
+
+    async def _refresh_worker() -> None:
+        while True:
+            try:
+                success, failure = await run_refresh_batch(
+                    _paperless_client,
+                    _config,
+                    _queues,
+                    store,
+                )
+                if success or failure:
+                    log.info("Refresh worker: %d ok / %d failed", success, failure)
+            except Exception as exc:
+                log.error("Refresh worker error: %s", exc)
+            _mark_worker_heartbeat("refresh")
+            if await _sleep_or_stop():
+                return
+
+    now = time.time()
+    _worker_heartbeats = {"ocr": now, "metadata": now, "embed": now, "refresh": now}
+    _worker_tasks = [
+        asyncio.create_task(_ocr_worker(), name="ocr-worker"),
+        asyncio.create_task(_metadata_worker(), name="metadata-worker"),
+        asyncio.create_task(_embed_worker(), name="embed-worker"),
+        asyncio.create_task(_refresh_worker(), name="refresh-worker"),
+    ]
+    _worker_ready = True
+    log.info("Copilot service ready with embedded worker runtime")
     if _local_search_warm_on_startup:
         _schedule_local_search_warmup("startup")
     yield
+
     if _local_search_warmup_task is not None:
         _local_search_warmup_task.cancel()
+    for task in _worker_tasks:
+        task.cancel()
+    if _worker_tasks:
+        await asyncio.gather(*_worker_tasks, return_exceptions=True)
+    if embedder is not None:
+        await embedder.aclose()
+    if store is not None:
+        await store.aclose()
+    _qdrant_store = None
     if _lazy_embedder is not None:
         await _lazy_embedder.aclose()
-    if _queues:
+    if _queues is not None:
         await _queues.close()
-    if _paperless_client:
+    if _paperless_client is not None:
         await _paperless_client.aclose()
     _chat_copilot = None
+    _config = None
+    _worker_tasks = []
+    _worker_ready = False
+    _worker_setup_error = None
 
 
 app = FastAPI(lifespan=lifespan)
@@ -215,176 +332,6 @@ def _schedule_local_search_warmup(reason: str) -> None:
     _local_search_warmup_task = asyncio.create_task(_run())
 
 
-def _extract_doc_id(body: dict) -> int | None:
-    """Extract the document ID from a Paperless webhook payload.
-
-    Tries, in order:
-    1. "doc_url" key  — extract numeric ID from the URL path (recommended setup)
-    2. "document_id" key — plain integer, for custom webhook bodies
-    3. "id" key — flat fallback
-    """
-    doc_url = body.get("doc_url") or body.get("document_url")
-    if doc_url:
-        m = _DOC_URL_ID_RE.search(str(doc_url))
-        if m:
-            return int(m.group(1))
-
-    for key in ("document_id", "id"):
-        val = body.get(key)
-        if val is not None:
-            try:
-                return int(val)
-            except (TypeError, ValueError):
-                pass
-
-    return None
-
-
-def _route_to_stage(tags: set[str]) -> str | None:
-    """Determine which queue stage to route to based on document tags.
-
-    Priority: ocr > metadata > embed. Untagged updates are ignored.
-    """
-    if _tag_ocr in tags:
-        return TaskQueues.KEY_OCR
-    if _tag_metadata in tags:
-        return TaskQueues.KEY_METADATA
-    if _tag_embed in tags:
-        return TaskQueues.KEY_EMBED
-    return None
-
-
-def _parse_tags(body: dict) -> set[str]:
-    """Parse tag names from an optional webhook payload field.
-
-    Some tests and custom callers provide a comma-separated list of tag names.
-    Paperless workflow webhooks on this deployment do not expose tags, so the
-    production routing path resolves current tags from the Paperless API.
-    """
-    raw = body.get("tag_list", body.get("document_tags", ""))
-    if not raw:
-        return set()
-    return {t.strip() for t in str(raw).split(",") if t.strip()}
-
-
-async def _get_current_document_tags(doc_id: int, payload_tags: set[str]) -> set[str]:
-    """Return current tag names from Paperless, falling back to payload tags."""
-    if _paperless_client is None:
-        return payload_tags
-
-    try:
-        doc = await _paperless_client.get_document(doc_id)
-        if doc is None:
-            return payload_tags
-        tag_ids = doc.get("tags") or []
-        if not isinstance(tag_ids, list):
-            return payload_tags
-        return set(await _paperless_client.get_tag_names(tag_ids))
-    except Exception as e:
-        log.warning("Webhook: failed to resolve current tags for document %d: %s", doc_id, e)
-        return payload_tags
-
-
-async def _refresh_qdrant_payload(doc_id: int) -> bool:
-    """Refresh Qdrant payload metadata for an already-indexed document."""
-    if _paperless_client is None:
-        return False
-
-    try:
-        doc = await _paperless_client.get_document(doc_id)
-        if doc is None:
-            return False
-
-        from paperless_ai.core.runner import _build_search_metadata
-        from paperless_ai.search.qdrant_store import QdrantDocumentStore
-
-        tag_embed_name = os.environ.get("TAG_EMBED", "ai:run-embed")
-        tag_embed_id = None
-        try:
-            tag_embed_id = await _paperless_client.get_tag_id(tag_embed_name, create=False)
-        except ValueError:
-            tag_embed_id = None
-
-        meta = await _build_search_metadata(
-            _paperless_client,
-            doc,
-            title=doc.get("title"),
-            correspondent=await _paperless_client.get_correspondent_name(doc["correspondent"])
-            if doc.get("correspondent")
-            else None,
-            document_date=doc.get("created"),
-            summary=None,
-            exclude_tag_ids={tag_embed_id} if tag_embed_id is not None else None,
-        )
-
-        store = QdrantDocumentStore(_qdrant_url)
-        try:
-            await store.update_document_payload(
-                doc_id=doc_id,
-                title=meta.title,
-                correspondent=meta.correspondent,
-                document_type=meta.document_type,
-                storage_path=meta.storage_path,
-                tags=meta.tags,
-                date=meta.document_date,
-                year=meta.year,
-            )
-        finally:
-            await store.aclose()
-        return True
-    except Exception as e:
-        log.warning("Webhook: failed to refresh Qdrant payload for document %d: %s", doc_id, e)
-        return False
-
-
-@app.post("/webhook/document", status_code=202)
-async def webhook_document(request: Request) -> Response:
-    if _webhook_secret is not None:
-        token = request.headers.get("X-Webhook-Token", "")
-        if not secrets.compare_digest(token, _webhook_secret):
-            log.warning("Webhook: rejected request with invalid token")
-            return Response(status_code=status.HTTP_401_UNAUTHORIZED)
-
-    try:
-        body = await request.json()
-    except Exception:
-        log.warning("Webhook received non-JSON body")
-        return Response(status_code=400)
-
-    log.info("Webhook payload: %s", body)
-
-    doc_id = _extract_doc_id(body)
-    if doc_id is None:
-        log.warning("Webhook payload missing document ID: %s", body)
-        return Response(status_code=202)  # Accept anyway — don't make Paperless retry
-
-    if _queues:
-        tags = await _get_current_document_tags(doc_id, _parse_tags(body))
-        stage = _route_to_stage(tags)
-        log.info(
-            "Webhook routing: document %d tags=%s stage=%s",
-            doc_id,
-            sorted(tags),
-            stage.split(":")[-1] if stage else "none",
-        )
-        if stage is None:
-            refreshed = await _refresh_qdrant_payload(doc_id)
-            if refreshed:
-                log.info("Webhook result: document %d refreshed Qdrant payload only", doc_id)
-            else:
-                log.info("Webhook result: document %d ignored (no ai:run-* tags present)", doc_id)
-        else:
-            added = await _queues.enqueue(doc_id, stage)
-            log.info(
-                "Webhook result: document %d → %s (%s)",
-                doc_id,
-                stage.split(":")[-1],
-                "queued" if added else "already pending",
-            )
-
-    return Response(status_code=202)
-
-
 @app.get("/search", response_model=None)
 async def search(
     q: str = Query(..., min_length=1, description="Search query"),
@@ -406,6 +353,9 @@ async def search(
     Returns doc_ids in final rank order (reranker score, descending).
     Gracefully degrades to dense-only search if Paperless is unavailable.
     """
+    if _qdrant_store is not None and not await _qdrant_store.has_any_points():
+        return JSONResponse(content=[])
+
     if _lazy_embedder is None:
         raise HTTPException(status_code=503, detail="Embedder not ready")
 
@@ -418,15 +368,18 @@ async def search(
             year=year,
         )
         try:
-            fused_ids, _chunk_map = await hybrid_retrieve(
-                embedder=_lazy_embedder,
-                qdrant_url=_qdrant_url,
-                query=q,
-                client=_paperless_client,
-                filters=filters,
-                dense_k=K,
-                rerank_candidates=max(N, limit),
-                rrf_k=RRF_K,
+            fused_ids, _chunk_map = await asyncio.wait_for(
+                hybrid_retrieve(
+                    embedder=_lazy_embedder,
+                    qdrant_url=_qdrant_url,
+                    query=q,
+                    client=_paperless_client,
+                    filters=filters,
+                    dense_k=K,
+                    rerank_candidates=max(N, limit),
+                    rrf_k=RRF_K,
+                ),
+                timeout=_search_request_timeout_seconds,
             )
         except Exception as exc:
             log.warning(
@@ -1443,10 +1396,40 @@ async def _keyword_search_safe(query: str) -> list[int]:
         return []
 
 
+def _worker_health_snapshot() -> tuple[bool, dict]:
+    if _config is None:
+        return False, {"ready": False, "error": "config-unavailable", "stages": {}}
+    if _worker_setup_error is not None:
+        return False, {"ready": False, "error": _worker_setup_error, "stages": {}}
+    if not _worker_ready:
+        return False, {"ready": False, "error": "worker-not-ready", "stages": {}}
+
+    now = time.time()
+    stale_after_seconds = max(60, (_config.poll_interval * 2) + 30)
+    stages: dict[str, dict[str, float | bool]] = {}
+    healthy = True
+    for stage, ts in _worker_heartbeats.items():
+        age_seconds = max(0.0, now - ts)
+        stage_ok = age_seconds <= stale_after_seconds
+        healthy = healthy and stage_ok
+        stages[stage] = {
+            "healthy": stage_ok,
+            "age_seconds": round(age_seconds, 1),
+        }
+    return healthy, {"ready": True, "stale_after_seconds": stale_after_seconds, "stages": stages}
+
+
 @app.get("/health")
-async def health() -> dict:
-    if _queues:
+async def health() -> JSONResponse:
+    if _queues is not None:
         pending = await _queues.pending_count()
     else:
-        pending = {"ocr": 0, "metadata": 0, "embed": 0}
-    return {"status": "ok", "pending": pending}
+        pending = {"ocr": 0, "metadata": 0, "embed": 0, "refresh": 0}
+
+    worker_ok, worker = _worker_health_snapshot()
+    body = {
+        "status": "ok" if worker_ok else "degraded",
+        "pending": pending,
+        "worker": worker,
+    }
+    return JSONResponse(status_code=200 if worker_ok else 503, content=body)

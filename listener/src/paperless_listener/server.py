@@ -1,4 +1,4 @@
-"""Launch the webhook app on explicit IPv4 and IPv6 sockets."""
+"""Launch the listener app on explicit IPv4 and IPv6 sockets."""
 
 from __future__ import annotations
 
@@ -26,7 +26,7 @@ def _build_socket(family: int, host: str) -> socket.socket:
 
 async def _serve() -> None:
     config = uvicorn.Config(
-        "paperless_ai.search.webhook:app",
+        "paperless_listener.app:app",
         log_config="/app/uvicorn_logging.json",
     )
     server = uvicorn.Server(config)

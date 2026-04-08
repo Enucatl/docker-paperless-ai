@@ -9,14 +9,17 @@ ENV UV_PROJECT_ENVIRONMENT=/usr/local
 # Install dependencies first (cached layer — only busts when pyproject.toml changes).
 # src/ must exist so setuptools doesn't reject the build; it's empty at this point
 # so no project packages are installed yet — only the declared dependencies.
-COPY pyproject.toml uv.lock ./
+COPY ai/pyproject.toml ai/uv.lock ./
+COPY common /common
+COPY listener /listener
 RUN mkdir src && uv sync --frozen --no-install-project
 
 # Copy source tree and tests; keep production image lean.
-COPY cli.py .
-COPY uvicorn_logging.json .
-COPY src/ src/
-COPY tests/ tests/
+COPY ai/cli.py .
+COPY ai/fetch_paperless_token.py .
+COPY ai/uvicorn_logging.json .
+COPY ai/src/ src/
+COPY ai/tests/ tests/
 RUN uv sync --frozen --no-dev
 
 # Liveness check for the watch-mode poll loop.

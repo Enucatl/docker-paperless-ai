@@ -10,6 +10,7 @@ Infrastructure available in the test environment (docker-compose.test.yml):
   - Redis (broker)               redis://broker:6379/1  (DB 1, AI queue)
   - Qdrant (vector DB)           http://qdrant:6333
   - Webhook listener             http://webhook-listener:8001
+  - Copilot/search service       http://ai:8001
   - Embeddings API               NOT available — use mock_embedder fixture instead
 """
 
@@ -17,6 +18,7 @@ import io
 import json
 import os
 import time
+import uuid
 from unittest.mock import MagicMock, patch
 
 import niquests
@@ -32,24 +34,26 @@ def pytest_configure(config):
     config.addinivalue_line(
         "markers", "requires_webhook_listener: mark test as requiring webhook-listener to be running"
     )
+    config.addinivalue_line(
+        "markers", "requires_copilot: mark test as requiring the ai copilot service to be running"
+    )
 
 PAPERLESS_URL = os.environ.get("PAPERLESS_URL", "http://webserver:8000")
 REDIS_URL = os.environ.get("REDIS_URL", "redis://broker:6379/1")
 QDRANT_URL = os.environ.get("QDRANT_URL", "http://qdrant:6333")
 WEBHOOK_URL = os.environ.get("WEBHOOK_URL", "http://webhook-listener:8001")
+COPILOT_URL = os.environ.get("COPILOT_URL", "http://ai:8001")
 TEST_USER = os.environ.get("TEST_PAPERLESS_USER", "admin")
 TEST_PASS = os.environ.get("TEST_PAPERLESS_PASS", "admin")
-
-_QUEUE_KEY = "paperless-ai:pending"
 
 # Phase B: three-stage task queues
 _TASK_QUEUE_KEYS = [
     "paperless-ai:queue:ocr",
     "paperless-ai:queue:metadata",
     "paperless-ai:queue:embed",
+    "paperless-ai:queue:refresh",
 ]
-# All queue keys — old + new — used by aggregate helpers
-_ALL_QUEUE_KEYS = [_QUEUE_KEY] + _TASK_QUEUE_KEYS
+_ALL_QUEUE_KEYS = list(_TASK_QUEUE_KEYS)
 
 
 # ---------------------------------------------------------------------------
@@ -62,16 +66,10 @@ def _redis_client() -> _redis_sync.Redis:
 
 
 def _clear_redis_queue() -> None:
-    """Clear all queues (old single queue + three task queues)."""
+    """Clear all stage queues."""
     r = _redis_client()
     for key in _ALL_QUEUE_KEYS:
         r.delete(key)
-    r.close()
-
-
-def _redis_enqueue(doc_id: int) -> None:
-    r = _redis_client()
-    r.sadd(_QUEUE_KEY, doc_id)
     r.close()
 
 
@@ -174,6 +172,15 @@ def _webhook_listener_available() -> bool:
         return False
 
 
+def _copilot_available() -> bool:
+    """Check if the copilot service is available."""
+    try:
+        r = niquests.get(f"{COPILOT_URL}/health", timeout=2.0)
+        return r.status_code < 500
+    except Exception:
+        return False
+
+
 @pytest.fixture(scope="session")
 def redis_available():
     """Fixture that returns whether Redis is available."""
@@ -188,6 +195,9 @@ def pytest_runtest_setup(item):
     if "requires_webhook_listener" in item.keywords:
         if not _webhook_listener_available():
             pytest.skip("webhook-listener is not available")
+    if "requires_copilot" in item.keywords:
+        if not _copilot_available():
+            pytest.skip("copilot service is not available")
 
 
 @pytest.fixture(scope="session")
@@ -252,29 +262,8 @@ def mock_litellm():
 
 
 # ---------------------------------------------------------------------------
-# Function-scoped: Redis queue — cleared before and after each test
+# Function-scoped: Redis queues — cleared before and after each test
 # ---------------------------------------------------------------------------
-
-
-@pytest.fixture
-async def document_queue():
-    """
-    A fresh DocumentQueue backed by the real test Redis (DB 1).
-
-    Clears the queue before the test starts so each test runs against a
-    known-empty queue.  Cleans up afterwards regardless of test outcome.
-    """
-    from paperless_ai.search.queue import DocumentQueue
-
-    if not _redis_available():
-        pytest.skip("Redis is not available")
-
-    _clear_redis_queue()
-    q = DocumentQueue(REDIS_URL)
-    yield q
-    await q.close()
-    _clear_redis_queue()
-
 
 @pytest.fixture
 async def task_queues():
@@ -306,7 +295,7 @@ def mock_embedder(monkeypatch):
     A fake embeddings client that returns deterministic 1024-d dense vectors
     and sparse BM25 weights without making any network calls.
 
-    Pass this directly to run_batch() when testing the embedding pipeline.
+    Pass this directly to run_embed_batch() when testing the embedding pipeline.
     The embeddings API is not available in the test environment.
 
     Also patches _check_server_reachable so that run_embed_batch's preflight
@@ -353,8 +342,8 @@ async def uploaded_document(paperless_client):
     """
     Factory fixture: upload a fresh document for each call, delete all on teardown.
 
-    Unlike dummy_document, this fixture does NOT enqueue the document in Redis —
-    useful for tests that manage the queue themselves (e.g. webhook E2E tests).
+    This fixture does NOT enqueue the document in Redis. Tests opt into the
+    staged queues explicitly.
 
     Usage::
 
@@ -401,15 +390,19 @@ async def qdrant_store():
 # ---------------------------------------------------------------------------
 
 
-def _make_test_pdf() -> bytes:
+def _make_test_pdf(seed: str | None = None) -> bytes:
     """Generate a tiny PDF with native digital text using PyMuPDF."""
     import fitz
 
+    marker = seed or uuid.uuid4().hex
     doc = fitz.open()
     page = doc.new_page(width=612, height=792)
     page.insert_text(
         (72, 700),
-        "INVOICE\nAcme Corp\n123 Main St\nDate: January 15, 2024\nTotal: $100.00",
+        (
+            "INVOICE\nAcme Corp\n123 Main St\nDate: January 15, 2024\n"
+            f"Total: $100.00\nTest Marker: {marker}"
+        ),
         fontname="helv",
         fontsize=12,
     )
@@ -421,9 +414,10 @@ def _make_test_pdf() -> bytes:
 
 async def _upload_document(client, pdf_bytes: bytes) -> int:
     """Upload a PDF to Paperless and wait for it to be indexed. Returns doc_id."""
+    filename = f"dummy_invoice_{uuid.uuid4().hex}.pdf"
     r = await client._client.post(
         "/api/documents/post_document/",
-        files={"document": ("dummy_invoice.pdf", pdf_bytes, "application/pdf")},
+        files={"document": (filename, pdf_bytes, "application/pdf")},
         timeout=30,
     )
     r.raise_for_status()
@@ -460,27 +454,3 @@ async def _upload_document(client, pdf_bytes: bytes) -> int:
             f"Document not indexed after 120 s (task={task_uuid})"
         )
     return int(doc_id)  # may already be int if from related_document
-
-
-@pytest.fixture
-async def dummy_document(paperless_client, document_queue):
-    """
-    Upload a test PDF to Paperless, enqueue its ID in the Redis queue, yield
-    the document ID, and clean up (delete the document) after the test.
-
-    Takes `document_queue` as a dependency so the queue is guaranteed to be
-    cleared before the document ID is enqueued.
-    """
-    pdf_bytes = _make_test_pdf()
-    doc_id = await _upload_document(paperless_client, pdf_bytes)
-
-    # Enqueue the document ID so run_batch() will pick it up
-    await document_queue.enqueue(doc_id)
-
-    yield doc_id
-
-    # Cleanup: delete the document so each test starts from a clean state
-    try:
-        await paperless_client._client.delete(f"/api/documents/{doc_id}/")
-    except Exception:
-        pass

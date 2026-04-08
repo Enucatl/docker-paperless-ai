@@ -1,0 +1,1 @@
+"""Thin webhook ingress package."""

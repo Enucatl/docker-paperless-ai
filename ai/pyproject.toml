@@ -4,6 +4,7 @@ version = "0.1.0"
 description = "AI batch post-processing for Paperless-ngx"
 requires-python = ">=3.12"
 dependencies = [
+    "paperless-common",
     "litellm>=1.50",
     "niquests>=3.0",
     "PyMuPDF>=1.25",
@@ -39,6 +40,7 @@ eval = [
     "pandas",
 ]
 test = [
+    "paperless-listener",
     "pytest>=8.0",
     "pytest-asyncio>=0.23",
 ]
@@ -54,6 +56,8 @@ build-backend = "setuptools.build_meta"
 where = ["src"]
 
 [tool.uv.sources]
+paperless-common = { path = "../common" }
+paperless-listener = { path = "../listener" }
 torch = { index = "pytorch-cpu" }
 
 [[tool.uv.index]]

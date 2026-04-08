@@ -4,7 +4,7 @@ AI batch OCR and metadata extraction for [paperless-ngx](https://github.com/pape
 
 Documents are ingested normally via Tesseract, then routed through a three-stage AI pipeline (OCR → metadata extraction → embedding) driven by Paperless tags and a Redis queue. Each page is re-OCRd with a vision LLM, title/date/correspondent are extracted with a text LLM, and the document is indexed in Qdrant for semantic search. Everything is updated via the Paperless REST API.
 
-The webhook-listener also exposes a **`GET /search`** endpoint that answers queries 24/7 using a local CPU embedder (FastEmbed bge-m3). The external embeddings API is only needed for batch indexing — the search API works even when it is powered off.
+The always-on `ai` service also exposes the browser copilot and **`GET /search`** endpoint. The internal `webhook-listener` is a thin ingress that only receives Paperless webhooks and enqueues work in Redis.
 
 ## Privacy notice
 
@@ -43,7 +43,7 @@ the unreachable server and return immediately without downloading anything.
 Documents wait safely in Redis queues until the server comes back online.
 
 ```
-Search query arrives → GET /search?q=invoice+2024&limit=20
+Search query arrives → GET /search?q=invoice+2024&limit=20 on the ai service
                        1. LocalLazySearchEmbedder loads bge-m3 into CPU RAM (first call only)
                        2. Dense vector computed via FastEmbed (asyncio.to_thread)
                        3. Qdrant queried, chunk hits deduplicated to doc_ids
@@ -56,38 +56,21 @@ Search query arrives → GET /search?q=invoice+2024&limit=20
 docker-paperless-ai/
 ├── ai/
 │   ├── cli.py                      # Entry point (--once, --watch, --eval, --dry-run, …)
-│   ├── Dockerfile
+│   ├── Dockerfile                  # Full worker + copilot image
 │   ├── pyproject.toml
-│   ├── prompt.txt                  # OCR instruction prompt (edit without rebuild)
-│   ├── metadata_prompt.txt         # Metadata extraction prompt (edit without rebuild)
-│   ├── agents/
-│   │   ├── smart_graph_agent.py    # LangGraph-based vision OCR + metadata agent
-│   │   └── base.py                 # AgentResult / DocumentMetadata types
-│   ├── core/
-│   │   ├── config.py               # AgentConfig — all settings from env vars
-│   │   ├── paperless.py            # Paperless REST API client
-│   │   ├── runner.py               # Redis-driven processing loop
-│   │   └── telemetry.py            # OpenTelemetry → Arize Phoenix
-│   ├── search/
-│   │   ├── queue.py                # Redis Set queue (SADD/SMEMBERS/SREM, DB 1)
-│   │   ├── webhook.py              # FastAPI listener — webhook + GET /search endpoint
-│   │   ├── chunker.py              # Overlapping character-based text chunker
-│   │   ├── embedder.py             # EmbeddingAPIEmbedder (batch) + LocalLazySearchEmbedder (CPU search)
-│   │   └── qdrant_store.py         # Qdrant collection management
-│   ├── eval/
-│   │   ├── golden_dataset.json     # Ground truth for 50 IDL documents
-│   │   ├── experiments.yaml        # Experiment configurations to compare
-│   │   ├── run_evals.py            # Evaluation runner (called by --eval)
-│   │   ├── metrics.py              # Scoring functions (fuzzy match, date distance, …)
-│   │   ├── review_ground_truth.py  # Interactive annotation script
-│   │   └── assign_splits.py        # One-time train/validation split assignment
-│   └── tests/
-│       ├── conftest.py             # Shared fixtures (queue, embedder mock, Qdrant, …)
-│       ├── test_phase_b_pipeline.py# Three-stage pipeline (OCR / metadata / embed batches)
-│       ├── test_webhook.py         # Webhook listener + Paperless workflow integration
-│       ├── test_search.py          # LocalLazySearchEmbedder unit + GET /search integration
-│       ├── test_metrics.py         # Unit tests for scoring functions
-│       └── test_evaluator.py       # Unit tests for evaluation runner
+│   ├── src/paperless_ai/
+│   │   ├── agents/                 # OCR + metadata agent stack
+│   │   ├── core/                   # Config, runner, compatibility wrappers
+│   │   ├── eval/                   # Offline evaluation framework
+│   │   └── search/                 # Copilot/search app, retrieval, Qdrant integration
+│   └── tests/                      # Unit + Docker E2E test suite
+├── common/
+│   ├── pyproject.toml
+│   └── src/paperless_common/       # Shared Paperless client, queue, secrets, telemetry
+├── listener/
+│   ├── Dockerfile                  # Thin webhook ingress image
+│   ├── pyproject.toml
+│   └── src/paperless_listener/     # /webhook/document and /health only
 ├── docker-compose.yml              # Full server stack
 ├── docker-compose.override.yml     # Local volumes and secrets
 ├── docker-compose.test.yml         # Ephemeral E2E test override
@@ -161,11 +144,12 @@ fields automatically on first successful startup:
 ### 3. Start the stack
 
 ```bash
-docker compose --profile ai up -d
+docker compose up -d
 ```
 
 This starts Redis, PostgreSQL, paperless-ngx, Gotenberg, Tika, Qdrant,
-Phoenix, the webhook listener, and the long-running AI worker.
+Phoenix, the thin webhook listener, and the always-on `ai` service that hosts
+both the copilot HTTP API and the long-running worker loop.
 
 ### Cleanup commands
 
@@ -211,15 +195,15 @@ After the stack is up and the workflows exist, new documents flow automatically:
 1. Paperless imports a file.
 2. The auto-managed `document-added` workflow adds tag `ai:run-ocr`.
 3. The same workflow sends the webhook to `webhook-listener`.
-4. The webhook listener enqueues the document in Redis.
-5. The `ai` service runs OCR -> metadata -> embedding.
+4. The thin webhook listener enqueues the document in Redis.
+5. The `ai` service runs OCR -> metadata -> embedding and serves `/search` and `/chat`.
 6. The pipeline removes the stage tags when each step completes.
 7. The worker writes:
    - `ai_processed`
    - `ai_summary`
    - `ai_result`
 
-The `webhook-listener` also exposes:
+The `ai` service exposes:
 
 - `/search` for hybrid retrieval
 - `/chat` for the browser chat UI
@@ -230,7 +214,7 @@ The `webhook-listener` also exposes:
 Process all pending documents and exit (useful for ad-hoc or scheduled runs):
 
 ```bash
-docker compose run --rm ai --once
+docker compose run --rm --entrypoint python ai cli.py --once
 ```
 
 ### Dry run
@@ -238,7 +222,7 @@ docker compose run --rm ai --once
 Preview actions without modifying any documents:
 
 ```bash
-docker compose run --rm ai --once --dry-run
+docker compose run --rm --entrypoint python ai cli.py --once --dry-run
 ```
 
 ### Backfill or process all existing documents
@@ -252,7 +236,7 @@ For documents that were already in Paperless before the workflows existed:
 5. Leave `ai` running, or drain the queue once with:
 
 ```bash
-docker compose run --rm ai --once
+docker compose run --rm --entrypoint python ai cli.py --once
 ```
 
 If you want to do the whole library in batches, just bulk-assign `ai:run-ocr`
@@ -368,11 +352,11 @@ Supported `_FILE` variants: `GOOGLE_API_KEY_FILE`, `ANTHROPIC_API_KEY_FILE`, `OP
 | `TAG_METADATA` | `ai:run-metadata` | Tag for documents entering the metadata stage |
 | `TAG_EMBED` | `ai:run-embed` | Tag for documents entering the embedding stage |
 | `DRY_RUN` | `false` | Log actions without modifying documents |
-| `QDRANT_URL` | `http://qdrant:6333` | Qdrant vector DB URL (used by embed worker and `/search`) |
+| `QDRANT_URL` | `http://qdrant:6333` | Qdrant vector DB URL (used by the embed worker and the `ai` copilot/search service) |
 
 ## Search API
 
-The webhook-listener exposes a search endpoint alongside the webhook receiver:
+The `ai` service exposes a search endpoint alongside the browser copilot:
 
 ```
 GET /search?q=<query>[&limit=20]
@@ -396,7 +380,7 @@ Two embedders serve different roles and never interfere:
 
 `LocalLazySearchEmbedder` loads the bge-m3 model into CPU RAM on the first query and automatically evicts it after 5 minutes of inactivity (`gc.collect()` called on eviction). This keeps RAM usage at zero when search is idle while keeping query latency reasonable on the fast path (model already warm).
 
-The `EMBEDDING_API_BASE` and external embeddings service availability do not affect `/search` — it uses FastEmbed running locally in the webhook-listener container.
+The `EMBEDDING_API_BASE` and external embeddings service availability do not affect `/search` — it uses FastEmbed running locally in the `ai` container.
 
 ## Customising prompts
 

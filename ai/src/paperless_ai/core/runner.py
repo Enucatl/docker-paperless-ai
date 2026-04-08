@@ -26,13 +26,12 @@ from pathlib import Path
 from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Optional
 
-from paperless_ai.agents.base import AgentResult, BaseDocumentAgent
 from paperless_ai.core.config import AgentConfig
 from paperless_ai.core.paperless import PaperlessClient
 
 if TYPE_CHECKING:
     from paperless_ai.search.embedder import EmbeddingAPIEmbedder
-    from paperless_ai.search.queue import DocumentQueue, TaskQueues
+    from paperless_ai.search.queue import TaskQueues
     from paperless_ai.search.qdrant_store import QdrantDocumentStore
 
 log = logging.getLogger(__name__)
@@ -43,6 +42,7 @@ _shutdown_requested = False
 # Tracks which local server URLs are currently known to be offline.
 # Enables log-once-on-down / log-once-on-recovery across poll cycles.
 _offline_servers: set[str] = set()
+_WEBHOOK_SUPPRESSION_TTL_SECONDS = 300
 
 
 @dataclass
@@ -193,265 +193,12 @@ async def _build_search_metadata(
     )
 
 
-async def process_document(
-    doc: dict,
-    client: PaperlessClient,
-    agent: BaseDocumentAgent,
-    config: AgentConfig,
-    custom_field_id: int,
-    ai_summary_field_id: int,
-    ai_result_field_id: int,
-    queue: "DocumentQueue",
-    store: QdrantDocumentStore | None = None,
-    embedder: "Optional[EmbeddingAPIEmbedder]" = None,
-    tag_pending_id: "Optional[int]" = None,
-) -> bool:
-    """Download, process, embed, and patch a single document. Returns True on success."""
-    doc_id = doc["id"]
-    log.info("Processing document %d: %s", doc_id, doc.get("title", "(no title)"))
-
-    # Download original file bytes
-    try:
-        data = await client.download_original(doc_id)
-    except Exception as e:
-        log.error("Document %d: download failed: %s", doc_id, e)
-        return False
-
-    # Write to a named temp file so the agent can open it by path
-    tmp_path = None
-    try:
-        with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
-            tmp.write(data)
-            tmp_path = tmp.name
-        del data  # release the download buffer before heavy processing
-
-        # Build existing metadata hints for the LLM's context
-        existing_hints: dict = {}
-        if doc.get("title"):
-            existing_hints["title"] = doc["title"]
-        if doc.get("created"):
-            existing_hints["date"] = doc["created"]
-        if doc.get("correspondent"):
-            correspondent_name = await client.get_correspondent_name(doc["correspondent"])
-            if correspondent_name:
-                existing_hints["correspondent"] = correspondent_name
-        if doc.get("language"):
-            existing_hints["language"] = doc["language"]
-
-        # Run the agent (OCR + metadata extraction)
-        try:
-            result: AgentResult = await agent.process(tmp_path, existing_hints)
-        except ValueError as e:
-            log.warning("Document %d: %s — skipping", doc_id, e)
-            return False
-        except Exception as e:
-            log.error("Document %d: agent failed: %s", doc_id, e)
-            return False
-
-    finally:
-        if tmp_path is not None:
-            Path(tmp_path).unlink(missing_ok=True)
-
-    meta = result.metadata
-    full_text = meta.full_ocr_transcript
-    log.info("Document %d: OCR complete — %d chars total", doc_id, len(full_text))
-    log.info(
-        "Document %d: metadata — title=%r date=%r correspondent=%r",
-        doc_id,
-        meta.title,
-        meta.document_date,
-        meta.correspondent,
-    )
-
-    # Embed and store vectors (skipped gracefully if store/embedder not configured)
-    if store is not None and embedder is not None:
-        try:
-            search_meta = await _build_search_metadata(
-                client,
-                doc,
-                title=meta.title,
-                correspondent=meta.correspondent,
-                document_date=meta.document_date,
-                summary=meta.summary,
-                exclude_tag_ids={tag_pending_id} if tag_pending_id is not None else None,
-            )
-            await _embed_and_store(doc_id, full_text, search_meta, config, store, embedder)
-        except Exception as e:
-            log.error("Document %d: embedding failed: %s", doc_id, e)
-            return False
-
-    # Build PATCH payload
-    today = datetime.now(timezone.utc).date().isoformat()
-    managed_fields = {custom_field_id, ai_summary_field_id, ai_result_field_id}
-    existing_cf = [
-        cf for cf in doc.get("custom_fields", []) if cf["field"] not in managed_fields
-    ]
-    payload: dict = {
-        "content": full_text,
-        "custom_fields": existing_cf + [
-            {"field": custom_field_id, "value": today},
-            {"field": ai_summary_field_id, "value": (meta.summary or "").strip()},
-        ],
-    }
-
-    if meta.title:
-        payload["title"] = str(meta.title)[:128]
-
-    if meta.document_date:
-        try:
-            parsed = datetime.fromisoformat(str(meta.document_date)).date()
-            if date(1900, 1, 1) <= parsed <= date.today():
-                payload["created"] = parsed.isoformat()
-            else:
-                log.warning(
-                    "Document %d: AI date '%s' out of range, skipping",
-                    doc_id,
-                    meta.document_date,
-                )
-        except ValueError:
-            log.warning(
-                "Document %d: invalid AI date format '%s', skipping",
-                doc_id,
-                meta.document_date,
-            )
-
-    if meta.correspondent:
-        try:
-            log.info(
-                "Document %d: looking up correspondent '%s'", doc_id, meta.correspondent
-            )
-            correspondent_id = await client.find_or_create_correspondent(
-                str(meta.correspondent).strip()
-            )
-            payload["correspondent"] = correspondent_id
-            log.info("Document %d: correspondent id=%d", doc_id, correspondent_id)
-        except Exception as e:
-            log.warning("Document %d: correspondent lookup failed: %s", doc_id, e)
-    else:
-        log.info(
-            "Document %d: skipping correspondent (ai=%r, existing=%r)",
-            doc_id,
-            meta.correspondent,
-            doc.get("correspondent"),
-        )
-
-    # Remove the pending tag in the same PATCH payload as metadata updates.
-    # This ensures atomicity: both tag removal and metadata updates succeed or fail
-    # together. This prevents Paperless DOCUMENT_UPDATED webhooks (filtered by the
-    # pending tag) from re-queuing the document after AI processing completes.
-    # If the PATCH fails for any reason, the document stays in the Redis queue
-    # and will be retried on the next batch run.
-    if tag_pending_id is not None:
-        current_tags = [t for t in doc.get("tags", []) if t != tag_pending_id]
-        payload["tags"] = current_tags
-        log.info(
-            "Document %d: removing pending tag (id=%d) from tags",
-            doc_id, tag_pending_id,
-        )
-
-    ai_result_json = json.dumps(
-        {
-            "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-            "elapsed_s": result.elapsed_s,
-            "ocr_method": result.ocr_method,
-            "ocr_model": config.ocr_model,
-            "ocr_api_base": config.ocr_api_base,
-            "metadata_model": config.metadata_model,
-            "metadata_api_base": config.metadata_api_base,
-            "pages": result.pages,
-            "chars": result.chars,
-            "paperless_version": client.paperless_version,
-            "ai_metadata": {
-                "title": meta.title,
-                "document_date": meta.document_date,
-                "correspondent": meta.correspondent,
-                "summary": meta.summary,
-            },
-        },
-        ensure_ascii=False,
-    )
-    payload["custom_fields"].append({"field": ai_result_field_id, "value": ai_result_json})
-
-    if config.dry_run:
-        log.info(
-            "Document %d: [dry-run] would PATCH fields: %s",
-            doc_id,
-            sorted(payload.keys()),
-        )
-        log.info("Document %d: [dry-run] would remove from Redis queue", doc_id)
-        return True
-
-    log.info("Document %d: PATCHing fields: %s", doc_id, sorted(payload.keys()))
-    try:
-        await client.patch_document(doc_id, payload)
-        log.info("Document %d: PATCH OK, removing from queue", doc_id)
-        await queue.remove(doc_id)
-        log.info("Document %d: done", doc_id)
-        return True
-    except Exception as e:
-        log.error("Document %d: PATCH failed: %s", doc_id, e)
-        return False
+async def _suppress_webhook(queue, doc_id: int) -> None:
+    await queue.suppress_webhook(doc_id, ttl_seconds=_WEBHOOK_SUPPRESSION_TTL_SECONDS)
 
 
-async def run_batch(
-    client: PaperlessClient,
-    agent: BaseDocumentAgent,
-    config: AgentConfig,
-    custom_field_id: int,
-    ai_summary_field_id: int,
-    ai_result_field_id: int,
-    queue: "DocumentQueue",
-    store: QdrantDocumentStore | None = None,
-    embedder: "Optional[EmbeddingAPIEmbedder]" = None,
-) -> tuple[int, int]:
-    """Process all documents in the Redis queue concurrently. Returns (success_count, failure_count)."""
-    pending_ids = await queue.peek_all()
-    if not pending_ids:
-        log.info("No documents pending in queue")
-        return 0, 0
-
-    log.info(
-        "Found %d document(s) to process (concurrency=%d)",
-        len(pending_ids),
-        config.ocr_concurrency,
-    )
-
-    # Look up the pending tag ID once so process_document can remove it
-    # atomically with the metadata PATCH, preventing DOCUMENT_UPDATED
-    # webhook loops when the Paperless workflow filters by this tag.
-    tag_pending_id: Optional[int] = None
-    try:
-        tag_pending_id = await client.get_tag_id(config.tag_pending, create=False)
-    except ValueError:
-        log.debug(
-            "Pending tag '%s' not found — will not remove it on processing",
-            config.tag_pending,
-        )
-
-    sem = asyncio.Semaphore(config.ocr_concurrency)
-
-    async def _process_one(doc_id: int) -> bool:
-        if _shutdown_requested:
-            return False
-        doc = await client.get_document(doc_id)
-        if doc is None:
-            log.warning("Document %d not found in Paperless — removing from queue", doc_id)
-            await queue.remove(doc_id)
-            return None  # silently removed — not a success, not a failure
-        async with sem:
-            return await process_document(
-                doc, client, agent, config, custom_field_id, ai_summary_field_id, ai_result_field_id,
-                queue, store, embedder, tag_pending_id=tag_pending_id,
-            )
-
-    results = await asyncio.gather(*(_process_one(doc_id) for doc_id in sorted(pending_ids)))
-
-    if _shutdown_requested:
-        log.info("Shutdown requested — batch may be incomplete")
-
-    success = sum(1 for ok in results if ok is True)
-    failure = sum(1 for ok in results if ok is False)
-    return success, failure
+async def _clear_webhook_suppression(queue, doc_id: int) -> None:
+    await queue.clear_webhook_suppression(doc_id)
 
 
 async def _run_stage(
@@ -556,12 +303,14 @@ async def run_ocr_batch(
             current_tags.append(tag_metadata_id)
 
         try:
+            await _suppress_webhook(queues, doc_id)
             await client.patch_document(doc_id, {"content": full_text, "tags": current_tags})
             log.info("Document %d: content written, transitioned to metadata stage", doc_id)
             await queues.remove(doc_id, TaskQueues.KEY_OCR)
             await queues.enqueue_metadata(doc_id)
             return True
         except Exception as e:
+            await _clear_webhook_suppression(queues, doc_id)
             log.error("Document %d: PATCH failed: %s", doc_id, e)
             return False
 
@@ -789,6 +538,66 @@ async def run_embed_batch(
     # we don't leave documents stuck in the embed queue.
     preflight = config.embedding_api_base if embedder is not None else None
     return await _run_stage("Embed", preflight, TaskQueues.KEY_EMBED, queues, _process_one)
+
+
+async def run_refresh_batch(
+    client: PaperlessClient,
+    config: AgentConfig,
+    queues: TaskQueues,
+    store: QdrantDocumentStore | None = None,
+) -> tuple[int, int]:
+    """Refresh Qdrant payload metadata for documents without re-embedding."""
+    from paperless_ai.search.queue import TaskQueues
+
+    if store is None:
+        return 0, 0
+
+    try:
+        tag_embed_id = await client.get_tag_id(config.tag_embed, create=False)
+    except ValueError:
+        log.warning("Embed tag '%s' not found — refresh will not exclude it", config.tag_embed)
+        tag_embed_id = None
+
+    async def _process_one(doc_id: int) -> bool | None:
+        if _shutdown_requested:
+            return False
+
+        doc = await client.get_document(doc_id)
+        if doc is None:
+            log.warning("Document %d not found — removing from refresh queue", doc_id)
+            await queues.remove(doc_id, TaskQueues.KEY_REFRESH)
+            return None
+
+        try:
+            search_meta = await _build_search_metadata(
+                client,
+                doc,
+                title=doc.get("title"),
+                correspondent=await client.get_correspondent_name(doc["correspondent"])
+                if doc.get("correspondent")
+                else None,
+                document_date=doc.get("created"),
+                summary=None,
+                exclude_tag_ids={tag_embed_id} if tag_embed_id is not None else None,
+            )
+            await store.update_document_payload(
+                doc_id=doc_id,
+                title=search_meta.title,
+                correspondent=search_meta.correspondent,
+                document_type=search_meta.document_type,
+                storage_path=search_meta.storage_path,
+                tags=search_meta.tags,
+                date=search_meta.document_date,
+                year=search_meta.year,
+            )
+            await queues.remove(doc_id, TaskQueues.KEY_REFRESH)
+            log.info("Document %d: refreshed Qdrant payload metadata", doc_id)
+            return True
+        except Exception as exc:
+            log.error("Document %d: refresh failed: %s", doc_id, exc)
+            return False
+
+    return await _run_stage("Refresh", None, TaskQueues.KEY_REFRESH, queues, _process_one)
 
 
 async def purge_ai_notes(client: PaperlessClient, dry_run: bool) -> None:

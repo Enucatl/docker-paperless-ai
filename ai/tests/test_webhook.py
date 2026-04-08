@@ -30,6 +30,7 @@ from tests.conftest import (
     PAPERLESS_URL,
     WEBHOOK_URL,
     _make_test_pdf,
+    _redis_client,
     _redis_queue_members,
     _redis_queue_size,
     _redis_stage_members,
@@ -56,7 +57,7 @@ def webhook_with_tags():
     Patch the webhook module's tag globals so tests control routing.
     Restores originals on teardown.
     """
-    from paperless_ai.search import webhook as webhook_module
+    from paperless_listener import app as webhook_module
 
     orig_ocr = webhook_module._tag_ocr
     orig_meta = webhook_module._tag_metadata
@@ -77,7 +78,7 @@ def webhook_with_tags():
 # ---------------------------------------------------------------------------
 
 
-async def test_webhook_health(document_queue):
+async def test_webhook_health(task_queues):
     """GET /health returns 200 with pending counts per stage."""
     async with niquests.AsyncSession() as client:
         r = await client.get(f"{WEBHOOK_URL}/health")
@@ -86,7 +87,7 @@ async def test_webhook_health(document_queue):
     assert body["status"] == "ok"
     pending = body["pending"]
     assert isinstance(pending, dict)
-    assert set(pending.keys()) >= {"ocr", "metadata", "embed"}
+    assert set(pending.keys()) >= {"ocr", "metadata", "embed", "refresh"}
 
 
 # ---------------------------------------------------------------------------
@@ -94,7 +95,7 @@ async def test_webhook_health(document_queue):
 # ---------------------------------------------------------------------------
 
 
-async def test_webhook_enqueues_from_doc_url(webhook_session, document_queue):
+async def test_webhook_enqueues_from_doc_url(webhook_session, task_queues):
     """
     POST with a 'doc_url' field (the {{doc_url}} Jinja2 placeholder that
     Paperless provides) must enqueue the numeric document ID extracted from
@@ -108,7 +109,7 @@ async def test_webhook_enqueues_from_doc_url(webhook_session, document_queue):
     assert 42 in _redis_queue_members()
 
 
-async def test_webhook_enqueues_from_deep_doc_url(webhook_session, document_queue):
+async def test_webhook_enqueues_from_deep_doc_url(webhook_session, task_queues):
     """URL with extra path segments — ID still extracted correctly."""
     r = await webhook_session.post(
         f"{WEBHOOK_URL}/webhook/document",
@@ -123,7 +124,7 @@ async def test_webhook_enqueues_from_deep_doc_url(webhook_session, document_queu
 # ---------------------------------------------------------------------------
 
 
-async def test_webhook_enqueues_from_document_id_field(webhook_session, document_queue):
+async def test_webhook_enqueues_from_document_id_field(webhook_session, task_queues):
     """POST with a plain 'document_id' integer field must enqueue that ID."""
     r = await webhook_session.post(
         f"{WEBHOOK_URL}/webhook/document",
@@ -133,7 +134,7 @@ async def test_webhook_enqueues_from_document_id_field(webhook_session, document
     assert 77 in _redis_queue_members()
 
 
-async def test_webhook_enqueues_from_id_field(webhook_session, document_queue):
+async def test_webhook_enqueues_from_id_field(webhook_session, task_queues):
     """POST with a plain 'id' integer field (last-resort fallback)."""
     r = await webhook_session.post(
         f"{WEBHOOK_URL}/webhook/document",
@@ -148,7 +149,7 @@ async def test_webhook_enqueues_from_id_field(webhook_session, document_queue):
 # ---------------------------------------------------------------------------
 
 
-async def test_webhook_deduplicates_same_id(webhook_session, document_queue):
+async def test_webhook_deduplicates_same_id(webhook_session, task_queues):
     """
     Posting the same document URL twice must result in exactly one queue entry.
     Redis SADD is idempotent — this verifies the set-based dedup works end-to-end.
@@ -166,7 +167,7 @@ async def test_webhook_deduplicates_same_id(webhook_session, document_queue):
 # ---------------------------------------------------------------------------
 
 
-async def test_webhook_ignores_payload_without_id(webhook_session, document_queue):
+async def test_webhook_ignores_payload_without_id(webhook_session, task_queues):
     """
     A payload that carries no recognisable document ID is accepted (202) but
     does not add anything to the queue — Paperless should not be forced to retry.
@@ -179,7 +180,7 @@ async def test_webhook_ignores_payload_without_id(webhook_session, document_queu
     assert _redis_queue_size() == 0
 
 
-async def test_webhook_rejects_non_json_body(webhook_session, document_queue):
+async def test_webhook_rejects_non_json_body(webhook_session, task_queues):
     """A non-JSON body must return 400."""
     r = await webhook_session.post(
         f"{WEBHOOK_URL}/webhook/document",
@@ -195,7 +196,7 @@ async def test_webhook_rejects_non_json_body(webhook_session, document_queue):
 # ---------------------------------------------------------------------------
 
 
-async def test_webhook_rejects_missing_token(document_queue):
+async def test_webhook_rejects_missing_token(task_queues):
     """When WEBHOOK_SECRET is set, requests without X-Webhook-Token are rejected."""
     async with niquests.AsyncSession() as client:
         r = await client.post(
@@ -206,7 +207,7 @@ async def test_webhook_rejects_missing_token(document_queue):
     assert _redis_queue_size() == 0
 
 
-async def test_webhook_rejects_wrong_token(document_queue):
+async def test_webhook_rejects_wrong_token(task_queues):
     """When WEBHOOK_SECRET is set, requests with wrong token are rejected."""
     async with niquests.AsyncSession() as client:
         r = await client.post(
@@ -218,7 +219,7 @@ async def test_webhook_rejects_wrong_token(document_queue):
     assert _redis_queue_size() == 0
 
 
-async def test_webhook_accepts_correct_token(webhook_session, document_queue):
+async def test_webhook_accepts_correct_token(webhook_session, task_queues):
     """When WEBHOOK_SECRET is set, requests with correct token are accepted."""
     r = await webhook_session.post(
         f"{WEBHOOK_URL}/webhook/document",
@@ -233,9 +234,9 @@ async def test_webhook_accepts_correct_token(webhook_session, document_queue):
 # ---------------------------------------------------------------------------
 
 
-async def test_webhook_health_reflects_pending_count(webhook_session, document_queue):
+async def test_webhook_health_reflects_pending_count(webhook_session, task_queues):
     """
-    Untagged webhook payloads do not enqueue any work.
+    Untagged webhook payloads enqueue refresh work.
     """
     payloads = [
         {"doc_url": "https://paperless.home/documents/201/detail"},
@@ -249,7 +250,8 @@ async def test_webhook_health_reflects_pending_count(webhook_session, document_q
 
     pending = r.json()["pending"]
     total = sum(pending.values())
-    assert total == 0
+    assert total == 2
+    assert pending["refresh"] == 2
 
 
 # ---------------------------------------------------------------------------
@@ -257,7 +259,7 @@ async def test_webhook_health_reflects_pending_count(webhook_session, document_q
 # ---------------------------------------------------------------------------
 
 
-async def test_webhook_routes_ocr_tag_to_ocr_queue(webhook_session, document_queue, webhook_with_tags):
+async def test_webhook_routes_ocr_tag_to_ocr_queue(webhook_session, task_queues, webhook_with_tags):
     """ai:run-ocr tag → queue:ocr."""
     r = await webhook_session.post(
         f"{WEBHOOK_URL}/webhook/document",
@@ -272,7 +274,7 @@ async def test_webhook_routes_ocr_tag_to_ocr_queue(webhook_session, document_que
     assert 301 not in _redis_stage_members(TaskQueues.KEY_EMBED)
 
 
-async def test_webhook_routes_metadata_tag_to_metadata_queue(webhook_session, document_queue, webhook_with_tags):
+async def test_webhook_routes_metadata_tag_to_metadata_queue(webhook_session, task_queues, webhook_with_tags):
     """ai:run-metadata tag → queue:metadata."""
     r = await webhook_session.post(
         f"{WEBHOOK_URL}/webhook/document",
@@ -286,7 +288,7 @@ async def test_webhook_routes_metadata_tag_to_metadata_queue(webhook_session, do
     assert 302 not in _redis_stage_members(TaskQueues.KEY_OCR)
 
 
-async def test_webhook_routes_embed_tag_to_embed_queue(webhook_session, document_queue, webhook_with_tags):
+async def test_webhook_routes_embed_tag_to_embed_queue(webhook_session, task_queues, webhook_with_tags):
     """ai:run-embed tag → queue:embed."""
     r = await webhook_session.post(
         f"{WEBHOOK_URL}/webhook/document",
@@ -300,8 +302,8 @@ async def test_webhook_routes_embed_tag_to_embed_queue(webhook_session, document
     assert 303 not in _redis_stage_members(TaskQueues.KEY_OCR)
 
 
-async def test_webhook_ignores_no_ai_tag(webhook_session, document_queue, webhook_with_tags):
-    """No ai:run-* tag → payload refresh only, no queue entry."""
+async def test_webhook_ignores_no_ai_tag(webhook_session, task_queues, webhook_with_tags):
+    """No ai:run-* tag -> refresh queue only."""
     r = await webhook_session.post(
         f"{WEBHOOK_URL}/webhook/document",
         json={
@@ -313,10 +315,11 @@ async def test_webhook_ignores_no_ai_tag(webhook_session, document_queue, webhoo
     assert 304 not in _redis_stage_members(TaskQueues.KEY_OCR)
     assert 304 not in _redis_stage_members(TaskQueues.KEY_METADATA)
     assert 304 not in _redis_stage_members(TaskQueues.KEY_EMBED)
+    assert 304 in _redis_stage_members(TaskQueues.KEY_REFRESH)
 
 
-async def test_webhook_ignores_missing_tags_field(webhook_session, document_queue, webhook_with_tags):
-    """Missing tag_list key → payload refresh only, no queue entry."""
+async def test_webhook_ignores_missing_tags_field(webhook_session, task_queues, webhook_with_tags):
+    """Missing tag_list key -> refresh queue only."""
     r = await webhook_session.post(
         f"{WEBHOOK_URL}/webhook/document",
         json={"doc_url": "https://paperless.home/documents/305/detail"},
@@ -325,76 +328,28 @@ async def test_webhook_ignores_missing_tags_field(webhook_session, document_queu
     assert 305 not in _redis_stage_members(TaskQueues.KEY_OCR)
     assert 305 not in _redis_stage_members(TaskQueues.KEY_METADATA)
     assert 305 not in _redis_stage_members(TaskQueues.KEY_EMBED)
+    assert 305 in _redis_stage_members(TaskQueues.KEY_REFRESH)
 
 
-async def test_refresh_qdrant_payload_for_untagged_updates(monkeypatch):
-    """Untagged updates refresh Qdrant payload metadata without re-embedding."""
-    from paperless_ai.search import webhook as webhook_module
-    from paperless_ai.search import qdrant_store as qdrant_store_module
-
-    class _FakePaperlessClient:
-        async def get_document(self, doc_id):
-            assert doc_id == 308
-            return {
-                "id": doc_id,
-                "title": "Updated title",
-                "correspondent": 9,
-                "document_type": None,
-                "storage_path": None,
-                "created": "2026-04-07",
-                "custom_fields": [],
-                "tags": [21],
-            }
-
-        async def get_tag_names(self, tag_ids):
-            assert tag_ids == [21]
-            return ["invoice"]
-
-        async def get_correspondent_name(self, correspondent_id):
-            assert correspondent_id == 9
-            return "Swisscom"
-
-        async def get_document_type_name(self, document_type_id):
-            return None
-
-        async def get_storage_path_name(self, storage_path_id):
-            return None
-
-        async def get_tag_id(self, name, create=False):
-            raise ValueError(name)
-
-    class _FakeStore:
-        def __init__(self, url):
-            self.url = url
-
-        async def update_document_payload(self, **kwargs):
-            calls.append(kwargs)
-
-        async def aclose(self):
-            return None
-
-    calls = []
-    monkeypatch.setattr(webhook_module, "_paperless_client", _FakePaperlessClient())
-    monkeypatch.setattr(webhook_module, "_qdrant_url", "http://qdrant:6333")
-    monkeypatch.setattr(qdrant_store_module, "QdrantDocumentStore", _FakeStore)
-
-    refreshed = await webhook_module._refresh_qdrant_payload(308)
-    assert refreshed is True
-    assert calls == [
-        {
-            "doc_id": 308,
-            "title": "Updated title",
-            "correspondent": "Swisscom",
-            "document_type": None,
-            "storage_path": None,
-            "tags": ["invoice"],
-            "date": "2026-04-07",
-            "year": "2026",
-        }
-    ]
+async def test_webhook_enqueues_refresh_for_untagged_updates(
+    webhook_session, task_queues, webhook_with_tags
+):
+    """Untagged updates enqueue refresh work without touching OCR/metadata/embed queues."""
+    r = await webhook_session.post(
+        f"{WEBHOOK_URL}/webhook/document",
+        json={
+            "doc_url": "https://paperless.home/documents/308/detail",
+            "tag_list": "invoice",
+        },
+    )
+    assert r.status_code == 202
+    assert 308 not in _redis_stage_members(TaskQueues.KEY_OCR)
+    assert 308 not in _redis_stage_members(TaskQueues.KEY_METADATA)
+    assert 308 not in _redis_stage_members(TaskQueues.KEY_EMBED)
+    assert 308 in _redis_stage_members(TaskQueues.KEY_REFRESH)
 
 
-async def test_webhook_ocr_tag_takes_priority_over_embed(webhook_session, document_queue, webhook_with_tags):
+async def test_webhook_ocr_tag_takes_priority_over_embed(webhook_session, task_queues, webhook_with_tags):
     """If both ai:run-ocr and ai:run-embed are present, ocr wins."""
     r = await webhook_session.post(
         f"{WEBHOOK_URL}/webhook/document",
@@ -409,32 +364,23 @@ async def test_webhook_ocr_tag_takes_priority_over_embed(webhook_session, docume
 
 
 async def test_webhook_uses_current_paperless_tags_over_payload_snapshot(
-    webhook_session, document_queue, webhook_with_tags, monkeypatch
+    webhook_session, task_queues, webhook_with_tags, paperless_client
 ):
     """Route using current Paperless tags when webhook payload tags are stale."""
-    from paperless_ai.search import webhook as webhook_module
-
-    class _FakePaperlessClient:
-        async def get_document(self, doc_id):
-            assert doc_id == 307
-            return {"id": doc_id, "tags": [11]}
-
-        async def get_tag_names(self, tag_ids):
-            assert tag_ids == [11]
-            return ["ai:run-ocr", "invoice"]
-
-    monkeypatch.setattr(webhook_module, "_paperless_client", _FakePaperlessClient())
+    doc_id = await _upload_document(paperless_client, _make_test_pdf())
+    tag_ocr_id = await paperless_client.get_tag_id("ai:run-ocr", create=True)
+    await paperless_client.patch_document(doc_id, {"tags": [tag_ocr_id]})
 
     r = await webhook_session.post(
         f"{WEBHOOK_URL}/webhook/document",
         json={
-            "doc_url": "https://paperless.home/documents/307/detail",
+            "doc_url": f"https://paperless.home/documents/{doc_id}/detail",
             "tag_list": "ai:run-embed",
         },
     )
     assert r.status_code == 202
-    assert 307 in _redis_stage_members(TaskQueues.KEY_OCR)
-    assert 307 not in _redis_stage_members(TaskQueues.KEY_EMBED)
+    assert doc_id in _redis_stage_members(TaskQueues.KEY_OCR)
+    assert doc_id not in _redis_stage_members(TaskQueues.KEY_EMBED)
 
 
 # ---------------------------------------------------------------------------
@@ -535,7 +481,7 @@ async def _wait_for_doc_in_queue(doc_id: int, timeout: int = 60) -> bool:
 
 
 async def test_paperless_fires_webhook_on_document_added(
-    document_queue, paperless_workflow, uploaded_document
+    task_queues, paperless_workflow, uploaded_document
 ):
     """
     Paperless DOCUMENT_ADDED trigger → webhook → Redis.
@@ -554,7 +500,7 @@ async def test_paperless_fires_webhook_on_document_added(
 
 
 async def test_paperless_fires_webhook_on_document_updated(
-    paperless_client, document_queue, paperless_workflow, uploaded_document
+    paperless_client, task_queues, paperless_workflow, uploaded_document
 ):
     """
     Paperless DOCUMENT_UPDATED trigger → webhook → Redis.
@@ -586,7 +532,7 @@ async def test_paperless_fires_webhook_on_document_updated(
 
 
 async def test_auto_managed_updated_workflow_routes_tagged_docs_to_ocr_queue(
-    paperless_client, document_queue, uploaded_document
+    paperless_client, task_queues, uploaded_document
 ):
     """
     Real auto-managed workflow routing uses current Paperless tags for backfills.
@@ -628,7 +574,7 @@ async def test_auto_managed_updated_workflow_routes_tagged_docs_to_ocr_queue(
 
 
 async def test_document_updated_deduplicates_repeated_edits(
-    paperless_client, document_queue, paperless_workflow, uploaded_document
+    paperless_client, task_queues, paperless_workflow, uploaded_document
 ):
     """
     Multiple rapid edits to the same document produce exactly one queue entry.
@@ -655,80 +601,3 @@ async def test_document_updated_deduplicates_repeated_edits(
         f"Expected exactly 1 queue entry after 3 edits, got {_redis_queue_size()}"
     )
 
-
-async def test_webhook_loop_broken_by_tag_removal(
-    paperless_client, document_queue, paperless_workflow, uploaded_document
-):
-    """
-    After run_batch processes a document it removes the ai-review-pending tag
-    atomically in the same PATCH as the metadata.  A DOCUMENT_UPDATED workflow
-    filtered by that tag therefore does not re-queue the document.
-
-    Flow:
-    1. Upload document and manually add the ai-review-pending tag.
-    2. Create a DOCUMENT_UPDATED workflow that only fires while the tag is present.
-    3. Enqueue the doc and run_batch — AI patches metadata + removes tag.
-    4. Edit the document title (simulating any further change).
-    5. Assert the queue remains empty — the tag filter blocked re-queuing.
-    """
-    from paperless_ai.agents.smart_graph_agent import SmartDocumentAgent, _select_extraction_strategy
-    from paperless_ai.core.config import AgentConfig
-    from paperless_ai.core.runner import run_batch
-
-    token = paperless_client._client.headers["Authorization"].split(" ")[1]
-    config = AgentConfig(
-        paperless_url=PAPERLESS_URL,
-        paperless_token=token,
-        ocr_model="gemini/gemini-2.5-flash",
-        metadata_model="gemini/gemini-2.5-flash",
-        chat_model="gemini/gemini-2.5-flash",
-    )
-    agent = SmartDocumentAgent(config, extraction_strategy=_select_extraction_strategy(config))
-
-    custom_field_id = await paperless_client.get_or_create_custom_field("ai_processed", data_type="date")
-    ai_summary_field_id = await paperless_client.get_or_create_custom_field("ai_summary", data_type="longtext")
-    ai_result_field_id = await paperless_client.get_or_create_custom_field("ai_result", data_type="longtext")
-
-    tag_id = await paperless_client.get_tag_id(config.tag_pending)
-
-    # Upload before creating the workflow so DOCUMENT_ADDED does not fire.
-    doc_id = await uploaded_document()
-
-    # Add the pending tag — this is what the DOCUMENT_ADDED assignment action does.
-    r = await paperless_client._client.patch(f"/api/documents/{doc_id}/", json={"tags": [tag_id]})
-    assert r.status_code == 200, f"Failed to add pending tag: {r.text}"
-
-    await paperless_workflow(_TRIGGER_DOCUMENT_UPDATED, "test-wf-loop-guard", filter_has_tags=[tag_id])
-
-    # Enqueue and process — run_batch removes the tag in the same PATCH.
-    await document_queue.enqueue(doc_id)
-    success, failure = await run_batch(
-        paperless_client, agent, config,
-        custom_field_id, ai_summary_field_id, ai_result_field_id,
-        document_queue,
-    )
-    assert success == 1 and failure == 0, f"run_batch: {success=} {failure=}"
-
-    doc = await paperless_client.get_document(doc_id)
-    assert tag_id not in doc.get("tags", []), (
-        "ai-review-pending tag was not removed by run_batch"
-    )
-
-    # Wait for any in-flight webhook from the processing PATCH to settle.
-    await asyncio.sleep(5)
-    assert _redis_queue_size() == 0, (
-        f"Queue not empty after run_batch — DOCUMENT_UPDATED may have re-queued "
-        f"doc {doc_id} despite tag removal"
-    )
-
-    # Simulate a further edit (e.g. user renames the document manually).
-    r = await paperless_client._client.patch(
-        f"/api/documents/{doc_id}/", json={"title": "Manually renamed"}
-    )
-    assert r.status_code == 200
-
-    # Allow time for the webhook to fire (it should not — tag is gone).
-    await asyncio.sleep(5)
-    assert _redis_queue_size() == 0, (
-        "Queue grew after post-processing edit — tag filter did not block re-queue"
-    )

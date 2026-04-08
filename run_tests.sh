@@ -12,6 +12,7 @@
 
 set -euo pipefail
 
+export COMPOSE_PROJECT_NAME=paperless-ai-test
 COMPOSE="docker compose -f docker-compose.yml -f docker-compose.test.yml"
 
 # ---------------------------------------------------------------------------
@@ -41,7 +42,7 @@ done
 # ---------------------------------------------------------------------------
 if [ "$SKIP_BUILD" = false ]; then
     echo "=== Building AI test image ==="
-    $COMPOSE build ai webhook-listener
+    $COMPOSE build ai ai-test webhook-listener
 fi
 
 # ---------------------------------------------------------------------------
@@ -87,7 +88,7 @@ done
 # ---------------------------------------------------------------------------
 echo ""
 echo "=== Running pytest ==="
-$COMPOSE run --rm ai
+$COMPOSE run --rm ai-test
 
 # ---------------------------------------------------------------------------
 # 5. Success (teardown fires automatically via trap)

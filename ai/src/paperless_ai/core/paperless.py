@@ -171,6 +171,10 @@ class PaperlessClient:
             force=force,
         )
 
+    async def get_all_correspondents(self, force: bool = False) -> list[dict]:
+        """Return all correspondents with cache reuse."""
+        return await self._get_all_correspondents(force=force)
+
     async def _get_all_tags(self, force: bool = False) -> list[dict]:
         return await self._get_all_objects("/api/tags/", "_tags_cache", force=force)
 
@@ -253,6 +257,16 @@ class PaperlessClient:
         r = await self._client.patch(f"/api/documents/{doc_id}/", json=payload)
         _raise_for_status(r)
 
+    async def delete_correspondent(self, correspondent_id: int) -> None:
+        r = await self._client.delete(f"/api/correspondents/{correspondent_id}/")
+        _raise_for_status(r)
+        if self._correspondents_cache is not None:
+            self._correspondents_cache = [
+                item
+                for item in self._correspondents_cache
+                if int(item.get("id", -1)) != correspondent_id
+            ]
+
     async def add_note(self, doc_id: int, note: str) -> None:
         r = await self._client.post(f"/api/documents/{doc_id}/notes/", json={"note": note})
         _raise_for_status(r)
@@ -280,6 +294,34 @@ class PaperlessClient:
                 break
             page += 1
         return docs
+
+    async def iter_all_documents_brief(self) -> list[dict]:
+        """Page through all documents with only the fields needed for cleanup tasks."""
+        docs, page = [], 1
+        while True:
+            r = await self._client.get(
+                "/api/documents/",
+                params={
+                    "page": page,
+                    "page_size": 250,
+                    "fields": "id,title,correspondent",
+                },
+            )
+            _raise_for_status(r)
+            data = r.json()
+            docs.extend(data["results"])
+            if not data.get("next"):
+                break
+            page += 1
+        return docs
+
+    async def count_documents_for_correspondent(self, correspondent_id: int) -> int:
+        r = await self._client.get(
+            "/api/documents/",
+            params={"correspondent__id": correspondent_id, "page_size": 1, "fields": "id"},
+        )
+        _raise_for_status(r)
+        return int(r.json().get("count", 0))
 
     async def get_or_create_custom_field(self, name: str, data_type: str = "date") -> int:
         """Return custom field ID by name, creating it if missing."""

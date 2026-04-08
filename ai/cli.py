@@ -8,6 +8,8 @@ Modes:
     --eval       Run offline evaluation against eval/golden_dataset.json
     --dry-run    Log what would happen without modifying any documents
     --purge-notes  Delete all AI-generated notes from previous runs
+    --cleanup-correspondents-plan PATH   Write a reviewable correspondent merge plan
+    --cleanup-correspondents-apply PATH  Apply an approved correspondent merge plan
 
 Usage:
     python cli.py --once
@@ -48,6 +50,13 @@ def _write_heartbeat() -> None:
 
 async def main_async(args: argparse.Namespace) -> None:
     from paperless_ai.core.config import AgentConfig
+    from paperless_ai.core.correspondent_cleanup import (
+        apply_correspondent_merge_plan,
+        build_correspondent_merge_plan,
+        load_merge_plan,
+        summarize_merge_plan,
+        write_merge_plan,
+    )
     from paperless_ai.core.paperless import PaperlessClient
     from paperless_ai.core.runner import (
         purge_ai_notes,
@@ -136,6 +145,53 @@ async def main_async(args: argparse.Namespace) -> None:
         if args.eval:
             from paperless_ai.eval.run_evals import run_evals
             await run_evals(config, split=args.split)
+            return
+
+        if args.cleanup_correspondents_plan:
+            if args.cleanup_judge_borderline:
+                log.info("Correspondent cleanup: LLM judge enabled (%s)", config.llm_judge_model)
+            plan = await build_correspondent_merge_plan(
+                client,
+                config,
+                judge_borderline=args.cleanup_judge_borderline,
+            )
+            write_merge_plan(plan, args.cleanup_correspondents_plan)
+            plan_summary = summarize_merge_plan(plan)
+            log.info(
+                "Wrote correspondent cleanup plan to %s",
+                args.cleanup_correspondents_plan,
+            )
+            log.info(
+                "Plan summary: clusters=%d orphan_deletes=%d candidate_pairs=%d merges=%d review=%d reject=%d planned_moves=%d",
+                plan_summary["approved_clusters"],
+                plan_summary["orphan_correspondents"],
+                plan_summary["candidate_pairs"],
+                plan_summary["merge_pairs"],
+                plan_summary["review_pairs"],
+                plan_summary["rejected_pairs"],
+                plan_summary["planned_document_moves"],
+            )
+            return
+
+        if args.cleanup_correspondents_apply:
+            plan = load_merge_plan(args.cleanup_correspondents_apply)
+            summary = await apply_correspondent_merge_plan(
+                client,
+                plan,
+                dry_run=config.dry_run,
+            )
+            log.info(
+                "Correspondent cleanup applied from %s",
+                args.cleanup_correspondents_apply,
+            )
+            log.info(
+                "Apply summary: moved=%d deleted=%d skipped_clusters=%d skipped_orphans=%d skipped_nonempty_deletes=%d",
+                summary["reassigned_documents"],
+                summary["deleted_correspondents"],
+                summary["skipped_clusters"],
+                summary["skipped_orphans"],
+                summary["skipped_nonempty_deletes"],
+            )
             return
 
         if config.manage_paperless_workflows:
@@ -307,6 +363,16 @@ def main() -> None:
         action="store_true",
         help="Run offline evaluation against eval/golden_dataset.json",
     )
+    mode.add_argument(
+        "--cleanup-correspondents-plan",
+        metavar="PATH",
+        help="Write a reviewable correspondent cleanup plan JSON and exit",
+    )
+    mode.add_argument(
+        "--cleanup-correspondents-apply",
+        metavar="PATH",
+        help="Apply a previously generated correspondent cleanup plan JSON and exit",
+    )
     parser.add_argument(
         "--split",
         choices=["test", "validation", "all", "code-test"],
@@ -323,9 +389,19 @@ def main() -> None:
         action="store_true",
         help="Delete all AI-generated notes from previous runs and exit",
     )
+    parser.add_argument(
+        "--cleanup-judge-borderline",
+        action="store_true",
+        help="Use the configured LLM judge for borderline correspondent merge candidates",
+    )
     args = parser.parse_args()
 
-    if not args.once and not args.eval:
+    if not (
+        args.once
+        or args.eval
+        or args.cleanup_correspondents_plan
+        or args.cleanup_correspondents_apply
+    ):
         args.once = False  # watch mode is the default
 
     asyncio.run(main_async(args))

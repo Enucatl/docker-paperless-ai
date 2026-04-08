@@ -11,3 +11,6 @@ __pycache__/
 
 # Generated test logs
 test*.log
+
+# Local review artifacts
+tmp/

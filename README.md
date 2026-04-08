@@ -167,6 +167,43 @@ docker compose --profile ai up -d
 This starts Redis, PostgreSQL, paperless-ngx, Gotenberg, Tika, Qdrant,
 Phoenix, the webhook listener, and the long-running AI worker.
 
+### Cleanup commands
+
+There is also a one-shot `ai-cleanup` service for metadata maintenance tasks.
+It mounts `./tmp` from the host to `/work` in the container so review artifacts
+survive after the container exits.
+
+Generate a correspondent cleanup plan:
+
+```bash
+mkdir -p tmp
+docker compose --profile cleanup run --rm \
+  ai-cleanup --cleanup-correspondents-plan /work/correspondent-plan.json
+```
+
+Enable the LLM judge for borderline matches:
+
+```bash
+docker compose --profile cleanup run --rm \
+  ai-cleanup --cleanup-correspondents-plan /work/correspondent-plan.json \
+  --cleanup-judge-borderline
+```
+
+Apply an approved plan:
+
+```bash
+docker compose --profile cleanup run --rm \
+  ai-cleanup --cleanup-correspondents-apply /work/correspondent-plan.json
+```
+
+Dry-run the apply step:
+
+```bash
+docker compose --profile cleanup run --rm \
+  ai-cleanup --cleanup-correspondents-apply /work/correspondent-plan.json \
+  --dry-run
+```
+
 ### 4. Normal operation
 
 After the stack is up and the workflows exist, new documents flow automatically:

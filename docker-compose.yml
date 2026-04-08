@@ -314,6 +314,52 @@ services:
       phoenix:
         condition: service_started
 
+  ai-cleanup:
+    build:
+      context: ./ai
+      target: runtime
+    profiles: [cleanup]
+    restart: "no"
+    extra_hosts:
+      - "${DOCKER_DOMAIN}:host-gateway"
+    environment:
+      - AGENT_NAME=paperless-ai-cleanup
+      - PAPERLESS_URL=http://webserver:8000
+      - PAPERLESS_TOKEN_FILE=/run/secrets/paperless_token
+      - WEBHOOK_SECRET_FILE=/run/secrets/webhook_secret
+      - PAPERLESS_WEBHOOK_URL=http://webhook-listener:8001/webhook/document
+      - MANAGE_PAPERLESS_WORKFLOWS=false
+      - OCR_MODEL
+      - METADATA_MODEL
+      - CHAT_MODEL
+      - OCR_API_BASE
+      - METADATA_API_BASE
+      - GOOGLE_API_KEY
+      - ANTHROPIC_API_KEY
+      - OPENAI_API_KEY
+      - HF_TOKEN
+      - GOOGLE_API_KEY_FILE=/run/secrets/google_api_key
+      - ANTHROPIC_API_KEY_FILE=/run/secrets/anthropic_api_key
+      - OPENAI_API_KEY_FILE=/run/secrets/openai_api_key
+      - HF_TOKEN_FILE=/run/secrets/hf_token
+      - LLM_RETRIES
+      - METADATA_REASONING_EFFORT
+      - METADATA_TEMPERATURE
+      - METADATA_MAX_TOKENS
+      - METADATA_EXTRA_KWARGS
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://phoenix:6006/v1/traces
+      - PHOENIX_CLIENT_HEADERS=api_key=local
+    volumes:
+      - ./tmp:/work
+    command: --help
+    networks:
+      - internal
+    depends_on:
+      webserver:
+        condition: service_healthy
+      phoenix:
+        condition: service_started
+
   ai-eval:
     image: paperless-ai-ai-eval
     build:

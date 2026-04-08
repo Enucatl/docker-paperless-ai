@@ -38,6 +38,15 @@ services:
     volumes:
       - ./ai/eval:/app/eval
 
+  ai-cleanup:
+    secrets:
+      - paperless_token
+      - webhook_secret
+      - openai_api_key
+      - anthropic_api_key
+      - google_api_key
+      - hf_token
+
   webhook-listener:
     environment:
       - LOCAL_SEARCH_IDLE_TIMEOUT_SECONDS=${LOCAL_SEARCH_IDLE_TIMEOUT_SECONDS:-180}

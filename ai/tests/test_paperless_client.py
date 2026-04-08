@@ -239,3 +239,46 @@ async def test_search_documents_all_returns_empty_when_filter_name_unknown():
 
         assert results == []
         assert mock_session.get.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_iter_all_documents_brief_requests_cleanup_fields():
+    with patch("paperless_ai.core.paperless.niquests.AsyncSession") as mock_session_class:
+        mock_session = AsyncMock()
+        mock_session_class.return_value = mock_session
+        mock_session.close = AsyncMock()
+        mock_session.get = AsyncMock(
+            return_value=_paged_response([{"id": 5, "title": "Invoice", "correspondent": 7}])
+        )
+
+        async with PaperlessClient("http://test:8000", "token123") as client:
+            results = await client.iter_all_documents_brief()
+
+        assert results == [{"id": 5, "title": "Invoice", "correspondent": 7}]
+        mock_session.get.assert_awaited_once_with(
+            "/api/documents/",
+            params={"page": 1, "page_size": 250, "fields": "id,title,correspondent"},
+        )
+
+
+@pytest.mark.asyncio
+async def test_count_documents_for_correspondent_uses_count_field():
+    with patch("paperless_ai.core.paperless.niquests.AsyncSession") as mock_session_class:
+        mock_session = AsyncMock()
+        mock_session_class.return_value = mock_session
+        mock_session.close = AsyncMock()
+        response = MagicMock()
+        response.status_code = 200
+        response.headers = {}
+        response.raise_for_status = MagicMock()
+        response.json = MagicMock(return_value={"count": 4, "results": []})
+        mock_session.get = AsyncMock(return_value=response)
+
+        async with PaperlessClient("http://test:8000", "token123") as client:
+            count = await client.count_documents_for_correspondent(41)
+
+        assert count == 4
+        mock_session.get.assert_awaited_once_with(
+            "/api/documents/",
+            params={"correspondent__id": 41, "page_size": 1, "fields": "id"},
+        )

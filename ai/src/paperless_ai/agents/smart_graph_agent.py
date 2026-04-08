@@ -105,8 +105,9 @@ class _ExtractedMetadata(BaseModel):
     summary: Optional[str] = Field(
         default=None,
         description=(
-            "One or two sentences summarising the document's content and purpose. "
-            "Used as retrieval context for semantic search. Be specific and factual."
+            "One or two sentences summarising the content and purpose for use as embedding context in retrieval. "
+            "Start directly with the subject matter, not with phrases like 'This document is', 'This is', "
+            "or other meta framing. Be specific, factual, and useful for semantic search."
         ),
     )
 

@@ -103,16 +103,19 @@ class ChatCopilot:
             await callback(event)
 
     def _model_kwargs(self, messages: list[dict[str, Any]]) -> dict[str, Any]:
+        model = self._config.chat_model
         kwargs: dict[str, Any] = {
-            "model": self._config.effective_metadata_model,
+            "model": model,
             "messages": messages,
             "tools": TOOL_SCHEMAS,
             "tool_choice": "auto",
-            **self._config.get_metadata_litellm_kwargs(),
+            **self._config.get_chat_litellm_kwargs(),
         }
-        kwargs["temperature"] = 0.0
-        if self._config.metadata_api_base:
-            kwargs["api_base"] = self._config.metadata_api_base
+        if "temperature" not in kwargs:
+            kwargs["temperature"] = 0.0
+        api_base = self._config.chat_api_base
+        if api_base:
+            kwargs["api_base"] = api_base
         return kwargs
 
     @staticmethod
@@ -145,13 +148,14 @@ class ChatCopilot:
             )
             response = await litellm.acompletion(**self._model_kwargs(messages))
             usage = _extract_usage(response)
+            model = self._config.chat_model
             if usage is None:
                 await self._emit(
                     event_callback,
                     {
                         "type": "usage",
                         "scope": "step",
-                        "model": self._config.effective_metadata_model,
+                        "model": model,
                         "available": False,
                     },
                 )
@@ -163,7 +167,7 @@ class ChatCopilot:
                     {
                         "type": "usage",
                         "scope": "step",
-                        "model": self._config.effective_metadata_model,
+                        "model": model,
                         "available": True,
                         **usage,
                     },

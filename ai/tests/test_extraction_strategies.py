@@ -34,7 +34,7 @@ from paperless_ai.core.config import AgentConfig
 def mock_config():
     """Minimal AgentConfig for testing."""
     config = MagicMock(spec=AgentConfig)
-    config.effective_metadata_model = "test-model"
+    config.metadata_model = "test-model"
     config.metadata_api_base = None
     config.metadata_prompt = "Extract metadata from the following text:"
     config.llm_retries = 2

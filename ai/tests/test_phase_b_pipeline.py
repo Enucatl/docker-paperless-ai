@@ -170,6 +170,8 @@ async def test_ocr_batch_writes_content_and_transitions_tag(
         paperless_url=PAPERLESS_URL,
         paperless_token=token,
         ocr_model="gemini/gemini-2.5-flash",
+        metadata_model="gemini/gemini-2.5-flash",
+        chat_model="gemini/gemini-2.5-flash",
         tag_ocr="ai:run-ocr",
         tag_metadata="ai:run-metadata",
         tag_embed="ai:run-embed",
@@ -214,7 +216,12 @@ async def test_ocr_batch_skips_missing_document(paperless_client, task_queues, d
     from paperless_ai.core.runner import run_ocr_batch
 
     token = paperless_client._client.headers["Authorization"].split(" ")[1]
-    config = AgentConfig(paperless_url=PAPERLESS_URL, paperless_token=token)
+    config = AgentConfig(
+        paperless_url=PAPERLESS_URL,
+        paperless_token=token,
+        metadata_model="gemini/gemini-2.5-flash",
+        chat_model="gemini/gemini-2.5-flash",
+    )
 
     await task_queues.enqueue_ocr(999999)
     success, failure = await run_ocr_batch(paperless_client, config, task_queues)
@@ -233,6 +240,8 @@ async def test_ocr_batch_dry_run(paperless_client, task_queues, document_queue):
     config = AgentConfig(
         paperless_url=PAPERLESS_URL,
         paperless_token=token,
+        metadata_model="gemini/gemini-2.5-flash",
+        chat_model="gemini/gemini-2.5-flash",
         dry_run=True,
     )
 
@@ -278,6 +287,8 @@ async def test_metadata_batch_writes_metadata_and_transitions_tag(
     config = AgentConfig(
         paperless_url=PAPERLESS_URL,
         paperless_token=token,
+        metadata_model="gemini/gemini-2.5-flash",
+        chat_model="gemini/gemini-2.5-flash",
         tag_metadata="ai:run-metadata",
         tag_embed="ai:run-embed",
     )
@@ -344,7 +355,12 @@ async def test_metadata_batch_skips_empty_content(paperless_client, task_queues,
     from paperless_ai.core.runner import run_metadata_batch
 
     token = paperless_client._client.headers["Authorization"].split(" ")[1]
-    config = AgentConfig(paperless_url=PAPERLESS_URL, paperless_token=token)
+    config = AgentConfig(
+        paperless_url=PAPERLESS_URL,
+        paperless_token=token,
+        metadata_model="gemini/gemini-2.5-flash",
+        chat_model="gemini/gemini-2.5-flash",
+    )
 
     custom_field_id = await paperless_client.get_or_create_custom_field("ai_processed")
     ai_summary_field_id = await paperless_client.get_or_create_custom_field(
@@ -377,6 +393,8 @@ async def test_metadata_batch_dry_run(paperless_client, task_queues, document_qu
     config = AgentConfig(
         paperless_url=PAPERLESS_URL,
         paperless_token=token,
+        metadata_model="gemini/gemini-2.5-flash",
+        chat_model="gemini/gemini-2.5-flash",
         dry_run=True,
     )
 
@@ -433,6 +451,8 @@ async def test_embed_batch_upserts_qdrant_and_removes_tag(
     config = AgentConfig(
         paperless_url=PAPERLESS_URL,
         paperless_token=token,
+        metadata_model="gemini/gemini-2.5-flash",
+        chat_model="gemini/gemini-2.5-flash",
         tag_embed="ai:run-embed",
     )
 
@@ -488,6 +508,8 @@ async def test_embed_batch_reuses_ai_summary_in_situated_chunks(
     config = AgentConfig(
         paperless_url=PAPERLESS_URL,
         paperless_token=token,
+        metadata_model="gemini/gemini-2.5-flash",
+        chat_model="gemini/gemini-2.5-flash",
         tag_embed="ai:run-embed",
     )
 
@@ -537,6 +559,8 @@ async def test_embed_batch_skips_empty_content(paperless_client, task_queues, qd
     config = AgentConfig(
         paperless_url=PAPERLESS_URL,
         paperless_token=token,
+        metadata_model="gemini/gemini-2.5-flash",
+        chat_model="gemini/gemini-2.5-flash",
         tag_embed="ai:run-embed",
     )
 
@@ -575,6 +599,8 @@ async def test_embed_batch_dry_run(paperless_client, task_queues, mock_embedder,
     config = AgentConfig(
         paperless_url=PAPERLESS_URL,
         paperless_token=token,
+        metadata_model="gemini/gemini-2.5-flash",
+        chat_model="gemini/gemini-2.5-flash",
         tag_embed="ai:run-embed",
         dry_run=True,
     )
@@ -630,6 +656,8 @@ async def test_full_phase_b_pipeline_sequential(
     config = AgentConfig(
         paperless_url=PAPERLESS_URL,
         paperless_token=token,
+        metadata_model="gemini/gemini-2.5-flash",
+        chat_model="gemini/gemini-2.5-flash",
         tag_ocr="ai:run-ocr",
         tag_metadata="ai:run-metadata",
         tag_embed="ai:run-embed",

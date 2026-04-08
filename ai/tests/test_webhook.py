@@ -680,6 +680,8 @@ async def test_webhook_loop_broken_by_tag_removal(
         paperless_url=PAPERLESS_URL,
         paperless_token=token,
         ocr_model="gemini/gemini-2.5-flash",
+        metadata_model="gemini/gemini-2.5-flash",
+        chat_model="gemini/gemini-2.5-flash",
     )
     agent = SmartDocumentAgent(config, extraction_strategy=_select_extraction_strategy(config))
 

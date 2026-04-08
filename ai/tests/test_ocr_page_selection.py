@@ -19,6 +19,8 @@ def _cfg(threshold: int, first: int, last: int) -> AgentConfig:
     return AgentConfig(
         paperless_url="http://localhost",
         paperless_token="t",
+        metadata_model="test-metadata-model",
+        chat_model="test-chat-model",
         ocr_page_limit_threshold=threshold,
         ocr_first_pages=first,
         ocr_last_pages=last,

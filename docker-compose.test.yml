@@ -91,8 +91,11 @@ services:
       - ANTHROPIC_API_KEY=dummy-test-key
       - OPENAI_API_KEY=dummy-test-key
       - OCR_MODEL=gemini/gemini-2.5-flash
+      - METADATA_MODEL=gemini/gemini-2.5-flash
+      - CHAT_MODEL=gemini/gemini-2.5-flash
       - OCR_API_BASE=
       - METADATA_API_BASE=
+      - CHAT_API_BASE=
       # Redis queue (DB 1)
       - REDIS_URL=redis://broker:6379/1
       # Qdrant vector store

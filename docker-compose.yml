@@ -152,6 +152,10 @@ services:
       - PAPERLESS_URL=http://webserver:8000
       - PAPERLESS_TOKEN_FILE=/run/secrets/paperless_token
       - WEBHOOK_SECRET_FILE=/run/secrets/webhook_secret
+      - METADATA_MODEL
+      - METADATA_API_BASE
+      - CHAT_MODEL
+      - CHAT_API_BASE
       - RERANK_MODEL=${RERANK_MODEL:-}
       - RERANK_API_BASE=${RERANK_API_BASE:-}
       - GOOGLE_API_KEY
@@ -239,9 +243,12 @@ services:
       - OCR_MODEL
 
       # Metadata extraction model — text-only, called once per document.
-      # Defaults to OCR_MODEL if unset. A smaller/faster model works well here.
       #   ollama/llama3.2   openai/Meta-Llama-3.1-8B-Instruct   gemini/gemini-2.5-flash
       - METADATA_MODEL
+
+      # Chat model — used by the conversational copilot and tool planner.
+      # Set this explicitly; it does not fall back to METADATA_MODEL.
+      - CHAT_MODEL
 
       # Base URLs for local/self-hosted models (independent, can differ).
       # Examples:
@@ -313,8 +320,10 @@ services:
       - PAPERLESS_TOKEN_FILE=/run/secrets/paperless_token
       - OCR_MODEL
       - METADATA_MODEL
+      - CHAT_MODEL
       - OCR_API_BASE
       - METADATA_API_BASE
+      - CHAT_API_BASE
       - GOOGLE_API_KEY
       - ANTHROPIC_API_KEY
       - OPENAI_API_KEY

@@ -146,9 +146,11 @@ async def run_scientific_evaluation(config: AgentConfig, split: str = "test") ->
         "name": None,
         "agent_class": "paperless_ai.agents.smart_graph_agent.SmartDocumentAgent",
         "ocr_model": "gemini/gemini-2.5-flash",
-        "metadata_model": None,
+        "metadata_model": "gemini/gemini-2.5-flash",
+        "chat_model": "gemini/gemini-2.5-flash",
         "ocr_api_base": None,
         "metadata_api_base": None,
+        "chat_api_base": None,
         "ocr_reasoning_effort": None,
         "metadata_reasoning_effort": None,
         "ocr_temperature": None,
@@ -272,7 +274,7 @@ Respond with exactly one word: "appropriate" or "inappropriate".
         log.info(
             "Params: agent=%s model=%s ocr_temp=%s metadata_temp=%s ocr_reasoning=%s metadata_reasoning=%s",
             exp_config.agent_class,
-            exp_config.effective_metadata_model,
+            exp_config.metadata_model,
             exp_config.ocr_temperature,
             exp_config.metadata_temperature,
             exp_config.ocr_reasoning_effort,
@@ -349,12 +351,12 @@ Respond with exactly one word: "appropriate" or "inappropriate".
                 evaluators=EVALUATORS,
                 experiment_name=exp_config.name,
                 experiment_description=(
-                    f"{exp_config.agent_class.split('.')[-1]} | {exp_config.effective_metadata_model}"
+                    f"{exp_config.agent_class.split('.')[-1]} | {exp_config.metadata_model}"
                 ),
                 experiment_metadata={
                     "agent_class": exp_config.agent_class,
                     "ocr_model": exp_config.ocr_model,
-                    "metadata_model": exp_config.effective_metadata_model,
+                    "metadata_model": exp_config.metadata_model,
                     "ocr_temperature": exp_config.ocr_temperature,
                     "metadata_temperature": exp_config.metadata_temperature,
                     "ocr_reasoning_effort": exp_config.ocr_reasoning_effort,

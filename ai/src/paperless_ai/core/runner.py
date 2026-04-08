@@ -356,7 +356,7 @@ async def process_document(
             "ocr_method": result.ocr_method,
             "ocr_model": config.ocr_model,
             "ocr_api_base": config.ocr_api_base,
-            "metadata_model": config.effective_metadata_model,
+            "metadata_model": config.metadata_model,
             "metadata_api_base": config.metadata_api_base,
             "pages": result.pages,
             "chars": result.chars,
@@ -672,7 +672,7 @@ async def run_metadata_batch(
         ai_result_json = json.dumps(
             {
                 "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-                "metadata_model": config.effective_metadata_model,
+                "metadata_model": config.metadata_model,
                 "metadata_api_base": config.metadata_api_base,
                 "paperless_version": client.paperless_version,
                 "ai_metadata": {
@@ -703,10 +703,7 @@ async def run_metadata_batch(
             return False
 
     # Preflight: determine which server drives metadata extraction.
-    # When metadata_model is unset the OCR model (and its api_base) is reused.
-    meta_server = config.metadata_api_base or (
-        config.ocr_api_base if config.metadata_model is None else None
-    )
+    meta_server = config.metadata_api_base
     return await _run_stage("Metadata", meta_server, TaskQueues.KEY_METADATA, queues, _process_one)
 
 

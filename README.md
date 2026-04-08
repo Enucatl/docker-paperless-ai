@@ -223,7 +223,7 @@ to increasingly large slices of your archive.
 
 ## Switching models
 
-Edit `OCR_MODEL` (and optionally `METADATA_MODEL`) in `.env`, then restart:
+Edit `OCR_MODEL`, `METADATA_MODEL`, and `CHAT_MODEL` in `.env`, then restart:
 
 ```bash
 docker compose restart ai
@@ -243,6 +243,9 @@ OPENAI_API_KEY=your-key
 
 # Use a smarter model for metadata (called once per doc, not per page)
 METADATA_MODEL=gemini/gemini-2.5-pro
+
+# Use a separate chat/planning model for the copilot UI
+CHAT_MODEL=gemini/gemini-2.5-flash
 ```
 
 ## Local / self-hosted models
@@ -254,8 +257,10 @@ The AI worker connects to any OpenAI-compatible API via LiteLLM.
 ```env
 OCR_MODEL=ollama/llava-llama3
 METADATA_MODEL=ollama/llama3.2
+CHAT_MODEL=ollama/llama3.2
 OCR_API_BASE=http://workstation:11434
 METADATA_API_BASE=http://workstation:11434
+CHAT_API_BASE=http://workstation:11434
 ```
 
 **vLLM** (recommended for Nanonets-OCR2-3B):
@@ -298,9 +303,11 @@ Supported `_FILE` variants: `GOOGLE_API_KEY_FILE`, `ANTHROPIC_API_KEY_FILE`, `OP
 | `PAPERLESS_URL` | `http://webserver:8000` | Paperless base URL (internal Docker network) |
 | `PAPERLESS_TOKEN` | *(required)* | API authentication token |
 | `OCR_MODEL` | `gemini/gemini-2.5-flash` | LiteLLM vision model string for OCR |
-| `METADATA_MODEL` | *(uses OCR_MODEL)* | LiteLLM text model for metadata extraction |
+| `METADATA_MODEL` | *(required)* | LiteLLM text model for metadata extraction |
+| `CHAT_MODEL` | *(required)* | LiteLLM chat/planning model for the browser copilot |
 | `OCR_API_BASE` | *(none)* | Base URL for local OCR server |
 | `METADATA_API_BASE` | *(none)* | Base URL for local metadata server |
+| `CHAT_API_BASE` | *(none)* | Base URL for the chat model server |
 | `GOOGLE_API_KEY` | *(none)* | For Gemini models |
 | `ANTHROPIC_API_KEY` | *(none)* | For Claude models |
 | `OPENAI_API_KEY` | *(none)* | For OpenAI / vLLM models |

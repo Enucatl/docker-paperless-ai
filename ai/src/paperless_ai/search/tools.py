@@ -121,7 +121,7 @@ async def search_documents(
     storage_path: str | None = None,
     tags: list[str] | None = None,
     year: str | None = None,
-    limit: int = 5,
+    limit: int = 20,
     client: PaperlessClient | None = None,
     rerank_model: str | None = None,
     rerank_api_base: str | None = None,
@@ -199,7 +199,7 @@ async def search_documents_detailed(
     storage_path: str | None = None,
     tags: list[str] | None = None,
     year: str | None = None,
-    limit: int = 5,
+    limit: int = 20,
     client: PaperlessClient | None = None,
     rerank_model: str | None = None,
     rerank_api_base: str | None = None,
@@ -331,7 +331,7 @@ async def execute_tool_call(
             storage_path=arguments.get("storage_path"),
             tags=arguments.get("tags"),
             year=arguments.get("year"),
-            limit=int(arguments.get("limit", 5)),
+            limit=int(arguments.get("limit", 20)),
         )
     if name == "read_full_document":
         return await read_full_document(

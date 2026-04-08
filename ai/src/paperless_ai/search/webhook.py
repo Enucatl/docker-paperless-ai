@@ -1301,7 +1301,7 @@ async def chat_ws(websocket: WebSocket) -> None:
                 {
                     "type": "usage",
                     "scope": "total",
-                    "model": _chat_copilot._config.effective_metadata_model,
+                    "model": _chat_copilot._config.chat_model,
                     "available": bool(result.usage),
                     **(result.usage or {}),
                 }

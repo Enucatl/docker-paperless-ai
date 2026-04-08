@@ -166,9 +166,11 @@ async def test_execute_tool_call_detailed_collects_source_refs():
 @pytest.mark.asyncio
 async def test_chat_copilot_run_turn_emits_events_and_aggregates_usage():
     config = MagicMock()
-    config.effective_metadata_model = "openai/test-model"
+    config.chat_model = "openai/chat-model"
+    config.metadata_model = "openai/metadata-model"
+    config.chat_api_base = None
     config.metadata_api_base = None
-    config.get_metadata_litellm_kwargs.return_value = {}
+    config.get_chat_litellm_kwargs.return_value = {}
 
     copilot = ChatCopilot(
         config=config,
@@ -229,4 +231,7 @@ async def test_chat_copilot_run_turn_emits_events_and_aggregates_usage():
     assert result.usage == {"prompt_tokens": 30, "completion_tokens": 6, "total_tokens": 36}
     assert any(event["type"] == "tool_call_started" for event in events)
     assert any(event["type"] == "tool_call_completed" for event in events)
-    assert any(event["type"] == "usage" and event["scope"] == "step" for event in events)
+    assert any(
+        event["type"] == "usage" and event["scope"] == "step" and event["model"] == "openai/chat-model"
+        for event in events
+    )

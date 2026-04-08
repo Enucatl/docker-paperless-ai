@@ -168,12 +168,12 @@ class StructuredOutputStrategy(BaseExtractionStrategy):
     async def extract(self, text: str, config: AgentConfig) -> _ExtractedMetadata:
         """Use standard LLM with response_format tiering."""
         # Tier response_format by what the model actually supports
-        if litellm.supports_response_schema(model=config.effective_metadata_model):
+        if litellm.supports_response_schema(model=config.metadata_model):
             # Gemini and similar: reads field descriptions directly from the schema
             system_prompt = config.metadata_prompt
             response_format = _ExtractedMetadata
         elif "response_format" in (
-            litellm.get_supported_openai_params(model=config.effective_metadata_model)
+            litellm.get_supported_openai_params(model=config.metadata_model)
             or []
         ):
             # vLLM / OpenAI-compatible (e.g. Qwen): structural enforcement via json_schema,
@@ -195,7 +195,7 @@ class StructuredOutputStrategy(BaseExtractionStrategy):
             {"role": "user", "content": text},
         ]
         kwargs: dict = {
-            "model": config.effective_metadata_model,
+            "model": config.metadata_model,
             "messages": messages,
             "num_retries": config.llm_retries,
             **config.get_metadata_litellm_kwargs(),
@@ -232,7 +232,7 @@ class StructuredOutputStrategy(BaseExtractionStrategy):
 
 def _select_extraction_strategy(config: AgentConfig) -> BaseExtractionStrategy:
     """Select the appropriate extraction strategy based on the configured metadata model."""
-    if "nuextract" in config.effective_metadata_model.lower():
+    if "nuextract" in config.metadata_model.lower():
         return NuExtractStrategy()
     return StructuredOutputStrategy()
 
@@ -268,7 +268,7 @@ class NuExtractStrategy(BaseExtractionStrategy):
         ]
         template_str = json.dumps(json.loads(self._NUEXTRACT_TEMPLATE), indent=4)
         base_kwargs: dict = {
-            "model": config.effective_metadata_model,
+            "model": config.metadata_model,
             "messages": messages,
             "extra_body": {"chat_template_kwargs": {"template": template_str}},
             "num_retries": config.llm_retries,

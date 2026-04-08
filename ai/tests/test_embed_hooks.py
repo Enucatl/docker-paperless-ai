@@ -60,6 +60,8 @@ def config():
     return AgentConfig(
         paperless_url="http://localhost:8000",
         paperless_token="test-token",
+        metadata_model="test-metadata-model",
+        chat_model="test-chat-model",
     )
 
 
@@ -155,6 +157,8 @@ async def test_tier2_context_chars_truncates_full_text(monkeypatch, meta):
     cfg = AgentConfig(
         paperless_url="http://localhost:8000",
         paperless_token="test-token",
+        metadata_model="test-metadata-model",
+        chat_model="test-chat-model",
         situation_model="gemini/test-model",
         situation_context_chars=10,
     )

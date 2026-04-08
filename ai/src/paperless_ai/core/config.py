@@ -89,11 +89,22 @@ class AgentConfig(BaseSettings):
         return v.rstrip("/")
 
     ocr_model: str = "gemini/gemini-2.5-flash"
-    metadata_model: Optional[str] = None
+    metadata_model: str
+    chat_model: str = Field(
+        validation_alias=AliasChoices("chat_model", "CHAT_MODEL"),
+    )
     ocr_api_base: Optional[str] = None
     metadata_api_base: Optional[str] = None
+    chat_api_base: Optional[str] = Field(
+        default=None,
+        validation_alias=AliasChoices("chat_api_base", "CHAT_API_BASE"),
+    )
     ocr_reasoning_effort: Optional[str] = "minimal"
     metadata_reasoning_effort: Optional[str] = None
+    chat_reasoning_effort: Optional[str] = Field(
+        default=None,
+        validation_alias=AliasChoices("chat_reasoning_effort", "CHAT_REASONING_EFFORT"),
+    )
 
     poll_interval: int = 300
     llm_retries: int = 3
@@ -119,6 +130,10 @@ class AgentConfig(BaseSettings):
     metadata_temperature: Optional[float] = Field(
         default=None,
         validation_alias=AliasChoices("metadata_temperature", "METADATA_TEMPERATURE", "TEMPERATURE"),
+    )
+    chat_temperature: Optional[float] = Field(
+        default=None,
+        validation_alias=AliasChoices("chat_temperature", "CHAT_TEMPERATURE"),
     )
 
     ocr_prompt: str = Field(default_factory=lambda: _load_prompt("prompt.txt"))
@@ -205,6 +220,9 @@ class AgentConfig(BaseSettings):
     # Extra kwargs to forward to LiteLLM for metadata extraction calls.
     metadata_extra_kwargs: Optional[Dict[str, Any]] = None
 
+    # Extra kwargs to forward to LiteLLM for chat calls.
+    chat_extra_kwargs: Optional[Dict[str, Any]] = None
+
     # LLM-based chunk situating for embeddings (contextual retrieval).
     # When situation_model is set, each chunk is prefixed with a short LLM-
     # generated context before being sent to the embedding model.
@@ -215,10 +233,6 @@ class AgentConfig(BaseSettings):
     situation_temperature: float = 0.0
     situation_max_tokens: int = 200
     situation_context_chars: int = 0
-
-    @property
-    def effective_metadata_model(self) -> str:
-        return self.metadata_model or self.ocr_model
 
     def get_ocr_litellm_kwargs(self) -> dict:
         """Hyperparameter kwargs for the OCR (vision) LiteLLM call."""
@@ -241,6 +255,21 @@ class AgentConfig(BaseSettings):
             kwargs["reasoning_effort"] = effort
         if self.metadata_extra_kwargs:
             kwargs.update(self.metadata_extra_kwargs)
+        return kwargs
+
+    def get_chat_litellm_kwargs(self) -> dict:
+        """Hyperparameter kwargs for the chat LiteLLM call."""
+        kwargs: dict = {"max_tokens": self.metadata_max_tokens}
+        if self.chat_temperature is not None:
+            kwargs["temperature"] = self.chat_temperature
+        elif self.metadata_temperature is not None:
+            kwargs["temperature"] = self.metadata_temperature
+
+        effort = self.chat_reasoning_effort or self.metadata_reasoning_effort or self.ocr_reasoning_effort
+        if effort:
+            kwargs["reasoning_effort"] = effort
+        if self.chat_extra_kwargs:
+            kwargs.update(self.chat_extra_kwargs)
         return kwargs
 
     def get_situation_litellm_kwargs(self) -> dict:

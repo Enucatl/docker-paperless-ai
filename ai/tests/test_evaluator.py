@@ -28,7 +28,12 @@ from paperless_ai.eval.run_evals import run_scientific_evaluation, run_evals
 
 def _config():
     from paperless_ai.core.config import AgentConfig
-    return AgentConfig(paperless_url="http://localhost:8000", paperless_token="dummy")
+    return AgentConfig(
+        paperless_url="http://localhost:8000",
+        paperless_token="dummy",
+        metadata_model="test-metadata-model",
+        chat_model="test-chat-model",
+    )
 
 
 def _write_dataset(path: Path, entries: list) -> None:

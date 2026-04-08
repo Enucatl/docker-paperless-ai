@@ -268,11 +268,15 @@ CHAT_API_BASE=http://workstation:11434
 ```env
 OCR_MODEL=openai/nanonets/Nanonets-OCR2-3B
 METADATA_MODEL=openai/meta-llama/Llama-3.2-3B-Instruct
+CHAT_MODEL=openai/meta-llama/Llama-3.2-3B-Instruct
 OCR_API_BASE=http://workstation:8100/v1
 METADATA_API_BASE=http://workstation:8101/v1
+CHAT_API_BASE=http://workstation:8101/v1
 ```
 
-`OCR_API_BASE` and `METADATA_API_BASE` are independent — OCR and metadata can run on different servers or ports.
+`OCR_API_BASE`, `METADATA_API_BASE`, and `CHAT_API_BASE` are independent — each stage can run on different servers or ports.
+
+Hybrid search reranking uses the local `BAAI/bge-reranker-v2-m3` model in-process. It is lazy-loaded on first use and unloaded again after an idle period, like the local query embedder.
 
 For running the model endpoints themselves, see [Enucatl/vllm](https://github.com/Enucatl/vllm).
 
@@ -308,6 +312,17 @@ Supported `_FILE` variants: `GOOGLE_API_KEY_FILE`, `ANTHROPIC_API_KEY_FILE`, `OP
 | `OCR_API_BASE` | *(none)* | Base URL for local OCR server |
 | `METADATA_API_BASE` | *(none)* | Base URL for local metadata server |
 | `CHAT_API_BASE` | *(none)* | Base URL for the chat model server |
+| `OCR_TEMPERATURE` | *(none)* | Temperature override for OCR |
+| `METADATA_TEMPERATURE` | *(none)* | Temperature override for metadata extraction |
+| `CHAT_TEMPERATURE` | *(none)* | Temperature override for chat |
+| `OCR_REASONING_EFFORT` | `minimal` | LiteLLM `reasoning_effort` parameter for OCR |
+| `METADATA_REASONING_EFFORT` | *(none)* | LiteLLM `reasoning_effort` parameter for metadata extraction |
+| `CHAT_REASONING_EFFORT` | *(none)* | LiteLLM `reasoning_effort` parameter for chat |
+| `METADATA_MAX_TOKENS` | `1000` | Max output tokens for metadata extraction |
+| `CHAT_MAX_TOKENS` | `1000` | Max output tokens for chat |
+| `OCR_EXTRA_KWARGS` | *(none)* | JSON object of extra LiteLLM kwargs for OCR |
+| `METADATA_EXTRA_KWARGS` | *(none)* | JSON object of extra LiteLLM kwargs for metadata extraction |
+| `CHAT_EXTRA_KWARGS` | *(none)* | JSON object of extra LiteLLM kwargs for chat |
 | `GOOGLE_API_KEY` | *(none)* | For Gemini models |
 | `ANTHROPIC_API_KEY` | *(none)* | For Claude models |
 | `OPENAI_API_KEY` | *(none)* | For OpenAI / vLLM models |
@@ -315,7 +330,6 @@ Supported `_FILE` variants: `GOOGLE_API_KEY_FILE`, `ANTHROPIC_API_KEY_FILE`, `OP
 | `TAG_OCR` | `ai:run-ocr` | Tag for documents entering the OCR stage |
 | `TAG_METADATA` | `ai:run-metadata` | Tag for documents entering the metadata stage |
 | `TAG_EMBED` | `ai:run-embed` | Tag for documents entering the embedding stage |
-| `OCR_REASONING_EFFORT` | `minimal` | LiteLLM `reasoning_effort` parameter (set empty to disable) |
 | `DRY_RUN` | `false` | Log actions without modifying documents |
 | `QDRANT_URL` | `http://qdrant:6333` | Qdrant vector DB URL (used by embed worker and `/search`) |
 

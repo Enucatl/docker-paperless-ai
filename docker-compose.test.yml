@@ -61,7 +61,6 @@ services:
       - QDRANT_URL=http://qdrant:6333
       - PAPERLESS_URL=http://webserver:8000
       - PAPERLESS_TOKEN=${TEST_PAPERLESS_TOKEN:-}
-      - RERANK_MODEL=openai/gpt-4o-mini
       - OPENAI_API_KEY=dummy-test-key
       - WEBHOOK_SECRET=test-secret-key-12345
     healthcheck:

@@ -10,7 +10,6 @@ import asyncio
 import logging
 import os
 import threading
-import time
 
 import litellm
 import niquests
@@ -101,10 +100,6 @@ class LocalLazySearchEmbedder:
         self._reranker = None
         self._reranker_model_name: str | None = None
         self._lock = threading.Lock()
-        self._last_used: float = 0.0
-
-    def _mark_used(self) -> None:
-        self._last_used = time.monotonic()
 
     def _get_model(self):
         """Return the SentenceTransformer model, loading it on first call.
@@ -119,7 +114,6 @@ class LocalLazySearchEmbedder:
 
                     log.info("Loading SentenceTransformer %s into RAM…", self.MODEL_NAME)
                     self.model = SentenceTransformer(self.MODEL_NAME, trust_remote_code=True)
-        self._mark_used()
         return self.model
 
     def _get_reranker(self, model_name: str):
@@ -135,7 +129,6 @@ class LocalLazySearchEmbedder:
                         use_fp16=torch.cuda.is_available(),
                     )
                     self._reranker_model_name = model_name
-        self._mark_used()
         return self._reranker
 
     async def embed_query(self, query: str) -> EmbeddingResult:
@@ -171,21 +164,3 @@ class LocalLazySearchEmbedder:
             return list(scores)
 
         return await asyncio.to_thread(_score)
-
-    async def idle_watcher(self, timeout_seconds: int = 300) -> None:
-        """Background task: unload the model after it has been idle."""
-        while True:
-            await asyncio.sleep(60)
-            if (
-                (self.model is not None or self._reranker is not None)
-                and (time.monotonic() - self._last_used) > timeout_seconds
-            ):
-                log.info(
-                    "Local search models idle for >%ds — freeing RAM", timeout_seconds
-                )
-                self.model = None
-                self._reranker = None
-                self._reranker_model_name = None
-                import gc
-
-                await asyncio.to_thread(gc.collect)

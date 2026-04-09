@@ -103,14 +103,18 @@ The next eval run will recreate it with fresh data.
 ## Code Organization
 
 - `ai/src/paperless_ai/search/` — Indexing and retrieval
-  - `webhook.py` — FastAPI webhook listener + `/search` endpoint (hybrid retrieval)
+  - `webhook.py` — Copilot/search app with `/search`, `/chat`, and embedded worker runtime
   - `retriever.py` — Core retrieval functions (dense, keyword, RRF, LLM rerank)
-  - `embedder.py` — Dense embedding (LocalLazySearchEmbedder)
+  - `embedder.py` — Embeddings API client and in-process local model wrapper used by the search worker
+  - `local_search_process.py` — Process-backed local search inference lifecycle
   - `qdrant_store.py` — Qdrant vector store
   - `queue.py` — Redis task queues
+- `listener/src/paperless_listener/` — Thin webhook ingress
+  - `app.py` — `/webhook/document` and `/health`, routes tag-driven events into Redis
 - `ai/src/paperless_ai/core/` — Core services
-  - `paperless.py` — Paperless-ngx REST API client
+  - `paperless.py` — Compatibility wrapper for the shared Paperless client package
   - `config.py` — Configuration from environment
+- `common/src/paperless_common/` — Shared queue, Paperless client, secrets, telemetry
 - `ai/src/paperless_ai/agents/` — LLM pipelines
   - `smart_graph_agent.py` — OCR + metadata extraction (via LangGraph)
 - `ai/src/paperless_ai/eval/` — Evaluation and metrics

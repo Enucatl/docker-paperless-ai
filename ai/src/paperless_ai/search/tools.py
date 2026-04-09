@@ -139,14 +139,20 @@ def _format_hit(payload: dict[str, Any]) -> str:
     return f"[{' | '.join(parts)}]: {_snippet(str(payload.get('text') or ''))}"
 
 
-async def _lookup_payloads(qdrant_url: str, doc_ids: list[int], limit: int) -> dict[int, dict[str, Any]]:
+async def _lookup_payloads(
+    qdrant_url: str,
+    doc_ids: list[int],
+    limit: int,
+    *,
+    qdrant_client: AsyncQdrantClient | None = None,
+) -> dict[int, dict[str, Any]]:
     with start_span(
         "paperless_ai.search.lookup_payloads",
         **{
             "paperless_ai.search.lookup_doc_count": len(doc_ids),
         },
     ) as span:
-        qdrant = AsyncQdrantClient(url=qdrant_url)
+        qdrant = qdrant_client or AsyncQdrantClient(url=qdrant_url)
         try:
             hits = ([], None)
             if doc_ids:
@@ -164,7 +170,8 @@ async def _lookup_payloads(qdrant_url: str, doc_ids: list[int], limit: int) -> d
                     limit=max(limit * 8, 20),
                 )
         finally:
-            await qdrant.close()
+            if qdrant_client is None:
+                await qdrant.close()
         payload_by_doc_id: dict[int, dict[str, Any]] = {}
         for point in _extract_qdrant_hits(hits):
             if not point.payload or point.payload.get("doc_id") is None:
@@ -257,6 +264,7 @@ async def search_documents(
     limit: int | None = None,
     mode: RetrievalMode = "precision",
     client: PaperlessClient | None = None,
+    qdrant_client: AsyncQdrantClient | None = None,
 ) -> ToolExecutionResult:
     """Run hybrid retrieval against Qdrant and Paperless and return formatted snippets."""
     with start_span(
@@ -295,6 +303,7 @@ async def search_documents(
             dense_k=RETRIEVAL_MODE_DENSE_K[mode],
             rerank_candidates=max(resolved_limit, 50),
             mode=mode,
+            qdrant_client=qdrant_client,
         )
         set_span_attributes(span, **{"paperless_ai.tool.prejudge_doc_count": len(fused_ids)})
         if mode == "precision" and fused_ids and client is not None:
@@ -311,7 +320,12 @@ async def search_documents(
                 preview="No matching documents found.",
             )
 
-        payload_by_doc_id = await _lookup_payloads(qdrant_url, fused_ids[:resolved_limit], resolved_limit)
+        payload_by_doc_id = await _lookup_payloads(
+            qdrant_url,
+            fused_ids[:resolved_limit],
+            resolved_limit,
+            qdrant_client=qdrant_client,
+        )
         formatted: list[str] = []
         source_refs: list[ToolSourceRef] = []
         for doc_id in fused_ids[:resolved_limit]:
@@ -417,6 +431,7 @@ async def execute_tool_call(
     embedder: SearchEmbedder,
     qdrant_url: str,
     config: AgentConfig,
+    qdrant_client: AsyncQdrantClient | None = None,
 ) -> str:
     """Compatibility wrapper returning only the tool content."""
     result = await execute_tool_call_detailed(
@@ -426,6 +441,7 @@ async def execute_tool_call(
         embedder=embedder,
         qdrant_url=qdrant_url,
         config=config,
+        qdrant_client=qdrant_client,
     )
     return result.content
 
@@ -438,6 +454,7 @@ async def execute_tool_call_detailed(
     embedder: SearchEmbedder,
     qdrant_url: str,
     config: AgentConfig,
+    qdrant_client: AsyncQdrantClient | None = None,
 ) -> ToolExecutionResult:
     """Dispatch a tool call with UI-friendly metadata for the chat frontend."""
     if name == "get_available_metadata":
@@ -456,6 +473,7 @@ async def execute_tool_call_detailed(
             year=arguments.get("year"),
             limit=(None if "limit" not in arguments else int(arguments["limit"])),
             mode=str(arguments.get("mode", "precision")),
+            qdrant_client=qdrant_client,
         )
     if name == "read_full_document":
         return await read_full_document(

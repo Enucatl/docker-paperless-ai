@@ -361,6 +361,26 @@ def _select_ocr_pages(total_pages: int, config: "AgentConfig") -> list[int]:
     return sorted(first | last)
 
 
+def _count_pdf_pages(file_path: str) -> int:
+    with fitz.open(file_path) as doc:
+        return len(doc)
+
+
+def _render_page_to_base64(file_path: str, page_idx: int, max_dim: int | None) -> str:
+    with fitz.open(file_path) as doc:
+        page = doc[page_idx]
+        dpi = 300
+        if max_dim:
+            w_px = page.rect.width * dpi / 72
+            h_px = page.rect.height * dpi / 72
+            if max(w_px, h_px) > max_dim:
+                dpi = int(dpi * max_dim / max(w_px, h_px))
+        mat = fitz.Matrix(dpi / 72, dpi / 72)
+        pix = page.get_pixmap(matrix=mat, alpha=False)
+        png_bytes = pix.tobytes("png")
+        return base64.b64encode(png_bytes).decode()
+
+
 async def _analyze_pdf(state: AgentState, config: AgentConfig) -> dict:
     """Node 1: Measure page count and select pages for vision OCR.
 
@@ -369,9 +389,7 @@ async def _analyze_pdf(state: AgentState, config: AgentConfig) -> dict:
     many digital PDFs where the embedded text is just metadata.
     """
     file_path = state["file_path"]
-    doc = fitz.open(file_path)
-    total_pages = len(doc)
-    doc.close()
+    total_pages = await asyncio.to_thread(_count_pdf_pages, file_path)
 
     ocr_page_indices = _select_ocr_pages(total_pages, config)
 
@@ -421,27 +439,15 @@ async def _batched_vision_ocr(state: AgentState, config: AgentConfig) -> dict:
         total_pages,
     )
 
-    doc = fitz.open(file_path)
     tasks = []
 
     for page_idx in batch:
-        page = doc[page_idx]
-        # Cap render DPI so the longest image dimension stays within the model's
-        # context budget (e.g. nanonets max-model-len=16128). Computing DPI
-        # upfront avoids rendering at full resolution only to discard it.
-        dpi = 300
-        max_dim = config.ocr_max_image_dimension
-        if max_dim:
-            w_px = page.rect.width * dpi / 72
-            h_px = page.rect.height * dpi / 72
-            if max(w_px, h_px) > max_dim:
-                dpi = int(dpi * max_dim / max(w_px, h_px))
-        mat = fitz.Matrix(dpi / 72, dpi / 72)
-        pix = page.get_pixmap(matrix=mat, alpha=False)
-        # Encode to PNG bytes and release the pixmap immediately
-        png_bytes = pix.tobytes("png")
-        b64 = base64.b64encode(png_bytes).decode()
-        del pix, png_bytes  # release C-heap memory before async calls
+        b64 = await asyncio.to_thread(
+            _render_page_to_base64,
+            file_path,
+            page_idx,
+            config.ocr_max_image_dimension,
+        )
 
         prompt = config.ocr_prompt
         if language:
@@ -474,9 +480,6 @@ async def _batched_vision_ocr(state: AgentState, config: AgentConfig) -> dict:
         )
 
         tasks.append(litellm.acompletion(**kwargs))
-
-    doc.close()
-
     responses = await asyncio.gather(*tasks)
     chunks = [_get_completion_text(r) for r in responses]
 

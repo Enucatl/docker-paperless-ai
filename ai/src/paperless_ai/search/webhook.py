@@ -127,13 +127,6 @@ async def lifespan(app: FastAPI):
         idle_timeout_seconds=_local_search_idle_timeout_seconds,
         start_method=_local_search_start_method,
     )
-    _chat_copilot = ChatCopilot(
-        _config,
-        _paperless_client,
-        _lazy_embedder,
-        _qdrant_url,
-    )
-    log.info("Chat copilot enabled")
 
     from paperless_ai.core.paperless import _raise_for_status
     from paperless_ai.core.runner import (
@@ -185,6 +178,14 @@ async def lifespan(app: FastAPI):
         log.warning("Qdrant not reachable: %s — embedding will be skipped", exc)
         store = None
     _qdrant_store = store
+    _chat_copilot = ChatCopilot(
+        _config,
+        _paperless_client,
+        _lazy_embedder,
+        _qdrant_url,
+        qdrant_client=(store._client if store is not None else None),
+    )
+    log.info("Chat copilot enabled")
 
     embedder = EmbeddingAPIEmbedder(_config.embedding_api_base, _config.embedding_model)
     if not await embedder.check_connectivity():
@@ -345,7 +346,7 @@ async def search(
     """Hybrid semantic + keyword search with local BGE reranking.
 
     Two-Tower Retrieval:
-      - Dense: Local CPU embedding (FastEmbed) → Qdrant cosine search
+      - Dense: Local BGE-M3 query embedding in the process-backed search worker → Qdrant cosine search
       - Keyword: Paperless full-text API
       - Merge: Reciprocal Rank Fusion (RRF) to combine incompatible score scales
       - Rerank: local bge-reranker-v2-m3 reorders fused candidates
@@ -378,6 +379,7 @@ async def search(
                     dense_k=K,
                     rerank_candidates=max(N, limit),
                     rrf_k=RRF_K,
+                    qdrant_client=(_qdrant_store._client if _qdrant_store is not None else None),
                 ),
                 timeout=_search_request_timeout_seconds,
             )

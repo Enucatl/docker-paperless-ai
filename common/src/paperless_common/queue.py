@@ -12,10 +12,15 @@ log = logging.getLogger(__name__)
 
 _WEBHOOK_SUPPRESS_PREFIX = "paperless-ai:webhook-suppress:"
 _WEBHOOK_SUPPRESS_TTL_SECONDS = 300
+_RETRY_PREFIX = "paperless-ai:retry:"
 
 
 def _webhook_suppress_key(doc_id: int) -> str:
     return f"{_WEBHOOK_SUPPRESS_PREFIX}{doc_id}"
+
+
+def _retry_key(stage: str, doc_id: int) -> str:
+    return f"{_RETRY_PREFIX}{stage}:{doc_id}"
 
 
 class TaskQueues:
@@ -25,6 +30,7 @@ class TaskQueues:
     KEY_METADATA = "paperless-ai:queue:metadata"
     KEY_EMBED = "paperless-ai:queue:embed"
     KEY_REFRESH = "paperless-ai:queue:refresh"
+    KEY_FAILED = "paperless-ai:queue:failed"
 
     def __init__(self, redis_url: str = "redis://broker:6379/1"):
         self._redis: aioredis.Redis = aioredis.from_url(
@@ -55,8 +61,23 @@ class TaskQueues:
         return {int(member) for member in members}
 
     async def remove(self, doc_id: int, stage: str) -> None:
-        await self._redis.srem(stage, doc_id)
+        async with self._redis.pipeline() as pipe:
+            pipe.srem(stage, doc_id)
+            pipe.delete(_retry_key(stage, doc_id))
+            await pipe.execute()
         log.debug("Dequeued document %d from %s", doc_id, stage)
+
+    async def mark_failure(self, doc_id: int, stage: str, *, max_attempts: int) -> tuple[int, bool]:
+        """Increment the retry counter for a stage and dead-letter when exhausted."""
+        retry_count = int(await self._redis.incr(_retry_key(stage, doc_id)))
+        moved_to_failed = retry_count >= max_attempts
+        if moved_to_failed:
+            async with self._redis.pipeline() as pipe:
+                pipe.srem(stage, doc_id)
+                pipe.sadd(self.KEY_FAILED, doc_id)
+                pipe.delete(_retry_key(stage, doc_id))
+                await pipe.execute()
+        return retry_count, moved_to_failed
 
     async def pending_count(self) -> dict[str, int]:
         async with self._redis.pipeline() as pipe:

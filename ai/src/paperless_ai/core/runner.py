@@ -201,6 +201,36 @@ async def _clear_webhook_suppression(queue, doc_id: int) -> None:
     await queue.clear_webhook_suppression(doc_id)
 
 
+async def _record_stage_failure(
+    queues: TaskQueues,
+    config: AgentConfig,
+    *,
+    doc_id: int,
+    queue_key: str,
+    stage_label: str,
+) -> None:
+    retry_count, moved_to_failed = await queues.mark_failure(
+        doc_id,
+        queue_key,
+        max_attempts=max(1, config.stage_max_attempts),
+    )
+    if moved_to_failed:
+        log.error(
+            "Document %d: %s failed %d time(s); moved to failed queue",
+            doc_id,
+            stage_label,
+            retry_count,
+        )
+    else:
+        log.warning(
+            "Document %d: %s failed (attempt %d/%d); will retry",
+            doc_id,
+            stage_label,
+            retry_count,
+            max(1, config.stage_max_attempts),
+        )
+
+
 async def _run_stage(
     stage_label: str,
     preflight_url: str | None,
@@ -270,6 +300,13 @@ async def run_ocr_batch(
                 data = await client.download_original(doc_id)
             except Exception as e:
                 log.error("Document %d: download failed: %s", doc_id, e)
+                await _record_stage_failure(
+                    queues,
+                    config,
+                    doc_id=doc_id,
+                    queue_key=TaskQueues.KEY_OCR,
+                    stage_label="OCR download",
+                )
                 return False
 
             tmp_path = None
@@ -283,6 +320,13 @@ async def run_ocr_batch(
                     full_text, pages, elapsed = await run_vision_ocr_only(tmp_path, config)
                 except Exception as e:
                     log.error("Document %d: OCR failed: %s", doc_id, e)
+                    await _record_stage_failure(
+                        queues,
+                        config,
+                        doc_id=doc_id,
+                        queue_key=TaskQueues.KEY_OCR,
+                        stage_label="OCR",
+                    )
                     return False
             finally:
                 if tmp_path is not None:
@@ -312,6 +356,13 @@ async def run_ocr_batch(
         except Exception as e:
             await _clear_webhook_suppression(queues, doc_id)
             log.error("Document %d: PATCH failed: %s", doc_id, e)
+            await _record_stage_failure(
+                queues,
+                config,
+                doc_id=doc_id,
+                queue_key=TaskQueues.KEY_OCR,
+                stage_label="OCR patch",
+            )
             return False
 
     # Preflight: skip the batch when the local OCR server is offline so we
@@ -378,6 +429,13 @@ async def run_metadata_batch(
                 extracted = await strategy.extract(snippet, config)
             except Exception as e:
                 log.error("Document %d: metadata extraction failed: %s", doc_id, e)
+                await _record_stage_failure(
+                    queues,
+                    config,
+                    doc_id=doc_id,
+                    queue_key=TaskQueues.KEY_METADATA,
+                    stage_label="metadata extraction",
+                )
                 return False
 
         log.info(
@@ -449,6 +507,13 @@ async def run_metadata_batch(
             return True
         except Exception as e:
             log.error("Document %d: PATCH failed: %s", doc_id, e)
+            await _record_stage_failure(
+                queues,
+                config,
+                doc_id=doc_id,
+                queue_key=TaskQueues.KEY_METADATA,
+                stage_label="metadata patch",
+            )
             return False
 
     # Preflight: determine which server drives metadata extraction.
@@ -513,6 +578,13 @@ async def run_embed_batch(
                     await _embed_and_store(doc_id, content, search_meta, config, store, embedder)
                 except Exception as e:
                     log.error("Document %d: embedding failed: %s", doc_id, e)
+                    await _record_stage_failure(
+                        queues,
+                        config,
+                        doc_id=doc_id,
+                        queue_key=TaskQueues.KEY_EMBED,
+                        stage_label="embedding",
+                    )
                     return False
             elif not content.strip():
                 log.info("Document %d: no content — skipping embedding", doc_id)
@@ -529,6 +601,13 @@ async def run_embed_batch(
                 log.info("Document %d: embedded, removed embed tag", doc_id)
             except Exception as e:
                 log.error("Document %d: tag removal PATCH failed: %s", doc_id, e)
+                await _record_stage_failure(
+                    queues,
+                    config,
+                    doc_id=doc_id,
+                    queue_key=TaskQueues.KEY_EMBED,
+                    stage_label="embed tag removal",
+                )
                 return False
 
         await queues.remove(doc_id, TaskQueues.KEY_EMBED)
@@ -595,6 +674,13 @@ async def run_refresh_batch(
             return True
         except Exception as exc:
             log.error("Document %d: refresh failed: %s", doc_id, exc)
+            await _record_stage_failure(
+                queues,
+                config,
+                doc_id=doc_id,
+                queue_key=TaskQueues.KEY_REFRESH,
+                stage_label="refresh",
+            )
             return False
 
     return await _run_stage("Refresh", None, TaskQueues.KEY_REFRESH, queues, _process_one)

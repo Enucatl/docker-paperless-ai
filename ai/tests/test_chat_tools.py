@@ -130,6 +130,36 @@ async def test_search_documents_uses_chunk_map_when_scroll_payload_missing():
 
 
 @pytest.mark.asyncio
+async def test_search_documents_reuses_shared_qdrant_client():
+    embedder = AsyncMock()
+    client = AsyncMock()
+    shared_qdrant = AsyncMock()
+
+    point = MagicMock()
+    point.payload = {"doc_id": 42, "text": "hello"}
+    shared_qdrant.scroll.return_value = ([point], None)
+
+    with (
+        patch("paperless_ai.search.tools.AsyncQdrantClient") as qdrant_cls,
+        patch("paperless_ai.search.tools.hybrid_retrieve", AsyncMock(return_value=([42], {42: "hello"}))),
+    ):
+        result = await search_documents(
+            "invoice",
+            embedder=embedder,
+            qdrant_url="http://qdrant:6333",
+            config=MagicMock(),
+            client=client,
+            mode="recall",
+            limit=20,
+            qdrant_client=shared_qdrant,
+        )
+
+    assert "Doc 42" in result.content
+    qdrant_cls.assert_not_called()
+    shared_qdrant.close.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_execute_tool_call_reads_document():
     client = AsyncMock()
     client.get_document_with_content.return_value = {

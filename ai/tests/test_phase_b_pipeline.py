@@ -11,6 +11,7 @@ Test matrix:
     test_task_queues_remove
     test_task_queues_pending_count
     test_task_queues_deduplication
+    test_task_queues_mark_failure_moves_to_failed_queue
 
   Webhook routing — unit-style (no Paperless, Redis required):
     test_parse_tags_empty
@@ -24,6 +25,7 @@ Test matrix:
     test_ocr_batch_writes_content_and_transitions_tag
     test_ocr_batch_skips_missing_document
     test_ocr_batch_dry_run
+    test_ocr_batch_moves_poison_document_to_failed_queue
 
   run_metadata_batch — integration (Paperless + Redis + mock LLM):
     test_metadata_batch_writes_metadata_and_transitions_tag
@@ -108,6 +110,25 @@ async def test_task_queues_deduplication(task_queues):
     assert added1 is True
     assert added2 is False
     assert await task_queues.peek_stage(TaskQueues.KEY_EMBED) == {42}
+
+
+@pytest.mark.requires_redis
+async def test_task_queues_mark_failure_moves_to_failed_queue(task_queues):
+    await task_queues.enqueue_ocr(55)
+
+    retry_count, moved = await task_queues.mark_failure(55, TaskQueues.KEY_OCR, max_attempts=3)
+    assert (retry_count, moved) == (1, False)
+    assert await task_queues.peek_stage(TaskQueues.KEY_OCR) == {55}
+    assert await task_queues.peek_stage(TaskQueues.KEY_FAILED) == set()
+
+    retry_count, moved = await task_queues.mark_failure(55, TaskQueues.KEY_OCR, max_attempts=3)
+    assert (retry_count, moved) == (2, False)
+    assert await task_queues.peek_stage(TaskQueues.KEY_OCR) == {55}
+
+    retry_count, moved = await task_queues.mark_failure(55, TaskQueues.KEY_OCR, max_attempts=3)
+    assert (retry_count, moved) == (3, True)
+    assert await task_queues.peek_stage(TaskQueues.KEY_OCR) == set()
+    assert await task_queues.peek_stage(TaskQueues.KEY_FAILED) == {55}
 
 
 # ---------------------------------------------------------------------------
@@ -264,6 +285,42 @@ async def test_ocr_batch_dry_run(paperless_client, task_queues):
     # Content unchanged
     after = await paperless_client.get_document_with_content(doc_id)
     assert after.get("content", "") == original_content
+
+    await paperless_client._client.delete(f"/api/documents/{doc_id}/")
+
+
+@pytest.mark.requires_redis
+async def test_ocr_batch_moves_poison_document_to_failed_queue(
+    paperless_client, task_queues, monkeypatch
+):
+    from paperless_ai.core.config import AgentConfig
+    from paperless_ai.core.runner import run_ocr_batch
+
+    async def _boom(*_args, **_kwargs):
+        raise RuntimeError("corrupted pdf")
+
+    monkeypatch.setattr("paperless_ai.agents.smart_graph_agent.run_vision_ocr_only", _boom)
+
+    token = paperless_client._client.headers["Authorization"].split(" ")[1]
+    config = AgentConfig(
+        paperless_url=PAPERLESS_URL,
+        paperless_token=token,
+        ocr_model="gemini/gemini-2.5-flash",
+        metadata_model="gemini/gemini-2.5-flash",
+        chat_model="gemini/gemini-2.5-flash",
+        stage_max_attempts=3,
+    )
+
+    doc_id = await _upload_document(paperless_client, _make_test_pdf())
+    await task_queues.enqueue_ocr(doc_id)
+
+    for _ in range(3):
+        success, failure = await run_ocr_batch(paperless_client, config, task_queues)
+        assert success == 0
+        assert failure == 1
+
+    assert await task_queues.peek_stage(TaskQueues.KEY_OCR) == set()
+    assert await task_queues.peek_stage(TaskQueues.KEY_FAILED) == {doc_id}
 
     await paperless_client._client.delete(f"/api/documents/{doc_id}/")
 

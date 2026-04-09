@@ -1,1 +1,1 @@
-# Search package: Redis queue, webhook listener, Qdrant store, embeddings client.
+# Search package: copilot app, retrieval, local search worker, and Qdrant integration.

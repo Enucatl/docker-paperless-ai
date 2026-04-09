@@ -112,6 +112,8 @@ async def dense_search(
     query: str,
     k: int,
     filters: SearchFilters | None = None,
+    *,
+    qdrant_client: AsyncQdrantClient | None = None,
 ) -> list[ChunkCandidate]:
     """Search by dense similarity and return ranked chunk candidates."""
     with start_span(
@@ -122,7 +124,7 @@ async def dense_search(
         },
     ) as span:
         result = await embedder.embed_query(query)
-        qdrant = AsyncQdrantClient(url=qdrant_url)
+        qdrant = qdrant_client or AsyncQdrantClient(url=qdrant_url)
         try:
             response = await qdrant.query_points(
                 collection_name=COLLECTION,
@@ -133,7 +135,8 @@ async def dense_search(
                 query_filter=build_qdrant_filter(filters or SearchFilters()),
             )
         finally:
-            await qdrant.close()
+            if qdrant_client is None:
+                await qdrant.close()
 
         hits = _extract_qdrant_hits(response)
         candidates: list[ChunkCandidate] = []
@@ -177,6 +180,7 @@ async def fetch_document_chunks(
     *,
     batch_size: int = 64,
     page_size: int = 256,
+    qdrant_client: AsyncQdrantClient | None = None,
 ) -> list[ChunkCandidate]:
     """Fetch all known Qdrant chunks for the provided document IDs."""
     if not doc_ids:
@@ -187,7 +191,7 @@ async def fetch_document_chunks(
             "paperless_ai.search.doc_id_count": len(doc_ids),
         },
     ) as span:
-        qdrant = AsyncQdrantClient(url=qdrant_url)
+        qdrant = qdrant_client or AsyncQdrantClient(url=qdrant_url)
         try:
             candidates: list[ChunkCandidate] = []
             doc_filter = build_qdrant_filter(filters or SearchFilters())
@@ -227,7 +231,8 @@ async def fetch_document_chunks(
             )
             return candidates
         finally:
-            await qdrant.close()
+            if qdrant_client is None:
+                await qdrant.close()
 
 
 def _order_chunk_candidates(
@@ -307,6 +312,7 @@ async def hybrid_retrieve(
     rerank_candidates: int = N,
     rrf_k: int = RRF_K,
     mode: RetrievalMode = "precision",
+    qdrant_client: AsyncQdrantClient | None = None,
 ) -> tuple[list[int], dict[int, str]]:
     """Shared hybrid retrieval pipeline for chat and the HTTP search endpoint."""
     with start_span(
@@ -334,7 +340,14 @@ async def hybrid_retrieve(
         )
 
         dense_result, keyword_result = await asyncio.gather(
-            dense_search(embedder, qdrant_url, query, dense_k, filters=resolved_filters),
+            dense_search(
+                embedder,
+                qdrant_url,
+                query,
+                dense_k,
+                filters=resolved_filters,
+                qdrant_client=qdrant_client,
+            ),
             keyword_coro,
             return_exceptions=True,
         )
@@ -364,6 +377,7 @@ async def hybrid_retrieve(
             qdrant_url,
             keyword_only_doc_ids,
             filters=resolved_filters,
+            qdrant_client=qdrant_client,
         )
         chunk_candidates = _order_chunk_candidates(fused_ids, dense_chunks, keyword_chunks)
         bounded_rerank_candidates = min(MAX_RERANK_CANDIDATES, max(1, rerank_candidates))

@@ -1,5 +1,5 @@
 """
-Tests for LocalLazySearchEmbedder and the GET /search endpoint.
+Tests for local search embedders and the GET /search endpoint.
 
 Test categories
 ---------------
@@ -7,11 +7,7 @@ Unit (no Docker required):
   test_model_starts_none
   test_get_model_loads_on_first_call
   test_get_model_reuses_instance
-  test_get_model_updates_last_used
   test_embed_query_returns_correct_shape
-  test_idle_watcher_keeps_fresh_model
-  test_idle_watcher_unloads_stale_model
-  test_idle_watcher_calls_gc_collect
   test_memory_lifecycle_allocate_and_free   ← tracemalloc + weakref
 
 Endpoint integration (ai copilot service + Qdrant running):
@@ -38,7 +34,6 @@ CI gate.  The right combination for this use case is:
 import asyncio
 import gc
 import math
-import time
 import tracemalloc
 import weakref
 from contextlib import suppress
@@ -170,12 +165,6 @@ def test_get_model_reuses_instance(embedder, patched_sentence_transformer):
     assert first is second
 
 
-def test_get_model_updates_last_used(embedder, patched_sentence_transformer):
-    before = time.monotonic()
-    embedder._get_model()
-    assert embedder._last_used >= before
-
-
 def test_get_model_logs_on_load(embedder, patched_sentence_transformer, caplog):
     import logging
 
@@ -244,113 +233,6 @@ async def test_rerank_returns_normalized_scores(embedder, patched_flag_reranker)
     assert 0.0 < scores[1] < 1.0
     assert scores[1] > scores[0]
     assert embedder._reranker is not None
-
-
-# ---------------------------------------------------------------------------
-# Unit: idle_watcher
-# ---------------------------------------------------------------------------
-
-
-async def test_idle_watcher_keeps_fresh_model(embedder, patched_sentence_transformer):
-    """A recently-used model must NOT be evicted."""
-    embedder._get_model()  # loads model and stamps _last_used
-    assert embedder.model is not None
-
-    tick = 0
-
-    async def fast_sleep(_seconds):
-        nonlocal tick
-        tick += 1
-        if tick >= 2:
-            raise asyncio.CancelledError
-
-    with patch("asyncio.sleep", fast_sleep):
-        with pytest.raises(asyncio.CancelledError):
-            await embedder.idle_watcher(timeout_seconds=300)
-
-    assert embedder.model is not None, "Fresh model should not have been evicted"
-
-
-async def test_idle_watcher_unloads_stale_model(embedder, patched_sentence_transformer):
-    """A model idle longer than timeout_seconds must be set to None."""
-    embedder._get_model()
-    embedder._last_used = 0.0  # make it look ancient
-
-    tick = 0
-
-    async def fast_sleep(_seconds):
-        nonlocal tick
-        tick += 1
-        if tick >= 2:
-            raise asyncio.CancelledError
-
-    with patch("asyncio.sleep", fast_sleep):
-        with pytest.raises(asyncio.CancelledError):
-            await embedder.idle_watcher(timeout_seconds=0)
-
-    assert embedder.model is None, "Stale model should have been unloaded"
-
-
-async def test_idle_watcher_unloads_stale_reranker(embedder, patched_flag_reranker):
-    embedder._get_reranker(embedder.LOCAL_RERANKER_MODEL_NAME)
-    embedder._last_used = 0.0
-
-    tick = 0
-
-    async def fast_sleep(_seconds):
-        nonlocal tick
-        tick += 1
-        if tick >= 2:
-            raise asyncio.CancelledError
-
-    with patch("asyncio.sleep", fast_sleep):
-        with pytest.raises(asyncio.CancelledError):
-            await embedder.idle_watcher(timeout_seconds=0)
-
-    assert embedder._reranker is None
-    assert embedder._reranker_model_name is None
-
-
-async def test_idle_watcher_calls_gc_collect(embedder, patched_sentence_transformer):
-    """gc.collect() must be called after model is unloaded."""
-    embedder._get_model()
-    embedder._last_used = 0.0
-
-    tick = 0
-
-    async def fast_sleep(_seconds):
-        nonlocal tick
-        tick += 1
-        if tick >= 2:
-            raise asyncio.CancelledError
-
-    with patch("asyncio.sleep", fast_sleep):
-        with patch("gc.collect") as mock_gc:
-            with pytest.raises(asyncio.CancelledError):
-                await embedder.idle_watcher(timeout_seconds=0)
-
-    mock_gc.assert_called_once()
-
-
-async def test_idle_watcher_logs_eviction(embedder, patched_sentence_transformer, caplog):
-    import logging
-
-    embedder._get_model()
-    embedder._last_used = 0.0
-    tick = 0
-
-    async def fast_sleep(_seconds):
-        nonlocal tick
-        tick += 1
-        if tick >= 2:
-            raise asyncio.CancelledError
-
-    with patch("asyncio.sleep", fast_sleep):
-        with caplog.at_level(logging.INFO, logger="paperless_ai.search.embedder"):
-            with pytest.raises(asyncio.CancelledError):
-                await embedder.idle_watcher(timeout_seconds=0)
-
-    assert any("freeing RAM" in r.message or "idle" in r.message.lower() for r in caplog.records)
 
 
 async def test_hybrid_retrieve_uses_local_reranker():

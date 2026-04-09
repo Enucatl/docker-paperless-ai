@@ -116,6 +116,7 @@ class AgentConfig(BaseSettings):
 
     poll_interval: int = 300
     llm_retries: int = 3
+    stage_max_attempts: int = 3
     ocr_concurrency: int = 4
     # TAG_PENDING is the legacy name — keep for backward compat
     tag_ocr: str = Field(

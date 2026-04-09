@@ -1,4 +1,4 @@
-"""Process-backed local search inference for the webhook listener."""
+"""Process-backed local search inference for the copilot/search service."""
 
 from __future__ import annotations
 

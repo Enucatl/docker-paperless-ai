@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable
 
 import litellm
+from qdrant_client import AsyncQdrantClient
 
 from paperless_ai.core.config import AgentConfig
 from paperless_ai.core.paperless import PaperlessClient
@@ -95,11 +96,13 @@ class ChatCopilot:
         client: PaperlessClient,
         embedder: SearchEmbedder,
         qdrant_url: str,
+        qdrant_client: AsyncQdrantClient | None = None,
     ):
         self._config = config
         self._client = client
         self._embedder = embedder
         self._qdrant_url = qdrant_url
+        self._qdrant_client = qdrant_client
 
     async def _emit(self, callback: EventCallback | None, event: dict[str, Any]) -> None:
         if callback is not None:
@@ -241,6 +244,7 @@ class ChatCopilot:
                             embedder=self._embedder,
                             qdrant_url=self._qdrant_url,
                             config=self._config,
+                            qdrant_client=self._qdrant_client,
                         )
                         duration_ms = int((time.perf_counter() - start) * 1000)
                         set_span_attributes(

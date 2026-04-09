@@ -54,8 +54,8 @@ echo "=== Starting test infrastructure ==="
 # time the ai container (pytest) runs.  The ai service also declares them as
 # depends_on with condition: service_healthy as a belt-and-suspenders check.
 # Phoenix is optional — don't fail if the image isn't available.
-$COMPOSE up -d db broker gotenberg tika webserver qdrant webhook-listener phoenix 2>/dev/null || \
-    $COMPOSE up -d db broker gotenberg tika webserver qdrant webhook-listener
+$COMPOSE up -d db broker webserver qdrant webhook-listener phoenix 2>/dev/null || \
+    $COMPOSE up -d db broker webserver qdrant webhook-listener
 
 # ---------------------------------------------------------------------------
 # 3. Wait for Paperless webserver healthcheck

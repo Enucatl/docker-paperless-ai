@@ -41,13 +41,16 @@ Embed worker        → reads content + metadata from Paperless
 Each stage is independent: if the GPU workstation is off, the workers detect
 the unreachable server and return immediately without downloading anything.
 Documents wait safely in Redis queues until the server comes back online.
+If a document fails repeatedly, the worker retries it up to `STAGE_MAX_ATTEMPTS`
+(default `3`) and then moves it to `paperless-ai:queue:failed` instead of
+retrying forever.
 
 ```
 Search query arrives → GET /search?q=invoice+2024&limit=20 on the ai service
-                       1. LocalLazySearchEmbedder loads bge-m3 into CPU RAM (first call only)
-                       2. Dense vector computed via FastEmbed (asyncio.to_thread)
-                       3. Qdrant queried, chunk hits deduplicated to doc_ids
-                       4. Model auto-evicted from RAM after 5 min idle (scale-to-zero)
+                       1. ProcessLocalSearchEmbedder starts a child process on first use
+                       2. The child lazily loads bge-m3 and computes the dense query vector
+                       3. Shared Qdrant client queries chunk vectors, then local reranking reorders hits
+                       4. The child process exits after 5 min idle, reclaiming RAM cleanly
 ```
 
 ## Repo layout
@@ -376,11 +379,17 @@ Two embedders serve different roles and never interfere:
 | Embedder | Class | Used for | When available |
 |---|---|---|---|
 | `EmbeddingAPIEmbedder` | `embedder.py` | Batch indexing via the embed worker | Only when embeddings API is reachable |
-| `LocalLazySearchEmbedder` | `embedder.py` | Answering `/search` queries | Always (CPU, no GPU needed) |
+| `ProcessLocalSearchEmbedder` | `local_search_process.py` | Answering `/search` and `/chat` queries | Always (CPU, no GPU needed) |
 
-`LocalLazySearchEmbedder` loads the bge-m3 model into CPU RAM on the first query and automatically evicts it after 5 minutes of inactivity (`gc.collect()` called on eviction). This keeps RAM usage at zero when search is idle while keeping query latency reasonable on the fast path (model already warm).
+`ProcessLocalSearchEmbedder` starts a dedicated child process on the first query.
+That worker lazily loads the local embedding and reranking models, handles all
+local search inference, and exits after the configured idle timeout. This keeps
+the main FastAPI process responsive and reclaims RAM by terminating the worker
+process rather than relying on in-process GC.
 
-The `EMBEDDING_API_BASE` and external embeddings service availability do not affect `/search` — it uses FastEmbed running locally in the `ai` container.
+The `EMBEDDING_API_BASE` and external embeddings service availability do not affect
+`/search` — local retrieval uses the process-backed CPU search worker in the
+`ai` container.
 
 ## Customising prompts
 
@@ -441,8 +450,8 @@ Django migrations and document indexing).  A fresh pull adds image download time
 | `test_webhook.py` | Graceful handling: missing ID → 202, non-JSON body → 400 |
 | `test_webhook.py` | `/health` endpoint reflects live pending count |
 | `test_webhook.py` | **Full Paperless integration**: workflow created via API → document uploaded → Paperless fires `{{doc_url}}` webhook → doc ID lands in Redis |
-| `test_search.py` | `LocalLazySearchEmbedder` unit tests: lazy load, reuse, `_last_used` stamping |
-| `test_search.py` | `idle_watcher` evicts stale model, calls `gc.collect()`, keeps fresh model |
+| `test_phase_b_pipeline.py` | Failed documents are retried up to `STAGE_MAX_ATTEMPTS` then moved to `paperless-ai:queue:failed` |
+| `test_search.py` | Local search model unit tests: lazy load, reuse, thread-offloaded query embedding |
 | `test_search.py` | Memory lifecycle: `tracemalloc` before/after snapshot + `weakref` GC assertion |
 | `test_search.py` | `embed_query` runs in thread pool (event-loop non-blocking verified) |
 | `test_search.py` | `/search` 422 on missing/empty `q` and out-of-range `limit` |
@@ -465,9 +474,9 @@ not present in CI).  The `mock_embedder` fixture provides deterministic 1024-d
 fake vectors directly to `run_embed_batch()` so the embedding code path is still
 exercised end-to-end against real Qdrant.
 
-`LocalLazySearchEmbedder` (used by `/search`) is tested with a `fastembed`
-mock that allocates a real `bytearray` so `tracemalloc` can verify allocation
-and deallocation without downloading the actual bge-m3 weights.
+The local search embedder is tested with a lightweight fake model that
+allocates a real `bytearray` so `tracemalloc` can verify allocation and
+deallocation without downloading the actual bge-m3 weights.
 
 #### Skip the build step (faster re-runs)
 
@@ -491,7 +500,7 @@ docker compose -f docker-compose.yml -f docker-compose.test.yml \
 > `webhook-listener`, etc.) are already running.  Start them first with:
 > ```bash
 > docker compose -f docker-compose.yml -f docker-compose.test.yml \
->   up -d db broker gotenberg tika webserver qdrant webhook-listener
+>   up -d db broker webserver qdrant webhook-listener
 > ```
 
 ### Evaluation framework

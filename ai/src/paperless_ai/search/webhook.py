@@ -478,17 +478,23 @@ async def chat_ui() -> HTMLResponse:
       color: var(--bs-body-color);
       font-family: var(--bs-body-font-family);
     }
+    .paperless-topbar {
+      background: #17541f;
+      color: #fff;
+      box-shadow: inset 0 -1px 0 rgba(255, 255, 255, 0.08);
+    }
+    .paperless-topbar-inner {
+      max-width: 1380px;
+      margin: 0 auto;
+      padding: 0.9rem 1.25rem;
+      font-size: 1rem;
+      font-weight: 600;
+      letter-spacing: 0.01em;
+    }
     .chat-shell {
       max-width: 1380px;
       margin: 0 auto;
-      padding: 1.25rem;
-    }
-    .chat-header {
-      margin-bottom: 1rem;
-      border: 1px solid var(--chat-border);
-      border-radius: var(--chat-radius);
-      box-shadow: var(--chat-shadow);
-      background: linear-gradient(180deg, #ffffff, #fbfcfb);
+      padding: 1rem 1.25rem 1.25rem;
     }
     .chat-layout {
       display: grid;
@@ -761,6 +767,8 @@ async def chat_ui() -> HTMLResponse:
     }
     .composer {
       display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      align-items: end;
       gap: 0.75rem;
       padding: 1rem;
       border-top: 1px solid var(--chat-border);
@@ -768,23 +776,24 @@ async def chat_ui() -> HTMLResponse:
     }
     .composer textarea {
       width: 100%;
-      min-height: 5.5rem;
-      resize: vertical;
+      min-height: calc(1.5em + 1.7rem + 2px);
+      field-sizing: content;
+      resize: none;
       border: 1px solid var(--chat-border);
       border-radius: 0.85rem;
       padding: 0.85rem 0.95rem;
       font: inherit;
+      line-height: 1.5;
       background: #fff;
+      overflow-y: auto;
     }
     .composer-actions {
       display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 1rem;
+      align-items: stretch;
     }
-    .composer-hint {
-      color: var(--chat-muted);
-      font-size: 0.9rem;
+    .composer-actions .btn {
+      height: calc(1.5em + 1.7rem + 2px);
+      white-space: nowrap;
     }
     .preview-panel {
       position: sticky;
@@ -834,12 +843,18 @@ async def chat_ui() -> HTMLResponse:
       }
     }
     @media (max-width: 720px) {
+      .paperless-topbar-inner {
+        padding: 0.85rem 0.75rem;
+      }
       .chat-shell {
         padding: 0.75rem;
       }
       .conversation,
       .composer {
         padding: 0.85rem;
+      }
+      .composer {
+        grid-template-columns: 1fr;
       }
       .source-card {
         grid-template-columns: 1fr;
@@ -855,29 +870,16 @@ async def chat_ui() -> HTMLResponse:
       }
       .composer-actions {
         align-items: stretch;
-        flex-direction: column;
+        justify-content: flex-end;
       }
     }
   </style>
 </head>
 <body>
+  <header class="paperless-topbar">
+    <div class="paperless-topbar-inner">paperless-ngx copilot</div>
+  </header>
   <main class="chat-shell">
-    <section class="chat-header card">
-      <div class="card-body p-4">
-        <div class="d-flex flex-wrap justify-content-between align-items-start gap-3">
-          <div>
-            <p class="text-uppercase text-muted fw-semibold small mb-2">Paperless-ngx Copilot</p>
-            <h1 class="h3 mb-2">Search your archive conversationally</h1>
-            <p class="text-muted mb-0">Ask about invoices, receipts, tags, correspondents, or specific facts. The assistant streams progress, shows tool calls, and cites source documents.</p>
-          </div>
-          <div class="usage">
-            <span class="usage-chip">Transport: WebSocket</span>
-            <span class="usage-chip">UI: Vanilla JS</span>
-          </div>
-        </div>
-      </div>
-    </section>
-
     <div class="chat-layout">
       <section class="chat-column">
         <div id="socket-banner" class="socket-banner alert alert-warning mb-0"></div>
@@ -886,7 +888,6 @@ async def chat_ui() -> HTMLResponse:
           <form id="chat-form" class="composer">
             <textarea id="prompt" placeholder="Ask about invoices from 2024, documents from a correspondent, or the contents of a specific receipt..."></textarea>
             <div class="composer-actions">
-              <div class="composer-hint">Tool details stay collapsed by default so the transcript remains easy to demo.</div>
               <button id="send-button" type="submit" class="btn btn-primary px-4">Send</button>
             </div>
           </form>
@@ -937,6 +938,11 @@ async def chat_ui() -> HTMLResponse:
       conversation.scrollTop = conversation.scrollHeight;
     }
 
+    function autosizePrompt() {
+      prompt.style.height = "auto";
+      prompt.style.height = `${Math.max(prompt.scrollHeight, sendButton.offsetHeight)}px`;
+    }
+
     function setSocketBanner(kind, text) {
       socketBanner.className = `socket-banner alert alert-${kind} mb-0 active`;
       socketBanner.textContent = text;
@@ -966,6 +972,10 @@ async def chat_ui() -> HTMLResponse:
       conversation.appendChild(bubble);
       scrollConversation();
     }
+
+    prompt.addEventListener("input", autosizePrompt);
+    window.addEventListener("load", autosizePrompt);
+    autosizePrompt();
 
     function createTurn(turnId) {
       const turn = document.createElement("article");

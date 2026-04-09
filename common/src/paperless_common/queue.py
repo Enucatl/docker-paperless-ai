@@ -60,6 +60,9 @@ class TaskQueues:
         members = await self._redis.smembers(stage)
         return {int(member) for member in members}
 
+    async def stage_size(self, stage: str) -> int:
+        return int(await self._redis.scard(stage))
+
     async def remove(self, doc_id: int, stage: str) -> None:
         async with self._redis.pipeline() as pipe:
             pipe.srem(stage, doc_id)

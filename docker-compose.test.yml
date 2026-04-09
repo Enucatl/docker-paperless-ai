@@ -23,6 +23,8 @@ services:
 
   webserver:
     # Anonymous volumes — Docker auto-wipes them on `down -v`.
+    labels:
+      - "checkmk_monitor=false"
     volumes:
       - /usr/src/paperless/data
       - /usr/src/paperless/media
@@ -81,6 +83,8 @@ services:
         condition: service_healthy
 
   ai:
+    labels:
+      - "checkmk_monitor=false"
     command: >
       bash -lc '
         python /app/fetch_paperless_token.py >/tmp/paperless-token
@@ -125,6 +129,8 @@ services:
       context: .
       dockerfile: ./ai/Dockerfile
       target: runtime
+    labels:
+      - "checkmk_monitor=false"
     entrypoint: []
     command: >
       bash -lc "uv sync --frozen --extra test --extra eval && python -m pytest -v /app/tests/"

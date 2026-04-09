@@ -333,6 +333,8 @@ services:
       dockerfile: ./ai/Dockerfile
       target: eval
     profiles: [eval]
+    labels:
+      - "checkmk_monitor=false"
     extra_hosts:
       - "${DOCKER_DOMAIN}:host-gateway"
     entrypoint: []

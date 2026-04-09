@@ -37,9 +37,11 @@ class PaperlessClient:
         self.paperless_version: str | None = None
         self._correspondents_cache: list[dict] | None = None
         self._tags_cache: list[dict] | None = None
+        self._tag_id_cache: dict[str, int] = {}
         self._document_types_cache: list[dict] | None = None
         self._storage_paths_cache: list[dict] | None = None
         self._workflows_cache: list[dict] | None = None
+        self._custom_field_id_cache: dict[str, int] = {}
 
     async def aclose(self):
         await self._client.close()
@@ -52,18 +54,24 @@ class PaperlessClient:
 
     async def get_tag_id(self, name: str, create: bool = True) -> int:
         """Return tag ID by name, optionally creating it if missing."""
+        cached_id = self._tag_id_cache.get(name)
+        if cached_id is not None:
+            return cached_id
         r = await self._client.get("/api/tags/", params={"name": name})
         _raise_for_status(r)
         self.paperless_version = r.headers.get("x-version", self.paperless_version)
         results = r.json()["results"]
         for tag in results:
             if tag["name"] == name:
-                return tag["id"]
+                tag_id = int(tag["id"])
+                self._tag_id_cache[name] = tag_id
+                return tag_id
         if not create:
             raise ValueError(f"Tag '{name}' not found")
         r = await self._client.post("/api/tags/", json={"name": name})
         _raise_for_status(r)
         tag_id = r.json()["id"]
+        self._tag_id_cache[name] = int(tag_id)
         log.info("Created tag '%s' (id=%d)", name, tag_id)
         return tag_id
 
@@ -325,6 +333,9 @@ class PaperlessClient:
 
     async def get_or_create_custom_field(self, name: str, data_type: str = "date") -> int:
         """Return custom field ID by name, creating it if missing."""
+        cached_id = self._custom_field_id_cache.get(name)
+        if cached_id is not None:
+            return cached_id
         # Page through all fields — the ?name= filter is not reliable in all paperless versions
         page = 1
         while True:
@@ -349,6 +360,7 @@ class PaperlessClient:
                             existing_type,
                             data_type,
                         )
+                    self._custom_field_id_cache[name] = int(field["id"])
                     log.info("Found custom field '%s' (id=%d)", name, field["id"])
                     return field["id"]
             if not data.get("next"):
@@ -361,6 +373,7 @@ class PaperlessClient:
             log.warning("Custom field create failed (%d): %s", r.status_code, r.text)
         _raise_for_status(r)
         field_id = r.json()["id"]
+        self._custom_field_id_cache[name] = int(field_id)
         log.info(
             "Created custom field '%s' (id=%d, type=%s)", name, field_id, data_type
         )

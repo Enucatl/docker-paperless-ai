@@ -270,6 +270,9 @@ async def run_ocr_batch(
     from paperless_ai.agents.smart_graph_agent import run_vision_ocr_only
     from paperless_ai.search.queue import TaskQueues
 
+    if await queues.stage_size(TaskQueues.KEY_OCR) == 0:
+        return 0, 0
+
     # Look up tag IDs once for the whole batch
     try:
         tag_ocr_id = await client.get_tag_id(config.tag_ocr, create=False)
@@ -384,6 +387,9 @@ async def run_metadata_batch(
     """
     from paperless_ai.agents.smart_graph_agent import _select_extraction_strategy
     from paperless_ai.search.queue import TaskQueues
+
+    if await queues.stage_size(TaskQueues.KEY_METADATA) == 0:
+        return 0, 0
 
     strategy = _select_extraction_strategy(config)
     log.info("Metadata batch: using %s", strategy.__class__.__name__)
@@ -534,6 +540,9 @@ async def run_embed_batch(
     """
     from paperless_ai.search.queue import TaskQueues
 
+    if await queues.stage_size(TaskQueues.KEY_EMBED) == 0:
+        return 0, 0
+
     try:
         tag_embed_id = await client.get_tag_id(config.tag_embed, create=False)
     except ValueError:
@@ -629,6 +638,9 @@ async def run_refresh_batch(
     from paperless_ai.search.queue import TaskQueues
 
     if store is None:
+        return 0, 0
+
+    if await queues.stage_size(TaskQueues.KEY_REFRESH) == 0:
         return 0, 0
 
     try:

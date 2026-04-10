@@ -1,6 +1,10 @@
 services:
   broker:
+    extends:
+      file: ../compose-security-baseline/hardening.yml
+      service: redis
     image: docker.io/library/redis:8
+    cpu_shares: 1024
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
@@ -11,7 +15,11 @@ services:
       - internal
 
   db:
+    extends:
+      file: ../compose-security-baseline/hardening.yml
+      service: postgres
     image: docker.io/library/postgres:17
+    cpu_shares: 1024
     restart: unless-stopped
     environment:
       - POSTGRES_DB=paperless
@@ -27,7 +35,11 @@ services:
     command: postgres -c max_connections=1000
 
   webserver:
+    extends:
+      file: ../compose-security-baseline/hardening.yml
+      service: setpcap-chown-init-xlarge
     image: ghcr.io/paperless-ngx/paperless-ngx:latest
+    cpu_shares: 768
     extra_hosts:
       - "${DOCKER_DOMAIN}:host-gateway"
     restart: unless-stopped
@@ -57,14 +69,18 @@ services:
       - PAPERLESS_URL=https://paperless.${DOCKER_DOMAIN}
       - PAPERLESS_ENABLE_HTTP_REMOTE_USER=true
       - PAPERLESS_LOGOUT_REDIRECT_URL=https://authelia.${DOCKER_DOMAIN}/logout
-      - PAPERLESS_EMAIL_CERTIFICATE_LOCATION=/usr/src/paperless/data/ca-certificates.crt
+      - PAPERLESS_EMAIL_CERTIFICATE_LOCATION=/usr/src/paperless/certs/ca-certificates.crt
     networks:
       - internal
 
   # Local observability & evaluation platform (Arize Phoenix).
   # UI: https://phoenix.${DOCKER_DOMAIN}  — traces, costs, and eval results.
   phoenix:
+    extends:
+      file: ../compose-security-baseline/hardening.yml
+      service: hardened-medium
     image: arizephoenix/phoenix:latest
+    cpu_shares: 256
     restart: unless-stopped
     networks:
       - internal
@@ -83,7 +99,11 @@ services:
   # Qdrant vector database — stores document chunk embeddings for hybrid search.
   # Always-on, lightweight (~50 MB RAM, written in Rust).
   qdrant:
+    extends:
+      file: ../compose-security-baseline/hardening.yml
+      service: hardened-medium
     image: qdrant/qdrant:latest
+    cpu_shares: 512
     restart: unless-stopped
     volumes: [] # storage volume added in docker-compose.override.yml
     healthcheck:
@@ -100,6 +120,9 @@ services:
   # Configure in Paperless: Settings → Workflows → Action: Webhook
   #   URL: http://webhook-listener:8001/webhook/document
   webhook-listener:
+    extends:
+      file: ../compose-security-baseline/hardening.yml
+      service: hardened-small
     build:
       context: .
       dockerfile: ./listener/Dockerfile
@@ -155,10 +178,14 @@ services:
   #
   # See ai/README.md for full setup instructions.
   ai:
+    extends:
+      file: ../compose-security-baseline/hardening.yml
+      service: hardened-xxlarge
     build:
       context: .
       dockerfile: ./ai/Dockerfile
       target: runtime
+    cpu_shares: 256
     restart: unless-stopped
     extra_hosts:
       - "${DOCKER_DOMAIN}:host-gateway"
@@ -209,12 +236,6 @@ services:
       - OCR_API_BASE
       - METADATA_API_BASE
 
-      # API keys — set whichever your chosen model needs.
-      # Plain env vars (visible in docker inspect):
-      - GOOGLE_API_KEY
-      - ANTHROPIC_API_KEY
-      - OPENAI_API_KEY
-      - HF_TOKEN
       # Docker secrets (_FILE variants read the key from a file, safer):
       - GOOGLE_API_KEY_FILE=/run/secrets/google_api_key
       - ANTHROPIC_API_KEY_FILE=/run/secrets/anthropic_api_key
@@ -280,6 +301,9 @@ services:
         condition: service_started
 
   ai-cleanup:
+    extends:
+      file: ../compose-security-baseline/hardening.yml
+      service: hardened-medium
     build:
       context: .
       dockerfile: ./ai/Dockerfile
@@ -300,10 +324,6 @@ services:
       - CHAT_MODEL
       - OCR_API_BASE
       - METADATA_API_BASE
-      - GOOGLE_API_KEY
-      - ANTHROPIC_API_KEY
-      - OPENAI_API_KEY
-      - HF_TOKEN
       - GOOGLE_API_KEY_FILE=/run/secrets/google_api_key
       - ANTHROPIC_API_KEY_FILE=/run/secrets/anthropic_api_key
       - OPENAI_API_KEY_FILE=/run/secrets/openai_api_key
@@ -327,6 +347,9 @@ services:
         condition: service_started
 
   ai-eval:
+    extends:
+      file: ../compose-security-baseline/hardening.yml
+      service: hardened-medium
     image: paperless-ai-ai-eval
     build:
       context: .
@@ -349,9 +372,6 @@ services:
       - OCR_API_BASE
       - METADATA_API_BASE
       - CHAT_API_BASE
-      - GOOGLE_API_KEY
-      - ANTHROPIC_API_KEY
-      - OPENAI_API_KEY
       - GOOGLE_API_KEY_FILE=/run/secrets/google_api_key
       - ANTHROPIC_API_KEY_FILE=/run/secrets/anthropic_api_key
       - OPENAI_API_KEY_FILE=/run/secrets/openai_api_key
@@ -380,6 +400,7 @@ secrets:
 
 networks:
   internal:
+    internal: true
     enable_ipv6: true
     ipam:
       driver: default

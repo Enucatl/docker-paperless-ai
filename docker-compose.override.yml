@@ -15,7 +15,7 @@ services:
       - media:/usr/src/paperless/media
       - export:/usr/src/paperless/export
       - /opt/paperless-consume:/usr/src/paperless/consume
-      - /etc/ssl/certs/ca-certificates.crt:/usr/src/paperless/data/ca-certificates.crt:ro
+      - /etc/ssl/certs/ca-certificates.crt:/usr/src/paperless/certs/ca-certificates.crt:ro
     labels:
       - "checkmk_monitor=true"
       - "traefik.enable=true"

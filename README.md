@@ -157,38 +157,38 @@ both the copilot HTTP API and the long-running worker loop.
 ### Cleanup commands
 
 There is also a one-shot `ai-cleanup` service for metadata maintenance tasks.
-It mounts `./tmp` from the host to `/work` in the container so review artifacts
-survive after the container exits.
+It writes plans to stdout and reads approved plans from stdin when passed `-`,
+so review artifacts only land where you explicitly redirect them.
 
 Generate a correspondent cleanup plan:
 
 ```bash
-mkdir -p tmp
 docker compose --profile cleanup run --rm \
-  ai-cleanup --cleanup-correspondents-plan /work/correspondent-plan.json
+  ai-cleanup --cleanup-correspondents-plan - > correspondent-plan.json
 ```
 
 Enable the LLM judge for borderline matches:
 
 ```bash
 docker compose --profile cleanup run --rm \
-  ai-cleanup --cleanup-correspondents-plan /work/correspondent-plan.json \
-  --cleanup-judge-borderline
+  ai-cleanup --cleanup-correspondents-plan - \
+  --cleanup-judge-borderline > correspondent-plan.json
 ```
 
 Apply an approved plan:
 
 ```bash
-docker compose --profile cleanup run --rm \
-  ai-cleanup --cleanup-correspondents-apply /work/correspondent-plan.json
+docker compose --profile cleanup run --rm -T \
+  ai-cleanup --cleanup-correspondents-apply - < correspondent-plan.json
 ```
 
 Dry-run the apply step:
 
 ```bash
-docker compose --profile cleanup run --rm \
-  ai-cleanup --cleanup-correspondents-apply /work/correspondent-plan.json \
-  --dry-run
+docker compose --profile cleanup run --rm -T \
+  ai-cleanup --cleanup-correspondents-apply - \
+  --dry-run \
+  < correspondent-plan.json
 ```
 
 ### 4. Normal operation

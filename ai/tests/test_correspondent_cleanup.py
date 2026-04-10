@@ -1,3 +1,4 @@
+import io
 import json
 from pathlib import Path
 
@@ -134,6 +135,27 @@ def test_merge_plan_round_trips_json(tmp_path: Path):
     reloaded = json.loads(path.read_text(encoding="utf-8"))
 
     assert reloaded["approved_clusters"][0]["canonical_name"] == "ACME Corporation"
+
+
+def test_merge_plan_uses_stdio_for_dash(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]):
+    data = {
+        "version": 1,
+        "generated_at": "2026-04-08T00:00:00+00:00",
+        "paperless_url": "http://paperless:8000",
+        "total_correspondents": 1,
+        "total_documents": 0,
+        "judge_enabled": False,
+        "judged_pair_count": 0,
+        "approved_clusters": [],
+        "orphan_correspondents": [],
+        "candidate_pairs": [],
+    }
+    monkeypatch.setattr("sys.stdin", io.StringIO(json.dumps(data)))
+
+    plan = load_merge_plan("-")
+    write_merge_plan(plan, "-")
+
+    assert json.loads(capsys.readouterr().out)["paperless_url"] == "http://paperless:8000"
 
 
 @pytest.mark.asyncio

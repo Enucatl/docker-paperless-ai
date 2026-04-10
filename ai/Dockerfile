@@ -3,8 +3,13 @@ FROM python:3.12-slim AS runtime
 # Install uv for fast dependency management
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
 
+RUN groupadd --gid 10001 app \
+    && useradd --uid 10001 --gid app --create-home --home-dir /home/app --shell /usr/sbin/nologin app
+
 WORKDIR /app
-ENV UV_PROJECT_ENVIRONMENT=/usr/local
+ENV UV_PROJECT_ENVIRONMENT=/usr/local \
+    HOME=/home/app \
+    PYTHONDONTWRITEBYTECODE=1
 
 # Install dependencies first (cached layer — only busts when pyproject.toml changes).
 # src/ must exist so setuptools doesn't reject the build; it's empty at this point
@@ -35,9 +40,18 @@ RUN uv sync --frozen --no-dev
 HEALTHCHECK --interval=60s --timeout=5s --retries=3 --start-period=120s \
   CMD [ -f /tmp/ai-healthy ] && [ $(( $(date +%s) - $(cat /tmp/ai-healthy | cut -d. -f1) )) -lt 600 ]
 
+USER app
 ENTRYPOINT ["python", "cli.py"]
 CMD ["--watch"]
 
 FROM runtime AS eval
 
+USER root
 RUN uv sync --frozen --extra eval
+USER app
+
+FROM runtime AS test
+
+USER root
+RUN uv sync --frozen --extra test --extra eval
+USER app

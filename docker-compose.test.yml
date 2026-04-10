@@ -128,12 +128,11 @@ services:
     build:
       context: .
       dockerfile: ./ai/Dockerfile
-      target: runtime
+      target: test
     labels:
       - "checkmk_monitor=false"
     entrypoint: []
-    command: >
-      bash -lc "uv sync --frozen --extra test --extra eval && python -m pytest -v /app/tests/"
+    command: python -m pytest -v /app/tests/
     environment:
       - PAPERLESS_URL=http://webserver:8000
       - MANAGE_PAPERLESS_WORKFLOWS=false

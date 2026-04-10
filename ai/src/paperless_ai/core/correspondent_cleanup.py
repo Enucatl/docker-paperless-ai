@@ -18,6 +18,7 @@ from itertools import combinations
 from pathlib import Path
 from typing import Any
 
+import click
 import litellm
 import niquests
 from pydantic import BaseModel
@@ -599,11 +600,15 @@ async def build_correspondent_merge_plan(
 
 
 def write_merge_plan(plan: CorrespondentMergePlan, path: str) -> None:
-    Path(path).write_text(json.dumps(plan.to_dict(), indent=2) + "\n", encoding="utf-8")
+    text = json.dumps(plan.to_dict(), indent=2) + "\n"
+    with click.open_file(path, "w", encoding="utf-8") as f:
+        f.write(text)
 
 
 def load_merge_plan(path: str) -> CorrespondentMergePlan:
-    data = json.loads(Path(path).read_text(encoding="utf-8"))
+    with click.open_file(path, "r", encoding="utf-8") as f:
+        text = f.read()
+    data = json.loads(text)
     return CorrespondentMergePlan(
         version=int(data["version"]),
         generated_at=str(data["generated_at"]),

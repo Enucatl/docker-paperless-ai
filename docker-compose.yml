@@ -335,8 +335,6 @@ services:
       - METADATA_EXTRA_KWARGS
       - OTEL_EXPORTER_OTLP_ENDPOINT=http://phoenix:6006/v1/traces
       - PHOENIX_CLIENT_HEADERS=api_key=local
-    volumes:
-      - ./tmp:/work
     command: --help
     networks:
       - internal

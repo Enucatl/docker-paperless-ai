@@ -12,7 +12,9 @@ ENV UV_PROJECT_ENVIRONMENT=/usr/local \
 
 COPY listener/pyproject.toml listener/uv.lock ./
 COPY common /common
-RUN mkdir src && uv sync --frozen --no-install-project
+RUN rm -rf /common/build \
+    && mkdir src \
+    && uv sync --frozen --no-install-project
 
 COPY listener/fetch_paperless_token.py .
 COPY ai/uvicorn_logging.json .

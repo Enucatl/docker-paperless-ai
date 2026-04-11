@@ -17,7 +17,9 @@ ENV UV_PROJECT_ENVIRONMENT=/usr/local \
 COPY ai/pyproject.toml ai/uv.lock ./
 COPY common /common
 COPY listener /listener
-RUN mkdir src && uv sync --frozen --no-install-project
+RUN rm -rf /common/build \
+    && mkdir src \
+    && uv sync --frozen --no-install-project
 
 # Copy source tree and tests; keep production image lean.
 COPY ai/cli.py .
@@ -25,7 +27,10 @@ COPY ai/fetch_paperless_token.py .
 COPY ai/uvicorn_logging.json .
 COPY ai/src/ src/
 COPY ai/tests/ tests/
-RUN uv sync --frozen --no-dev
+RUN uv sync --frozen --no-dev \
+    && uv pip install --system --reinstall --no-deps /common
+RUN mkdir -p /home/app/.cache/huggingface \
+    && chown app:app /home/app/.cache /home/app/.cache/huggingface
 
 # Liveness check for the watch-mode poll loop.
 # cli.py calls _write_heartbeat() after every batch cycle, writing the current

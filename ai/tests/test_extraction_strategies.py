@@ -21,6 +21,7 @@ from paperless_ai.agents.smart_graph_agent import (
     NuExtractStrategy,
     StructuredOutputStrategy,
     _ExtractedMetadata,
+    _extract_metadata,
 )
 from paperless_ai.core.config import AgentConfig
 
@@ -309,3 +310,25 @@ class TestDateFieldValidation:
                 date="not a date",
                 correspondent="Acme",
             )
+
+
+class FixedMetadataStrategy(BaseExtractionStrategy):
+    """Test strategy that returns a Pydantic date field."""
+
+    async def extract(self, text: str, config: AgentConfig) -> _ExtractedMetadata:
+        return _ExtractedMetadata(
+            title="Test",
+            date="2024-01-15",
+            correspondent="Acme",
+            summary="Test summary.",
+        )
+
+
+@pytest.mark.asyncio
+async def test_extract_metadata_state_serializes_date_as_string(mock_config) -> None:
+    """LangGraph state stores JSON-safe metadata for DocumentMetadata."""
+    state = {"extracted_text_chunks": ["Sample OCR text"]}
+
+    result = await _extract_metadata(state, mock_config, FixedMetadataStrategy())
+
+    assert result["_extracted_metadata"]["date"] == "2024-01-15"

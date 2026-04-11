@@ -6,6 +6,10 @@ Documents are ingested normally via Tesseract, then routed through a three-stage
 
 The always-on `ai` service also exposes the browser copilot and **`GET /search`** endpoint. The internal `webhook-listener` is a thin ingress that only receives Paperless webhooks and enqueues work in Redis.
 
+For a portfolio-oriented explanation of the architecture, model evaluation,
+RAG design, and production tradeoffs, see
+[docs/portfolio](docs/portfolio/index.md).
+
 ## Privacy notice
 
 > **When using cloud models (the default), the following data is sent to the configured third-party API:**
@@ -535,19 +539,22 @@ Evaluations run all experiments defined in `ai/eval/experiments.yaml` and log re
 
 ```bash
 # Smoke test — single tagged document, verifies the pipeline works end-to-end
-docker compose run --build --rm ai-eval --split code-test
+docker compose run --build --rm ai-eval
 
-# Run against the test set (default)
-docker compose run --build --rm ai-eval --split test
+# Run against the test set
+EVAL_SPLIT=test docker compose run --build --rm ai-eval
 
 # Run against the held-out validation set
-docker compose run --build --rm ai-eval --split validation
+EVAL_SPLIT=validation docker compose run --build --rm ai-eval
 
 # Run against all documents
-docker compose run --build --rm ai-eval --split all
+EVAL_SPLIT=all docker compose run --build --rm ai-eval
 ```
 
-Each `--split` value maps to a separate named dataset in Phoenix (`paperless-golden-test`, `paperless-golden-validation`, `paperless-golden-code-test`, …), so experiments from different splits are never mixed in the comparison view.
+The `ai-eval` service defaults to `code-test` for a fast smoke run. Each split
+value maps to a separate named dataset in Phoenix (`paperless-golden-test`,
+`paperless-golden-validation`, `paperless-golden-code-test`, …), so experiments
+from different splits are never mixed in the comparison view.
 
 The `code-test` split contains a single entry tagged `"tags": ["code-test"]` in `golden_dataset.json`. It is not filtered by the `"split"` field — any entry can carry the tag regardless of its train/validation assignment. To add more entries to the smoke test, add `"tags": ["code-test"]` to their entry.
 

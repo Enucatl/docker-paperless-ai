@@ -512,7 +512,10 @@ async def _extract_metadata(
     extracted = await strategy.extract(snippet, config)
 
     # Store final metadata back into state for the agent to read after graph completion
-    return {"_extracted_metadata": extracted.model_dump(), "_full_text": full_text}
+    return {
+        "_extracted_metadata": extracted.model_dump(mode="json"),
+        "_full_text": full_text,
+    }
 
 
 # ---------------------------------------------------------------------------

@@ -52,6 +52,13 @@ services:
       - google_api_key
       - hf_token
 
+  ai-eval:
+    secrets:
+      - paperless_token
+      - openai_api_key
+      - anthropic_api_key
+      - google_api_key
+
   phoenix:
     environment:
       - PHOENIX_DEFAULT_RETENTION_POLICY_DAYS=30

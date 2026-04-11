@@ -358,8 +358,8 @@ services:
       - "checkmk_monitor=false"
     extra_hosts:
       - "${DOCKER_DOMAIN}:host-gateway"
-    entrypoint: []
-    command: python cli.py --eval --split ${EVAL_SPLIT:-code-test}
+    entrypoint: ["python", "cli.py", "--eval"]
+    command: ["--split", "${EVAL_SPLIT:-code-test}"]
     environment:
       - AGENT_NAME=paperless-ai-eval
       - PAPERLESS_URL=http://webserver:8000
@@ -383,6 +383,7 @@ services:
     volumes: []
     networks:
       - internal
+      - traefik_proxy
     depends_on:
       webserver:
         condition: service_healthy

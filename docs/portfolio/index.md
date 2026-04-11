@@ -13,21 +13,21 @@ retrieval design, evaluation workflow, and production engineering tradeoffs.
 - [Technical deep dive: ingestion, RAG, and observability](rag-deep-dive.md)
   is the ML engineering write-up. It goes deeper on retrieval, agent tools,
   evaluation, local model tradeoffs, and Phoenix observability.
-- [Media asset checklist](assets/README.md) lists the screenshots and videos
-  that should be added manually after redaction.
+- [Media assets](assets/README.md) documents the screenshots, videos, and
+  diagram sources used by these pages.
 
-## Showcase Media To Add
+## Showcase Media
 
-The pages intentionally include placeholders instead of checked-in demo media.
-Add redacted real screenshots or videos under `docs/portfolio/assets/` using
-the filenames below:
+The portfolio pages use these local assets:
 
 | File | Purpose |
 |---|---|
-| `chat-demo.gif` or `chat-demo.webm` | Redacted chat UI answering a realistic document question |
-| `architecture-overview.png` | System diagram from Paperless through Redis, workers, Qdrant, models, and Phoenix |
-| `phoenix-trace.png` | Redacted trace view showing model/tool spans and token/cost metadata |
-| `eval-comparison.png` | Redacted evaluation comparison across model configurations |
-| `pipeline-tags.png` | Optional Paperless tag/workflow screenshot for the staged ingestion pipeline |
-
-The placeholders are written so the docs still render before the files exist.
+| `chat-demo.webm` | Redacted chat UI video for the tax final bills query |
+| `chat-demo.png` | Still image showing the trace detail for the chat demo |
+| `data-ingestion-flow.png` | Data ingestion flow from Paperless workflows to OCR, metadata, embeddings, and Qdrant |
+| `data-ingestion-flow.mmd` | Mermaid source for the data ingestion diagram |
+| `agentic-chat-flow.png` | Copilot chat flow through tools, hybrid search, reranking, judging, and final response |
+| `agentic-chat-flow.mmd` | Mermaid source for the agentic chat diagram |
+| `phoenix-trace.png` | More complex Phoenix chat trace with a longer agentic tool flow |
+| `eval-comparison.png` | Evaluation comparison across model configurations |
+| `full-metadata-trace.png` | Phoenix trace/cost view for the selected local OCR plus Gemini metadata setup |

@@ -1,8 +1,8 @@
 # Case Study: AI Document Copilot for paperless-ngx
 
-> Media placeholder: add `assets/chat-demo.gif` or `assets/chat-demo.webm` here.
-> The clip should show a redacted real query in the `/chat` UI, the tool-call
-> panel, the final answer, and source cards.
+<video src="assets/chat-demo.webm" controls width="100%">
+  Chat copilot demo for the tax final bills query.
+</video>
 
 This project turns a paperless-ngx archive into an AI-searchable document
 system without patching paperless-ngx itself. New documents are imported through
@@ -15,6 +15,15 @@ The goal was not just to attach an LLM to a document store. The useful product
 boundary was a dependable local deployment that can process private documents,
 recover when a model server is unavailable, support both cloud and self-hosted
 models, and make model quality visible through evaluation and tracing.
+
+The example query asks the copilot to search final tax bills and summarize how
+much was paid in federal taxes since 2022. The Gemini 3.1 flash-lite chat model
+inspects available metadata, searches through the hybrid retrieval pipeline,
+uses local `bge-reranker-v2-m3` reranking, reads three documents in full, and
+then returns a correct comprehensive answer. That turn used about 67k tokens
+and cost about one cent.
+
+![Trace detail for the tax question chat turn](assets/chat-demo.png)
 
 ## What It Does
 
@@ -33,14 +42,17 @@ models, and make model quality visible through evaluation and tracing.
 
 ## Architecture
 
-> Media placeholder: add `assets/architecture-overview.png` here.
-> The diagram should show Paperless workflows, the webhook listener, Redis,
-> AI workers, model endpoints, Qdrant, the chat/search service, and Phoenix.
+![Data ingestion architecture](assets/data-ingestion-flow.png)
 
 The system is deliberately built around the Paperless API and workflow model.
 Paperless remains the source of truth for documents and metadata. The AI layer
 is an adjacent service that reacts to workflow tags, moves documents through
 independent stages, and writes results back through supported REST APIs.
+
+Document processing is offline-friendly: new documents are governed by
+Paperless stage tags (`ai:run-ocr`, `ai:run-metadata`, `ai:run-embed`) and wait
+in Redis until the GPU workstation and local vLLM models are online, which is
+managed separately in [docker-vllm](https://github.com/Enucatl/docker-vllm).
 
 The ingestion path is:
 
@@ -66,22 +78,42 @@ document, but a personal archive contains scans, forms, letters, dates in many
 formats, missing correspondents, and documents where a plausible-looking answer
 can still be wrong.
 
-The repo includes a golden dataset workflow and Phoenix-backed experiment
-runners. Experiments can compare model configurations for OCR and metadata
-extraction, track metrics such as correspondent exact/fuzzy match and date
-exact/partial match, and keep title quality evaluation separate from the model
-being tested.
+The repo includes a Phoenix-backed evaluation loop over 50 PDFs from the
+[pixparse/idl-wds OCR testing dataset](https://huggingface.co/datasets/pixparse/idl-wds).
+That dataset is useful because it already includes annotations for
+correspondent and date, two of the critical metadata fields this pipeline aims
+to extract.
 
-> Media placeholder: add `assets/eval-comparison.png` here.
-> Use a redacted Phoenix comparison or terminal summary that shows multiple
-> model configurations compared on the same dataset.
+![Phoenix experiment comparison for OCR and metadata extraction models](assets/eval-comparison.png)
 
-That evaluation loop made the model tradeoff explicit: local models are
-attractive for privacy and predictable cost, but they must be judged against the
-quality and latency of hosted models. The current architecture keeps model
-endpoints configurable by stage, so OCR, metadata extraction, chat, and
-embedding can be optimized independently instead of forcing one model to do
-everything.
+The evaluation reports four complementary metrics: exact date match, fuzzy date
+match, fuzzy correspondent match, and an LLM-as-a-judge score for the generated
+title. That mix catches strict extraction failures while still giving partial
+credit for near misses in dates, organization names, and title wording.
+
+The comparison covered the systems configured in `experiments.yaml`: full cloud
+with Gemini 3.1 flash-lite for both OCR and metadata extraction; Nanonets-OCR2-3B
+for OCR with two Gemini metadata variants; and a fully local metadata path with
+NuExtract 8B.
+
+The dedicated local OCR model kept quality stable while cutting the expensive
+part of the pipeline. OCR costs roughly 10x more tokens than plain text metadata
+extraction, and the small local OCR model was about 40% faster in this setup.
+NuExtract 8B was a significant quality decline and added another local model to
+operate, so it was not worth adopting.
+
+Two Qwen 3.5 9B experiments are left commented in `experiments.yaml`. The model
+fit the RTX 5090 hardware, but it tended to think until it ran out of tokens
+unless handled with dedicated model-specific code. The practical compromise was
+local Nanonets OCR plus Gemini 3.1 flash-lite for metadata extraction.
+
+![Phoenix trace for the selected local OCR and Gemini metadata setup](assets/full-metadata-trace.png)
+
+The final production mix uses local OCR, local embeddings with the small
+BAAI/bge-m3 model, and Gemini 3.1 flash-lite for metadata extraction. On a real
+backfill of about 2,000 documents and roughly 7,000 pages, the Google API cost
+for metadata extraction stayed under one dollar because the expensive OCR and
+embedding stages were local.
 
 ## Production Engineering Signals
 
@@ -103,10 +135,9 @@ Important production-oriented decisions include:
   Qdrant services.
 - Phoenix telemetry: traces cover LLM calls, LangChain/LangGraph execution,
   retrieval, and tool calls where instrumentation is available.
-
-> Media placeholder: add `assets/phoenix-trace.png` here.
-> Show a redacted Phoenix trace for one chat turn or processing run, including
-> tool spans and LLM token/cost fields where visible.
+- LiteLLM and Phoenix integration: model calls are natively traceable across
+  providers, which makes token usage, latency, and cost visible without writing
+  custom tracing code for each model API.
 
 ## Portfolio Takeaway
 

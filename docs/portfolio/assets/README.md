@@ -1,67 +1,80 @@
-# Portfolio Media Asset Checklist
+# Portfolio Media Assets
 
-Add redacted real media to this directory when you are ready to publish the
-portfolio write-up. Keep personal document contents, names, addresses, account
-numbers, tokens, hostnames, and internal URLs out of the final images.
+This directory contains the media used by the portfolio write-up. Assets are
+redacted so personal document contents, names, addresses, account numbers,
+tokens, hostnames, and internal URLs are not exposed.
 
-## Required Assets
+## Assets
 
-### `chat-demo.gif` or `chat-demo.webm`
+### `chat-demo.webm`
 
-Capture the `/chat` interface answering a realistic question about personal
-documents.
+Video of the `/chat` interface for the tax final bills query. It shows the user
+query, the visible tool-call panel, the final answer, and source cards.
 
-Recommended sequence:
+### `chat-demo.png`
 
-1. Open the chat UI.
-2. Ask a query that needs search, source inspection, or metadata filtering.
-3. Show the visible tool-call panel while the agent searches or reads a source.
-4. Show the final answer with source cards visible.
+Still image accompanying the chat demo. It shows the trace detail for the same
+turn, including the model/tool stack and cost context.
 
-Redact:
+### `data-ingestion-flow.png`
 
-- document titles if they reveal private information,
-- names, addresses, invoice numbers, claim numbers, account numbers,
-- local domains, IP addresses, API keys, and tokens.
-
-### `architecture-overview.png`
-
-Create a diagram that shows:
+Exported architecture diagram generated from
+`docs/portfolio/data-ingestion-flow.mmd`. It shows:
 
 - Paperless-ngx document import and workflows,
 - the thin webhook listener,
 - Redis queues and stage tags,
 - the AI worker stages: OCR, metadata extraction, embedding,
-- model providers or local vLLM endpoints,
+- model providers or local vLLM endpoints on the GPU workstation,
 - Qdrant for chunk vectors,
-- the browser chat UI and `/search` endpoint,
-- Phoenix for traces and evaluation results.
+- Phoenix for traces and token/cost visibility.
 
-Use service names rather than private hostnames.
+Regenerate after editing the Mermaid source:
+
+```bash
+npx --yes @mermaid-js/mermaid-cli \
+  -p /tmp/mermaid-puppeteer-config.json \
+  -i docs/portfolio/data-ingestion-flow.mmd \
+  -o docs/portfolio/assets/data-ingestion-flow.png \
+  -b white \
+  -w 2000
+```
+
+### `agentic-chat-flow.png`
+
+Exported agentic chat diagram generated from
+`docs/portfolio/agentic-chat-flow.mmd`. It shows the user query entering the
+LangGraph agent, tool fan-out, metadata and full-document reads through the
+Paperless REST API, hybrid search over Paperless/Postgres and Qdrant, local
+`bge-reranker-v2-m3` reranking, an LLM precision judge, and the final
+source-backed response.
+
+Regenerate after editing the Mermaid source:
+
+```bash
+npx --yes @mermaid-js/mermaid-cli \
+  -p /tmp/mermaid-puppeteer-config.json \
+  -i docs/portfolio/agentic-chat-flow.mmd \
+  -o docs/portfolio/assets/agentic-chat-flow.png \
+  -b white \
+  -w 1400
+```
 
 ### `phoenix-trace.png`
 
-Capture a redacted Phoenix trace for one chat or pipeline run.
-
-It should make clear that the project records spans for:
-
-- chat turn execution,
-- tool calls,
-- retrieval steps,
-- LLM calls and token/cost metadata where available.
+Advanced Phoenix trace for a more complex chat turn. It shows a longer agentic
+flow with more tool calls than the tax final bills example, which makes it a
+good second observability example after the simpler demo trace.
 
 ### `eval-comparison.png`
 
-Capture a redacted Phoenix experiment comparison or terminal comparison table.
-The useful story is that OCR and metadata model choices were evaluated against a
-golden dataset instead of picked by intuition.
+Phoenix experiment comparison for the OCR and metadata model matrix. The useful
+story is that OCR and metadata model choices were evaluated against a golden
+dataset instead of picked by intuition.
 
-## Optional Asset
+### `full-metadata-trace.png`
 
-### `pipeline-tags.png`
-
-Capture a Paperless document or workflow view showing the tag-based stage
-transition, such as `ai:run-ocr`, `ai:run-metadata`, or `ai:run-embed`.
-
-Only include this if the visual helps. The architecture diagram and chat demo
-are more important.
+Phoenix trace/cost view for the chosen setup: local OCR, local BAAI/bge-m3
+embeddings, and Gemini 3.1 flash-lite for metadata extraction. This supports the
+cost claim from the real backfill: about 2,000 documents, roughly 7,000 pages,
+and less than one dollar in Google API credits.

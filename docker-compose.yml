@@ -354,6 +354,11 @@ services:
       dockerfile: ./ai/Dockerfile
       target: eval
     profiles: [eval]
+    # Eval runs are one-off batch jobs with bursty PDF rasterization and
+    # dataframe/LLM-judge memory use, so do not inherit the medium service
+    # memory cap from the hardening baseline.
+    mem_limit: 0
+    memswap_limit: 0
     labels:
       - "checkmk_monitor=false"
     extra_hosts:

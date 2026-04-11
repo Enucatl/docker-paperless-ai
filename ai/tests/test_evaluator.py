@@ -65,6 +65,7 @@ class _Phoenix:
         self.client = AsyncMock()
         self.client.datasets.create_dataset = AsyncMock(return_value=MagicMock())
         self.client.datasets.get_dataset = AsyncMock(return_value=MagicMock())
+        self.client.experiments.run_experiment = self.run_experiment
         _client_cls = MagicMock(return_value=self.client)
 
         _exact_match = MagicMock()

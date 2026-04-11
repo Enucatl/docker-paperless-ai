@@ -52,6 +52,11 @@ asyncio_mode = "auto"
 requires = ["setuptools>=61.0"]
 build-backend = "setuptools.build_meta"
 
+[dependency-groups]
+dev = [
+    "ruff>=0.15.10",
+]
+
 [tool.setuptools.packages.find]
 where = ["src"]
 

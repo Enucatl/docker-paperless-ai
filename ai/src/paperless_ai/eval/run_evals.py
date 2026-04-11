@@ -41,7 +41,6 @@ async def run_scientific_evaluation(config: AgentConfig, split: str = "test") ->
     try:
         import pandas as pd
         from phoenix.client import AsyncClient
-        from phoenix.client.experiments import run_experiment
         from phoenix.evals.metrics import exact_match
     except ImportError as e:
         log.error("Missing dependencies for evaluation: %s", e)
@@ -183,6 +182,11 @@ async def run_scientific_evaluation(config: AgentConfig, split: str = "test") ->
         base_dict.update(_reset_for_experiments)
         base_dict.update(exp_dict)
         experiments.append(AgentConfig(**base_dict))
+    log.info(
+        "Loaded %d eval experiments: %s",
+        len(experiments),
+        ", ".join(exp.name or "<unnamed>" for exp in experiments),
+    )
 
     # --- Evaluators ---
     # Each function receives (output, expected) where:
@@ -294,88 +298,92 @@ Respond with exactly one word: "appropriate" or "inappropriate".
 
     # --- Run one experiment per config ---
     for exp_config in experiments:
-        log.info("\n=== Running Experiment: %s ===", exp_config.name)
-        log.info(
-            "Params: agent=%s model=%s ocr_temp=%s metadata_temp=%s ocr_reasoning=%s metadata_reasoning=%s",
-            exp_config.agent_class,
-            exp_config.metadata_model,
-            exp_config.ocr_temperature,
-            exp_config.metadata_temperature,
-            exp_config.ocr_reasoning_effort,
-            exp_config.metadata_reasoning_effort,
-        )
-
-        # Build LiteLLMModel instances for each jury member (or single judge).
-        # Each experiment may configure a different jury, so this is built per-run.
-        if exp_config.jury:
-            jury_models = [
-                LiteLLMModel(
-                    model=member.model,
-                    temperature=member.temperature
-                    if member.temperature is not None
-                    else 0.0,
-                    model_kwargs=member.to_litellm_model_kwargs(),
-                )
-                for member in exp_config.jury
-            ]
-            log.info(
-                "Title jury: %d judges — %s",
-                len(jury_models),
-                ", ".join(m.model for m in exp_config.jury),
-            )
-        else:
-            jury_models = [LiteLLMModel(model=exp_config.llm_judge_model)]
-            log.info("Title judge: single model — %s", exp_config.llm_judge_model)
-
-        # _models=jury_models captures the current jury in the closure.
-        def title_llm_jury(output, _models=jury_models) -> float:
-            """Jury vote: 1.0 if the majority of judges find the title appropriate.
-
-            Each judge runs via llm_classify on a one-row DataFrame. Judges run in
-            parallel via ThreadPoolExecutor. The majority label wins; ties and
-            all-error cases resolve to 0.0 (conservative / "inappropriate").
-            """
-            if not output or not output.get("title"):
-                return 0.0
-            row_df = pd.DataFrame(
-                [
-                    {
-                        "ocr_transcript": (output.get("ocr_transcript") or "")[:3000],
-                        "title": output.get("title"),
-                    }
-                ]
-            )
-            with ThreadPoolExecutor(max_workers=len(_models)) as pool:
-                votes = list(pool.map(lambda m: _run_judge(m, row_df), _models))
-            valid_votes = [v for v in votes if v in ("appropriate", "inappropriate")]
-            if not valid_votes:
-                return 0.0
-            verdict = _safe_majority_vote(valid_votes)
-            return 1.0 if verdict == "appropriate" else 0.0
-
-        EVALUATORS = [
-            date_exact,
-            correspondent_fuzzy,
-            date_partial_credit,
-            title_llm_jury,
-        ]
-
-        agent = _build_agent(exp_config)
-
-        # _agent=agent captures the current agent in the closure — without the
-        # default arg, all iterations would share the last loop value.
-        async def task(example, _agent=agent):
-            file_path = example.input["file_path"]
-            result = await _agent.process(file_path, existing_hints={})
-            return {
-                "correspondent": result.metadata.correspondent,
-                "date": result.metadata.document_date,
-                "title": result.metadata.title,
-                "ocr_transcript": result.metadata.full_ocr_transcript,
-            }
-
         try:
-            await run_experiment(
+            log.info("\n=== Running Experiment: %s ===", exp_config.name)
+            log.info(
+                "Params: agent=%s model=%s ocr_temp=%s metadata_temp=%s ocr_reasoning=%s metadata_reasoning=%s",
+                exp_config.agent_class,
+                exp_config.metadata_model,
+                exp_config.ocr_temperature,
+                exp_config.metadata_temperature,
+                exp_config.ocr_reasoning_effort,
+                exp_config.metadata_reasoning_effort,
+            )
+
+            # Build LiteLLMModel instances for each jury member (or single judge).
+            # Each experiment may configure a different jury, so this is built per-run.
+            if exp_config.jury:
+                jury_models = [
+                    LiteLLMModel(
+                        model=member.model,
+                        temperature=member.temperature
+                        if member.temperature is not None
+                        else 0.0,
+                        model_kwargs=member.to_litellm_model_kwargs(),
+                    )
+                    for member in exp_config.jury
+                ]
+                log.info(
+                    "Title jury: %d judges — %s",
+                    len(jury_models),
+                    ", ".join(m.model for m in exp_config.jury),
+                )
+            else:
+                jury_models = [LiteLLMModel(model=exp_config.llm_judge_model)]
+                log.info("Title judge: single model — %s", exp_config.llm_judge_model)
+
+            # _models=jury_models captures the current jury in the closure.
+            def title_llm_jury(output, _models=jury_models) -> float:
+                """Jury vote: 1.0 if the majority of judges find the title appropriate.
+
+                Each judge runs via llm_classify on a one-row DataFrame. Judges run in
+                parallel via ThreadPoolExecutor. The majority label wins; ties and
+                all-error cases resolve to 0.0 (conservative / "inappropriate").
+                """
+                if not output or not output.get("title"):
+                    return 0.0
+                row_df = pd.DataFrame(
+                    [
+                        {
+                            "ocr_transcript": (output.get("ocr_transcript") or "")[
+                                :3000
+                            ],
+                            "title": output.get("title"),
+                        }
+                    ]
+                )
+                with ThreadPoolExecutor(max_workers=len(_models)) as pool:
+                    votes = list(pool.map(lambda m: _run_judge(m, row_df), _models))
+                valid_votes = [
+                    v for v in votes if v in ("appropriate", "inappropriate")
+                ]
+                if not valid_votes:
+                    return 0.0
+                verdict = _safe_majority_vote(valid_votes)
+                return 1.0 if verdict == "appropriate" else 0.0
+
+            EVALUATORS = [
+                date_exact,
+                correspondent_fuzzy,
+                date_partial_credit,
+                title_llm_jury,
+            ]
+
+            agent = _build_agent(exp_config)
+
+            # _agent=agent captures the current agent in the closure — without the
+            # default arg, all iterations would share the last loop value.
+            async def task(example, _agent=agent):
+                file_path = example.input["file_path"]
+                result = await _agent.process(file_path, existing_hints={})
+                return {
+                    "correspondent": result.metadata.correspondent,
+                    "date": result.metadata.document_date,
+                    "title": result.metadata.title,
+                    "ocr_transcript": result.metadata.full_ocr_transcript,
+                }
+
+            await phoenix_client.experiments.run_experiment(
                 dataset=phoenix_dataset,
                 task=task,
                 evaluators=EVALUATORS,
@@ -392,12 +400,14 @@ Respond with exactly one word: "appropriate" or "inappropriate".
                     "ocr_reasoning_effort": exp_config.ocr_reasoning_effort,
                     "metadata_reasoning_effort": exp_config.metadata_reasoning_effort,
                 },
-                client=phoenix_client,
+                # Keep full-split evals memory-stable. A single Phoenix task may
+                # still fan out over OCR pages via the agent's batch size.
+                concurrency=1,
                 timeout=300,
             )
             log.info("Experiment '%s' complete", exp_config.name)
-        except Exception as e:
-            log.error("Experiment '%s' failed: %s", exp_config.name, e)
+        except Exception:
+            log.exception("Experiment '%s' failed; continuing", exp_config.name)
 
     log.info("\nAll experiments complete! View results at %s", phoenix_endpoint)
 

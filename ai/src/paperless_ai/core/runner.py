@@ -125,9 +125,12 @@ async def _embed_and_store(
     # Situate chunks before embedding (see hooks.py for strategy selection).
     # The raw chunk is stored in the Qdrant payload so UI snippets show clean text.
     from paperless_ai.core.hooks import situate_chunks
+
     situated_chunks = await situate_chunks(chunks, full_text, meta, config)
 
-    log.info("Document %d: embedding %d chunk(s) with situated context…", doc_id, len(chunks))
+    log.info(
+        "Document %d: embedding %d chunk(s) with situated context…", doc_id, len(chunks)
+    )
     embeddings = await embedder.embed(situated_chunks)
 
     # Delete old vectors first so re-processing a document is idempotent
@@ -251,7 +254,9 @@ async def _run_stage(
         return 0, 0
 
     log.info("%s batch: %d document(s) to process", stage_label, len(pending_ids))
-    results = await asyncio.gather(*(process_fn(doc_id) for doc_id in sorted(pending_ids)))
+    results = await asyncio.gather(
+        *(process_fn(doc_id) for doc_id in sorted(pending_ids))
+    )
     success = sum(1 for ok in results if ok is True)
     failure = sum(1 for ok in results if ok is False)
     return success, failure
@@ -277,7 +282,9 @@ async def run_ocr_batch(
     try:
         tag_ocr_id = await client.get_tag_id(config.tag_ocr, create=False)
     except ValueError:
-        log.warning("OCR tag '%s' not found — continuing without tag transition", config.tag_ocr)
+        log.warning(
+            "OCR tag '%s' not found — continuing without tag transition", config.tag_ocr
+        )
         tag_ocr_id = None
 
     try:
@@ -320,7 +327,9 @@ async def run_ocr_batch(
                 del data
 
                 try:
-                    full_text, pages, elapsed = await run_vision_ocr_only(tmp_path, config)
+                    full_text, pages, elapsed = await run_vision_ocr_only(
+                        tmp_path, config
+                    )
                 except Exception as e:
                     log.error("Document %d: OCR failed: %s", doc_id, e)
                     await _record_stage_failure(
@@ -337,11 +346,16 @@ async def run_ocr_batch(
 
         log.info(
             "Document %d: OCR done — %d pages, %d chars, %.1fs",
-            doc_id, pages, len(full_text), elapsed,
+            doc_id,
+            pages,
+            len(full_text),
+            elapsed,
         )
 
         if config.dry_run:
-            log.info("Document %d: [dry-run] would write content and transition tag", doc_id)
+            log.info(
+                "Document %d: [dry-run] would write content and transition tag", doc_id
+            )
             return True
 
         # Transition: remove ai:run-ocr, add ai:run-metadata — atomic with content write
@@ -351,8 +365,12 @@ async def run_ocr_batch(
 
         try:
             await _suppress_webhook(queues, doc_id)
-            await client.patch_document(doc_id, {"content": full_text, "tags": current_tags})
-            log.info("Document %d: content written, transitioned to metadata stage", doc_id)
+            await client.patch_document(
+                doc_id, {"content": full_text, "tags": current_tags}
+            )
+            log.info(
+                "Document %d: content written, transitioned to metadata stage", doc_id
+            )
             await queues.remove(doc_id, TaskQueues.KEY_OCR)
             await queues.enqueue_metadata(doc_id)
             return True
@@ -370,7 +388,9 @@ async def run_ocr_batch(
 
     # Preflight: skip the batch when the local OCR server is offline so we
     # don't download PDFs that we can't process yet.
-    return await _run_stage("OCR", config.ocr_api_base or None, TaskQueues.KEY_OCR, queues, _process_one)
+    return await _run_stage(
+        "OCR", config.ocr_api_base or None, TaskQueues.KEY_OCR, queues, _process_one
+    )
 
 
 async def run_metadata_batch(
@@ -397,7 +417,10 @@ async def run_metadata_batch(
     try:
         tag_metadata_id = await client.get_tag_id(config.tag_metadata, create=False)
     except ValueError:
-        log.warning("Metadata tag '%s' not found — continuing without tag transition", config.tag_metadata)
+        log.warning(
+            "Metadata tag '%s' not found — continuing without tag transition",
+            config.tag_metadata,
+        )
         tag_metadata_id = None
 
     try:
@@ -420,7 +443,9 @@ async def run_metadata_batch(
 
         content = doc.get("content") or ""
         if not content.strip():
-            log.warning("Document %d: no content — skipping metadata extraction", doc_id)
+            log.warning(
+                "Document %d: no content — skipping metadata extraction", doc_id
+            )
             await queues.remove(doc_id, TaskQueues.KEY_METADATA)
             return None  # silently skipped — not a success, not a failure
 
@@ -446,21 +471,34 @@ async def run_metadata_batch(
 
         log.info(
             "Document %d: metadata — title=%r date=%r correspondent=%r",
-            doc_id, extracted.title, extracted.date, extracted.correspondent,
+            doc_id,
+            extracted.title,
+            extracted.date,
+            extracted.correspondent,
         )
 
         if config.dry_run:
-            log.info("Document %d: [dry-run] would write metadata and transition tag", doc_id)
+            log.info(
+                "Document %d: [dry-run] would write metadata and transition tag", doc_id
+            )
             return True
 
         today = datetime.now(timezone.utc).date().isoformat()
         managed_fields = {custom_field_id, ai_summary_field_id, ai_result_field_id}
-        existing_cf = [cf for cf in doc.get("custom_fields", []) if cf["field"] not in managed_fields]
+        existing_cf = [
+            cf
+            for cf in doc.get("custom_fields", [])
+            if cf["field"] not in managed_fields
+        ]
 
         payload: dict = {
-            "custom_fields": existing_cf + [
+            "custom_fields": existing_cf
+            + [
                 {"field": custom_field_id, "value": today},
-                {"field": ai_summary_field_id, "value": (extracted.summary or "").strip()},
+                {
+                    "field": ai_summary_field_id,
+                    "value": (extracted.summary or "").strip(),
+                },
             ],
         }
 
@@ -471,7 +509,11 @@ async def run_metadata_batch(
             if date(1900, 1, 1) <= extracted.date <= date.today():
                 payload["created"] = extracted.date.isoformat()
             else:
-                log.warning("Document %d: AI date '%s' out of range, skipping", doc_id, extracted.date)
+                log.warning(
+                    "Document %d: AI date '%s' out of range, skipping",
+                    doc_id,
+                    extracted.date,
+                )
 
         if extracted.correspondent:
             try:
@@ -490,14 +532,18 @@ async def run_metadata_batch(
                 "paperless_version": client.paperless_version,
                 "ai_metadata": {
                     "title": extracted.title,
-                    "document_date": extracted.date.isoformat() if extracted.date else None,
+                    "document_date": extracted.date.isoformat()
+                    if extracted.date
+                    else None,
                     "correspondent": extracted.correspondent,
                     "summary": extracted.summary,
                 },
             },
             ensure_ascii=False,
         )
-        payload["custom_fields"].append({"field": ai_result_field_id, "value": ai_result_json})
+        payload["custom_fields"].append(
+            {"field": ai_result_field_id, "value": ai_result_json}
+        )
 
         # Transition: remove ai:run-metadata, add ai:run-embed — atomic with metadata write
         current_tags = [t for t in doc.get("tags", []) if t != tag_metadata_id]
@@ -507,7 +553,9 @@ async def run_metadata_batch(
 
         try:
             await client.patch_document(doc_id, payload)
-            log.info("Document %d: metadata written, transitioned to embed stage", doc_id)
+            log.info(
+                "Document %d: metadata written, transitioned to embed stage", doc_id
+            )
             await queues.remove(doc_id, TaskQueues.KEY_METADATA)
             await queues.enqueue_embed(doc_id)
             return True
@@ -524,7 +572,9 @@ async def run_metadata_batch(
 
     # Preflight: determine which server drives metadata extraction.
     meta_server = config.metadata_api_base
-    return await _run_stage("Metadata", meta_server, TaskQueues.KEY_METADATA, queues, _process_one)
+    return await _run_stage(
+        "Metadata", meta_server, TaskQueues.KEY_METADATA, queues, _process_one
+    )
 
 
 async def run_embed_batch(
@@ -577,14 +627,20 @@ async def run_embed_batch(
                         client,
                         doc,
                         title=doc.get("title"),
-                        correspondent=await client.get_correspondent_name(doc["correspondent"])
+                        correspondent=await client.get_correspondent_name(
+                            doc["correspondent"]
+                        )
                         if doc.get("correspondent")
                         else None,
                         document_date=doc.get("created"),
                         summary=_get_custom_field_value(doc, ai_summary_field_id),
-                        exclude_tag_ids={tag_embed_id} if tag_embed_id is not None else None,
+                        exclude_tag_ids={tag_embed_id}
+                        if tag_embed_id is not None
+                        else None,
                     )
-                    await _embed_and_store(doc_id, content, search_meta, config, store, embedder)
+                    await _embed_and_store(
+                        doc_id, content, search_meta, config, store, embedder
+                    )
                 except Exception as e:
                     log.error("Document %d: embedding failed: %s", doc_id, e)
                     await _record_stage_failure(
@@ -625,7 +681,9 @@ async def run_embed_batch(
     # Preflight: the embedding API server is optional — bail if it is offline so
     # we don't leave documents stuck in the embed queue.
     preflight = config.embedding_api_base if embedder is not None else None
-    return await _run_stage("Embed", preflight, TaskQueues.KEY_EMBED, queues, _process_one)
+    return await _run_stage(
+        "Embed", preflight, TaskQueues.KEY_EMBED, queues, _process_one
+    )
 
 
 async def run_refresh_batch(
@@ -646,7 +704,9 @@ async def run_refresh_batch(
     try:
         tag_embed_id = await client.get_tag_id(config.tag_embed, create=False)
     except ValueError:
-        log.warning("Embed tag '%s' not found — refresh will not exclude it", config.tag_embed)
+        log.warning(
+            "Embed tag '%s' not found — refresh will not exclude it", config.tag_embed
+        )
         tag_embed_id = None
 
     async def _process_one(doc_id: int) -> bool | None:
@@ -695,7 +755,9 @@ async def run_refresh_batch(
             )
             return False
 
-    return await _run_stage("Refresh", None, TaskQueues.KEY_REFRESH, queues, _process_one)
+    return await _run_stage(
+        "Refresh", None, TaskQueues.KEY_REFRESH, queues, _process_one
+    )
 
 
 async def purge_ai_notes(client: PaperlessClient, dry_run: bool) -> None:

@@ -158,7 +158,9 @@ async def test_webhook_deduplicates_same_id(webhook_session, task_queues):
     await webhook_session.post(f"{WEBHOOK_URL}/webhook/document", json=payload)
     await webhook_session.post(f"{WEBHOOK_URL}/webhook/document", json=payload)
 
-    assert _redis_queue_size() == 1, "Duplicate webhook must not create two queue entries"
+    assert _redis_queue_size() == 1, (
+        "Duplicate webhook must not create two queue entries"
+    )
     assert 100 in _redis_queue_members()
 
 
@@ -259,7 +261,9 @@ async def test_webhook_health_reflects_pending_count(webhook_session, task_queue
 # ---------------------------------------------------------------------------
 
 
-async def test_webhook_routes_ocr_tag_to_ocr_queue(webhook_session, task_queues, webhook_with_tags):
+async def test_webhook_routes_ocr_tag_to_ocr_queue(
+    webhook_session, task_queues, webhook_with_tags
+):
     """ai:run-ocr tag → queue:ocr."""
     r = await webhook_session.post(
         f"{WEBHOOK_URL}/webhook/document",
@@ -274,7 +278,9 @@ async def test_webhook_routes_ocr_tag_to_ocr_queue(webhook_session, task_queues,
     assert 301 not in _redis_stage_members(TaskQueues.KEY_EMBED)
 
 
-async def test_webhook_routes_metadata_tag_to_metadata_queue(webhook_session, task_queues, webhook_with_tags):
+async def test_webhook_routes_metadata_tag_to_metadata_queue(
+    webhook_session, task_queues, webhook_with_tags
+):
     """ai:run-metadata tag → queue:metadata."""
     r = await webhook_session.post(
         f"{WEBHOOK_URL}/webhook/document",
@@ -288,7 +294,9 @@ async def test_webhook_routes_metadata_tag_to_metadata_queue(webhook_session, ta
     assert 302 not in _redis_stage_members(TaskQueues.KEY_OCR)
 
 
-async def test_webhook_routes_embed_tag_to_embed_queue(webhook_session, task_queues, webhook_with_tags):
+async def test_webhook_routes_embed_tag_to_embed_queue(
+    webhook_session, task_queues, webhook_with_tags
+):
     """ai:run-embed tag → queue:embed."""
     r = await webhook_session.post(
         f"{WEBHOOK_URL}/webhook/document",
@@ -302,7 +310,9 @@ async def test_webhook_routes_embed_tag_to_embed_queue(webhook_session, task_que
     assert 303 not in _redis_stage_members(TaskQueues.KEY_OCR)
 
 
-async def test_webhook_ignores_no_ai_tag(webhook_session, task_queues, webhook_with_tags):
+async def test_webhook_ignores_no_ai_tag(
+    webhook_session, task_queues, webhook_with_tags
+):
     """No ai:run-* tag -> refresh queue only."""
     r = await webhook_session.post(
         f"{WEBHOOK_URL}/webhook/document",
@@ -318,7 +328,9 @@ async def test_webhook_ignores_no_ai_tag(webhook_session, task_queues, webhook_w
     assert 304 in _redis_stage_members(TaskQueues.KEY_REFRESH)
 
 
-async def test_webhook_ignores_missing_tags_field(webhook_session, task_queues, webhook_with_tags):
+async def test_webhook_ignores_missing_tags_field(
+    webhook_session, task_queues, webhook_with_tags
+):
     """Missing tag_list key -> refresh queue only."""
     r = await webhook_session.post(
         f"{WEBHOOK_URL}/webhook/document",
@@ -349,7 +361,9 @@ async def test_webhook_enqueues_refresh_for_untagged_updates(
     assert 308 in _redis_stage_members(TaskQueues.KEY_REFRESH)
 
 
-async def test_webhook_ocr_tag_takes_priority_over_embed(webhook_session, task_queues, webhook_with_tags):
+async def test_webhook_ocr_tag_takes_priority_over_embed(
+    webhook_session, task_queues, webhook_with_tags
+):
     """If both ai:run-ocr and ai:run-embed are present, ocr wins."""
     r = await webhook_session.post(
         f"{WEBHOOK_URL}/webhook/document",
@@ -414,8 +428,12 @@ async def paperless_workflow(paperless_client):
     """
     workflow_ids: list[int] = []
 
-    async def _create(trigger_type: int, name: str, filter_has_tags: list | None = None) -> int:
-        wf_id = await _create_webhook_workflow(paperless_client, trigger_type, name, filter_has_tags)
+    async def _create(
+        trigger_type: int, name: str, filter_has_tags: list | None = None
+    ) -> int:
+        wf_id = await _create_webhook_workflow(
+            paperless_client, trigger_type, name, filter_has_tags
+        )
         workflow_ids.append(wf_id)
         return wf_id
 
@@ -557,7 +575,9 @@ async def test_auto_managed_updated_workflow_routes_tagged_docs_to_ocr_queue(
         f"/api/documents/{doc_id}/",
         json={"tags": [tag_id]},
     )
-    assert r.status_code == 200, f"Failed to add ai:run-ocr tag: {r.status_code} — {r.text}"
+    assert r.status_code == 200, (
+        f"Failed to add ai:run-ocr tag: {r.status_code} — {r.text}"
+    )
 
     deadline = time.monotonic() + 60
     while time.monotonic() < deadline:
@@ -600,4 +620,3 @@ async def test_document_updated_deduplicates_repeated_edits(
     assert _redis_queue_size() == 1, (
         f"Expected exactly 1 queue entry after 3 edits, got {_redis_queue_size()}"
     )
-

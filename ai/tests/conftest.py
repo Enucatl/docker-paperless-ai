@@ -32,11 +32,14 @@ def pytest_configure(config):
         "markers", "requires_redis: mark test as requiring Redis to be running"
     )
     config.addinivalue_line(
-        "markers", "requires_webhook_listener: mark test as requiring webhook-listener to be running"
+        "markers",
+        "requires_webhook_listener: mark test as requiring webhook-listener to be running",
     )
     config.addinivalue_line(
-        "markers", "requires_copilot: mark test as requiring the ai copilot service to be running"
+        "markers",
+        "requires_copilot: mark test as requiring the ai copilot service to be running",
     )
+
 
 PAPERLESS_URL = os.environ.get("PAPERLESS_URL", "http://webserver:8000")
 REDIS_URL = os.environ.get("REDIS_URL", "redis://broker:6379/1")
@@ -121,6 +124,7 @@ def _wait_for_paperless(url: str, timeout: int = 5) -> None:
 def _fetch_token(url: str, user: str, password: str, retries: int = 20) -> str:
     """Obtain an API token via Basic Auth. Retries because user creation is async."""
     import logging
+
     log = logging.getLogger(__name__)
     for attempt in range(retries):
         try:
@@ -131,9 +135,19 @@ def _fetch_token(url: str, user: str, password: str, retries: int = 20) -> str:
             )
             if r.status_code == 200:
                 return r.json()["token"]
-            log.warning("_fetch_token: attempt %d/%d status=%d", attempt + 1, retries, r.status_code)
+            log.warning(
+                "_fetch_token: attempt %d/%d status=%d",
+                attempt + 1,
+                retries,
+                r.status_code,
+            )
         except (niquests.ConnectionError, niquests.Timeout) as e:
-            log.warning("_fetch_token: attempt %d/%d connection error: %s", attempt + 1, retries, e)
+            log.warning(
+                "_fetch_token: attempt %d/%d connection error: %s",
+                attempt + 1,
+                retries,
+                e,
+            )
         time.sleep(3)
     raise RuntimeError(f"Could not obtain Paperless API token after {retries} attempts")
 
@@ -222,15 +236,15 @@ async def paperless_client(paperless_token: str):
 # ---------------------------------------------------------------------------
 
 # Deterministic LLM responses used by all tests.
-_OCR_TEXT = (
-    "INVOICE\nAcme Corp\n123 Main St\nDate: January 15, 2024\nTotal: $100.00"
+_OCR_TEXT = "INVOICE\nAcme Corp\n123 Main St\nDate: January 15, 2024\nTotal: $100.00"
+_METADATA_JSON = json.dumps(
+    {
+        "title": "Test Invoice",
+        "document_date": "2024-01-15",
+        "correspondent": "Acme Corp",
+        "summary": "Invoice from Acme Corp dated 2024-01-15 for $100.00.",
+    }
 )
-_METADATA_JSON = json.dumps({
-    "title": "Test Invoice",
-    "document_date": "2024-01-15",
-    "correspondent": "Acme Corp",
-    "summary": "Invoice from Acme Corp dated 2024-01-15 for $100.00.",
-})
 
 
 def _make_fake_acompletion():
@@ -264,6 +278,7 @@ def mock_litellm():
 # ---------------------------------------------------------------------------
 # Function-scoped: Redis queues — cleared before and after each test
 # ---------------------------------------------------------------------------
+
 
 @pytest.fixture
 async def task_queues():
@@ -442,6 +457,7 @@ async def _upload_document(client, pdf_bytes: bytes) -> int:
                 doc_id = task.get("related_document")
                 if doc_id is None:
                     import re
+
                     m = re.search(r"\b(\d+)\b", str(task.get("result", "")))
                     if m:
                         doc_id = int(m.group(1))
@@ -450,7 +466,5 @@ async def _upload_document(client, pdf_bytes: bytes) -> int:
                 raise RuntimeError(f"Paperless task {task_uuid} failed: {task}")
 
     if doc_id is None:
-        raise RuntimeError(
-            f"Document not indexed after 120 s (task={task_uuid})"
-        )
+        raise RuntimeError(f"Document not indexed after 120 s (task={task_uuid})")
     return int(doc_id)  # may already be int if from related_document

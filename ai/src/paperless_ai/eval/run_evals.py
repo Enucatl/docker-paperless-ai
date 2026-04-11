@@ -89,14 +89,21 @@ async def run_scientific_evaluation(config: AgentConfig, split: str = "test") ->
     # Upload golden dataset to Phoenix. Phoenix stores it as a versioned
     # dataset; experiments reference it so results stay linked to the exact
     # ground truth used.
-    df = pd.DataFrame([{
-        "file_path": e["file_path"],
-        "expected_correspondent": e.get("expected_correspondent"),
-        "expected_date": e.get("expected_date"),
-        "expected_title_contains": e.get("expected_title_contains"),
-        "_verified_null_correspondent": e.get("_verified_null_correspondent", False),
-        "_verified_null_date": e.get("_verified_null_date", False),
-    } for e in entries])
+    df = pd.DataFrame(
+        [
+            {
+                "file_path": e["file_path"],
+                "expected_correspondent": e.get("expected_correspondent"),
+                "expected_date": e.get("expected_date"),
+                "expected_title_contains": e.get("expected_title_contains"),
+                "_verified_null_correspondent": e.get(
+                    "_verified_null_correspondent", False
+                ),
+                "_verified_null_date": e.get("_verified_null_date", False),
+            }
+            for e in entries
+        ]
+    )
 
     phoenix_endpoint = "http://phoenix:6006"
     try:
@@ -106,16 +113,25 @@ async def run_scientific_evaluation(config: AgentConfig, split: str = "test") ->
                 dataframe=df,
                 input_keys=["file_path"],
                 output_keys=[
-                    "expected_correspondent", "expected_date", "expected_title_contains",
-                    "_verified_null_correspondent", "_verified_null_date",
+                    "expected_correspondent",
+                    "expected_date",
+                    "expected_title_contains",
+                    "_verified_null_correspondent",
+                    "_verified_null_date",
                 ],
                 name=phoenix_dataset_name,
             )
-            log.info("Created Phoenix dataset '%s' with %d examples", phoenix_dataset_name, len(df))
+            log.info(
+                "Created Phoenix dataset '%s' with %d examples",
+                phoenix_dataset_name,
+                len(df),
+            )
         except Exception as e:
             if "already exists" in str(e):
                 log.info("Using existing Phoenix dataset '%s'", phoenix_dataset_name)
-                phoenix_dataset = await phoenix_client.datasets.get_dataset(dataset=phoenix_dataset_name)
+                phoenix_dataset = await phoenix_client.datasets.get_dataset(
+                    dataset=phoenix_dataset_name
+                )
             else:
                 raise
 
@@ -125,7 +141,8 @@ async def run_scientific_evaluation(config: AgentConfig, split: str = "test") ->
         log.error(
             "Cannot reach Phoenix at %s: %s\n"
             "Start it first with: docker compose up -d phoenix",
-            phoenix_endpoint, e,
+            phoenix_endpoint,
+            e,
         )
         sys.exit(1)
 
@@ -180,10 +197,12 @@ async def run_scientific_evaluation(config: AgentConfig, split: str = "test") ->
 
     def date_exact(output, expected) -> float:
         """Case-insensitive exact match on ISO date strings."""
-        return exact_match.evaluate({
-            "output": _norm(output.get("date") if output else None),
-            "expected": _norm(expected.get("expected_date")),
-        })[0].score
+        return exact_match.evaluate(
+            {
+                "output": _norm(output.get("date") if output else None),
+                "expected": _norm(expected.get("expected_date")),
+            }
+        )[0].score
 
     def correspondent_fuzzy(output, expected) -> float:
         """Token-sort fuzzy ratio after normalizing corporate suffixes and punctuation."""
@@ -261,9 +280,14 @@ Respond with exactly one word: "appropriate" or "inappropriate".
 
         # For SmartDocumentAgent, auto-detect and select extraction strategy
         if class_name == "SmartDocumentAgent":
-            from paperless_ai.agents.smart_graph_agent import _select_extraction_strategy
+            from paperless_ai.agents.smart_graph_agent import (
+                _select_extraction_strategy,
+            )
+
             strategy = _select_extraction_strategy(exp_config)
-            log.info("Experiment %s: Using %s", exp_config.name, strategy.__class__.__name__)
+            log.info(
+                "Experiment %s: Using %s", exp_config.name, strategy.__class__.__name__
+            )
             return agent_class(exp_config, extraction_strategy=strategy)
 
         return agent_class(exp_config)
@@ -287,7 +311,9 @@ Respond with exactly one word: "appropriate" or "inappropriate".
             jury_models = [
                 LiteLLMModel(
                     model=member.model,
-                    temperature=member.temperature if member.temperature is not None else 0.0,
+                    temperature=member.temperature
+                    if member.temperature is not None
+                    else 0.0,
                     model_kwargs=member.to_litellm_model_kwargs(),
                 )
                 for member in exp_config.jury
@@ -311,10 +337,14 @@ Respond with exactly one word: "appropriate" or "inappropriate".
             """
             if not output or not output.get("title"):
                 return 0.0
-            row_df = pd.DataFrame([{
-                "ocr_transcript": (output.get("ocr_transcript") or "")[:3000],
-                "title": output.get("title"),
-            }])
+            row_df = pd.DataFrame(
+                [
+                    {
+                        "ocr_transcript": (output.get("ocr_transcript") or "")[:3000],
+                        "title": output.get("title"),
+                    }
+                ]
+            )
             with ThreadPoolExecutor(max_workers=len(_models)) as pool:
                 votes = list(pool.map(lambda m: _run_judge(m, row_df), _models))
             valid_votes = [v for v in votes if v in ("appropriate", "inappropriate")]

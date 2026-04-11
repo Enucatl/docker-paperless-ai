@@ -54,7 +54,9 @@ def set_span_attributes(span, **attributes) -> None:
             continue
 
 
-def setup_telemetry(*, service_name: str | None = None, project_name: str | None = None) -> None:
+def setup_telemetry(
+    *, service_name: str | None = None, project_name: str | None = None
+) -> None:
     """Configure OTEL tracing to export to Arize Phoenix."""
     global _configured
     if _configured:
@@ -67,7 +69,9 @@ def setup_telemetry(*, service_name: str | None = None, project_name: str | None
 
     try:
         from opentelemetry import trace
-        from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
+        from opentelemetry.exporter.otlp.proto.http.trace_exporter import (
+            OTLPSpanExporter,
+        )
         from opentelemetry.sdk.resources import Resource
         from opentelemetry.sdk import trace as trace_sdk
         from opentelemetry.sdk.trace.export import SimpleSpanProcessor
@@ -78,8 +82,12 @@ def setup_telemetry(*, service_name: str | None = None, project_name: str | None
         log.warning("Telemetry packages not available: %s — skipping", exc)
         return
 
-    resolved_service_name = service_name or os.environ.get("OTEL_SERVICE_NAME") or "paperless-ai"
-    resolved_project_name = project_name or os.environ.get("PHOENIX_PROJECT_NAME") or resolved_service_name
+    resolved_service_name = (
+        service_name or os.environ.get("OTEL_SERVICE_NAME") or "paperless-ai"
+    )
+    resolved_project_name = (
+        project_name or os.environ.get("PHOENIX_PROJECT_NAME") or resolved_service_name
+    )
     resource = Resource.create(
         {
             "service.name": resolved_service_name,

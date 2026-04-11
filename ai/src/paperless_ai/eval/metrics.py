@@ -37,9 +37,7 @@ def _token_sort_ratio(s1: str, s2: str) -> float:
     return SequenceMatcher(None, t1, t2).ratio()
 
 
-def score_correspondent(
-    expected: Optional[str], actual: Optional[str]
-) -> dict:
+def score_correspondent(expected: Optional[str], actual: Optional[str]) -> dict:
     """
     Score correspondent extraction quality.
 
@@ -77,9 +75,7 @@ def score_correspondent(
     }
 
 
-def score_date(
-    expected: Optional[str], actual: Optional[str]
-) -> dict:
+def score_date(expected: Optional[str], actual: Optional[str]) -> dict:
     """
     Score date extraction quality.
 
@@ -124,9 +120,7 @@ def score_date(
         }
 
 
-def score_title(
-    expected_contains: Optional[str], actual: Optional[str]
-) -> dict:
+def score_title(expected_contains: Optional[str], actual: Optional[str]) -> dict:
     """
     Score title extraction quality against an expected keyword substring.
 
@@ -177,21 +171,25 @@ def aggregate_scores(row_scores: list[dict]) -> dict:
     # Recall: of entries where ground truth is null, what % did model predict null?
     predicted_null = [r for r in row_scores if r.get("corr_predicted_null") is True]
     expected_null = [r for r in row_scores if r.get("corr_expected_null") is True]
-    both_null = [r for r in row_scores if r.get("corr_expected_null") and r.get("corr_predicted_null")]
+    both_null = [
+        r
+        for r in row_scores
+        if r.get("corr_expected_null") and r.get("corr_predicted_null")
+    ]
 
-    null_precision = (
-        len(both_null) / len(predicted_null) if predicted_null else None
-    )
-    null_recall = (
-        len(both_null) / len(expected_null) if expected_null else None
-    )
+    null_precision = len(both_null) / len(predicted_null) if predicted_null else None
+    null_recall = len(both_null) / len(expected_null) if expected_null else None
 
     # Date
     date_exact = _accuracy([r.get("date_exact_match") for r in row_scores])
     date_partial = _mean([r.get("date_partial_credit") for r in row_scores])
 
     # Title (only entries with expected_contains)
-    title_vals = [r.get("title_contains_match") for r in row_scores if r.get("title_contains_match") is not None]
+    title_vals = [
+        r.get("title_contains_match")
+        for r in row_scores
+        if r.get("title_contains_match") is not None
+    ]
     title_rate = _accuracy(title_vals) if title_vals else None
 
     return {

@@ -151,7 +151,9 @@ def _resolve_hook() -> Optional[Callable]:
     try:
         import importlib.util
 
-        spec = importlib.util.spec_from_file_location("_paperless_ai_embed_hook", hook_path)
+        spec = importlib.util.spec_from_file_location(
+            "_paperless_ai_embed_hook", hook_path
+        )
         if spec is None or spec.loader is None:
             raise ImportError(f"Could not create module spec for {hook_path!r}")
         module = importlib.util.module_from_spec(spec)
@@ -159,9 +161,7 @@ def _resolve_hook() -> Optional[Callable]:
 
         hook_fn = getattr(module, "situate_chunks", None)
         if hook_fn is None:
-            raise AttributeError(
-                f"{hook_path!r} does not define 'situate_chunks'"
-            )
+            raise AttributeError(f"{hook_path!r} does not define 'situate_chunks'")
 
         log.info("Loaded custom situate_chunks hook from %s", hook_path)
         _cached_hook = hook_fn
@@ -204,7 +204,9 @@ async def situate_chunks(
         )
         log.info("Situating %d chunk(s) via per-chunk LLM calls", len(chunks))
         return list(
-            await asyncio.gather(*(_situate_single_chunk(c, ctx, config) for c in chunks))
+            await asyncio.gather(
+                *(_situate_single_chunk(c, ctx, config) for c in chunks)
+            )
         )
 
     return await _default_situate_chunks(chunks, full_text, meta, config)

@@ -45,7 +45,11 @@ import pytest
 from tests.conftest import COPILOT_URL, QDRANT_URL
 from paperless_ai.search.embedder import EmbeddingResult, LocalLazySearchEmbedder
 from paperless_ai.search.local_search_process import ProcessLocalSearchEmbedder
-from paperless_ai.search.retriever import MAX_RERANK_CANDIDATES, ChunkCandidate, hybrid_retrieve
+from paperless_ai.search.retriever import (
+    MAX_RERANK_CANDIDATES,
+    ChunkCandidate,
+    hybrid_retrieve,
+)
 
 # ---------------------------------------------------------------------------
 # Fake SentenceTransformer model (no download, tracks allocation)
@@ -112,10 +116,24 @@ def _fake_worker(conn, idle_timeout_seconds: int):
             conn.send({"ok": True})
             continue
         if action == "embed_query":
-            conn.send({"ok": True, "dense": [0.1, 0.2], "sparse_indices": [], "sparse_values": []})
+            conn.send(
+                {
+                    "ok": True,
+                    "dense": [0.1, 0.2],
+                    "sparse_indices": [],
+                    "sparse_values": [],
+                }
+            )
             continue
         if action == "rerank":
-            conn.send({"ok": True, "scores": [float(idx) for idx, _ in enumerate(request["passages"], start=1)]})
+            conn.send(
+                {
+                    "ok": True,
+                    "scores": [
+                        float(idx) for idx, _ in enumerate(request["passages"], start=1)
+                    ],
+                }
+            )
             continue
         conn.send({"ok": False, "error": f"bad action: {action}"})
     conn.close()
@@ -173,7 +191,9 @@ def test_get_model_logs_on_load(embedder, patched_sentence_transformer, caplog):
     assert any("Loading" in r.message for r in caplog.records)
 
 
-def test_get_model_does_not_log_on_second_call(embedder, patched_sentence_transformer, caplog):
+def test_get_model_does_not_log_on_second_call(
+    embedder, patched_sentence_transformer, caplog
+):
     import logging
 
     embedder._get_model()  # first — logs
@@ -188,7 +208,9 @@ def test_get_model_does_not_log_on_second_call(embedder, patched_sentence_transf
 # ---------------------------------------------------------------------------
 
 
-async def test_embed_query_returns_embedding_result(embedder, patched_sentence_transformer):
+async def test_embed_query_returns_embedding_result(
+    embedder, patched_sentence_transformer
+):
     result = await embedder.embed_query("what is this invoice about?")
     assert isinstance(result, EmbeddingResult)
     assert len(result.dense) == _DENSE_DIM
@@ -201,7 +223,9 @@ async def test_embed_query_loads_model_lazily(embedder, patched_sentence_transfo
     assert embedder.model is not None
 
 
-async def test_embed_query_does_not_block_event_loop(embedder, patched_sentence_transformer):
+async def test_embed_query_does_not_block_event_loop(
+    embedder, patched_sentence_transformer
+):
     """embed_query must run embedding in a thread, not block the event loop.
 
     We verify this by running a concurrent coroutine while embed_query
@@ -247,27 +271,31 @@ async def test_hybrid_retrieve_uses_local_reranker():
     client = _FakeClient()
     embedder = MagicMock(spec=LocalLazySearchEmbedder)
 
-    with patch(
-        "paperless_ai.search.retriever.dense_search",
-        AsyncMock(
-            return_value=[
-                ChunkCandidate(2, "best dense passage"),
-                ChunkCandidate(1, "worst dense passage"),
-            ]
+    with (
+        patch(
+            "paperless_ai.search.retriever.dense_search",
+            AsyncMock(
+                return_value=[
+                    ChunkCandidate(2, "best dense passage"),
+                    ChunkCandidate(1, "worst dense passage"),
+                ]
+            ),
         ),
-    ), patch(
-        "paperless_ai.search.retriever.fetch_document_chunks",
-        AsyncMock(return_value=[ChunkCandidate(3, "mid keyword passage")]),
-    ), patch(
-        "paperless_ai.search.retriever.local_rerank",
-        AsyncMock(
-            return_value=[
-                ChunkCandidate(2, "best dense passage"),
-                ChunkCandidate(3, "mid keyword passage"),
-                ChunkCandidate(1, "worst dense passage"),
-            ]
+        patch(
+            "paperless_ai.search.retriever.fetch_document_chunks",
+            AsyncMock(return_value=[ChunkCandidate(3, "mid keyword passage")]),
         ),
-    ) as rerank_mock:
+        patch(
+            "paperless_ai.search.retriever.local_rerank",
+            AsyncMock(
+                return_value=[
+                    ChunkCandidate(2, "best dense passage"),
+                    ChunkCandidate(3, "mid keyword passage"),
+                    ChunkCandidate(1, "worst dense passage"),
+                ]
+            ),
+        ) as rerank_mock,
+    ):
         fused_ids, chunk_map = await hybrid_retrieve(
             embedder=embedder,
             qdrant_url="http://qdrant:6333",
@@ -278,8 +306,23 @@ async def test_hybrid_retrieve_uses_local_reranker():
         )
 
     assert fused_ids == [2, 3, 1]
-    assert chunk_map == {2: "best dense passage", 3: "mid keyword passage", 1: "worst dense passage"}
-    assert client.calls == [("youtube premium", {"correspondent": None, "document_type": None, "storage_path": None, "tags": None, "year": None})]
+    assert chunk_map == {
+        2: "best dense passage",
+        3: "mid keyword passage",
+        1: "worst dense passage",
+    }
+    assert client.calls == [
+        (
+            "youtube premium",
+            {
+                "correspondent": None,
+                "document_type": None,
+                "storage_path": None,
+                "tags": None,
+                "year": None,
+            },
+        )
+    ]
     rerank_mock.assert_awaited_once()
 
 
@@ -290,25 +333,28 @@ async def test_hybrid_retrieve_precision_prunes_bottom_half():
 
     embedder = MagicMock(spec=LocalLazySearchEmbedder)
 
-    with patch(
-        "paperless_ai.search.retriever.dense_search",
-        AsyncMock(
-            return_value=[
-                ChunkCandidate(1, "best dense passage"),
-                ChunkCandidate(2, "mid dense passage"),
-                ChunkCandidate(3, "worst dense passage"),
-                ChunkCandidate(4, "worst dense passage two"),
-            ]
+    with (
+        patch(
+            "paperless_ai.search.retriever.dense_search",
+            AsyncMock(
+                return_value=[
+                    ChunkCandidate(1, "best dense passage"),
+                    ChunkCandidate(2, "mid dense passage"),
+                    ChunkCandidate(3, "worst dense passage"),
+                    ChunkCandidate(4, "worst dense passage two"),
+                ]
+            ),
         ),
-    ), patch(
-        "paperless_ai.search.retriever.local_rerank",
-        AsyncMock(
-            return_value=[
-                ChunkCandidate(1, "best dense passage"),
-                ChunkCandidate(2, "mid dense passage"),
-                ChunkCandidate(3, "worst dense passage"),
-                ChunkCandidate(4, "worst dense passage two"),
-            ]
+        patch(
+            "paperless_ai.search.retriever.local_rerank",
+            AsyncMock(
+                return_value=[
+                    ChunkCandidate(1, "best dense passage"),
+                    ChunkCandidate(2, "mid dense passage"),
+                    ChunkCandidate(3, "worst dense passage"),
+                    ChunkCandidate(4, "worst dense passage two"),
+                ]
+            ),
         ),
     ):
         fused_ids, chunk_map = await hybrid_retrieve(
@@ -339,16 +385,25 @@ async def test_hybrid_retrieve_caps_rerank_candidates():
         ChunkCandidate(5, "keyword 5"),
     ]
 
-    with patch(
-        "paperless_ai.search.retriever.dense_search",
-        AsyncMock(return_value=dense_chunks),
-    ), patch(
-        "paperless_ai.search.retriever.fetch_document_chunks",
-        AsyncMock(return_value=keyword_chunks),
-    ), patch(
-        "paperless_ai.search.retriever.local_rerank",
-        AsyncMock(return_value=[ChunkCandidate(1, "dense 1"), ChunkCandidate(3, "keyword 3")]),
-    ) as rerank_mock:
+    with (
+        patch(
+            "paperless_ai.search.retriever.dense_search",
+            AsyncMock(return_value=dense_chunks),
+        ),
+        patch(
+            "paperless_ai.search.retriever.fetch_document_chunks",
+            AsyncMock(return_value=keyword_chunks),
+        ),
+        patch(
+            "paperless_ai.search.retriever.local_rerank",
+            AsyncMock(
+                return_value=[
+                    ChunkCandidate(1, "dense 1"),
+                    ChunkCandidate(3, "keyword 3"),
+                ]
+            ),
+        ) as rerank_mock,
+    ):
         await hybrid_retrieve(
             embedder=embedder,
             qdrant_url="http://qdrant:6333",
@@ -369,22 +424,27 @@ async def test_hybrid_retrieve_enforces_global_rerank_cap():
             return list(range(1001, 2501))
 
     embedder = MagicMock(spec=LocalLazySearchEmbedder)
-    dense_chunks = [ChunkCandidate(doc_id, f"dense {doc_id}") for doc_id in range(1, 101)]
+    dense_chunks = [
+        ChunkCandidate(doc_id, f"dense {doc_id}") for doc_id in range(1, 101)
+    ]
     keyword_chunks = [
-        ChunkCandidate(doc_id, f"keyword {doc_id}")
-        for doc_id in range(1001, 2501)
+        ChunkCandidate(doc_id, f"keyword {doc_id}") for doc_id in range(1001, 2501)
     ]
 
-    with patch(
-        "paperless_ai.search.retriever.dense_search",
-        AsyncMock(return_value=dense_chunks),
-    ), patch(
-        "paperless_ai.search.retriever.fetch_document_chunks",
-        AsyncMock(return_value=keyword_chunks),
-    ), patch(
-        "paperless_ai.search.retriever.local_rerank",
-        AsyncMock(return_value=dense_chunks[:5]),
-    ) as rerank_mock:
+    with (
+        patch(
+            "paperless_ai.search.retriever.dense_search",
+            AsyncMock(return_value=dense_chunks),
+        ),
+        patch(
+            "paperless_ai.search.retriever.fetch_document_chunks",
+            AsyncMock(return_value=keyword_chunks),
+        ),
+        patch(
+            "paperless_ai.search.retriever.local_rerank",
+            AsyncMock(return_value=dense_chunks[:5]),
+        ) as rerank_mock,
+    ):
         await hybrid_retrieve(
             embedder=embedder,
             qdrant_url="http://qdrant:6333",

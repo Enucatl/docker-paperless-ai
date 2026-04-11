@@ -1,7 +1,12 @@
 """Tests for eval/metrics.py scoring functions."""
 
 import pytest
-from paperless_ai.eval.metrics import score_correspondent, score_date, score_title, aggregate_scores
+from paperless_ai.eval.metrics import (
+    score_correspondent,
+    score_date,
+    score_title,
+    aggregate_scores,
+)
 
 
 class TestCorrespondent:
@@ -93,7 +98,9 @@ class TestDate:
         assert result["date_partial_credit"] == 0.0
 
     def test_half_year_difference(self):
-        result = score_date("2024-01-01", "2024-07-02")  # 183 days (2024 is a leap year)
+        result = score_date(
+            "2024-01-01", "2024-07-02"
+        )  # 183 days (2024 is a leap year)
         assert result["date_exact_match"] is False
         assert result["date_distance_days"] == 183
         assert 0.45 < result["date_partial_credit"] < 0.55
@@ -195,21 +202,46 @@ class TestAggregates:
         """Test null precision and recall calculation."""
         rows = [
             # True positive: both null
-            {"corr_expected_null": True, "corr_predicted_null": True, "corr_exact_match": True, "corr_fuzzy_score": 1.0},
+            {
+                "corr_expected_null": True,
+                "corr_predicted_null": True,
+                "corr_exact_match": True,
+                "corr_fuzzy_score": 1.0,
+            },
             # True positive: both null
-            {"corr_expected_null": True, "corr_predicted_null": True, "corr_exact_match": True, "corr_fuzzy_score": 1.0},
+            {
+                "corr_expected_null": True,
+                "corr_predicted_null": True,
+                "corr_exact_match": True,
+                "corr_fuzzy_score": 1.0,
+            },
             # False negative: expected null but predicted non-null
-            {"corr_expected_null": True, "corr_predicted_null": False, "corr_exact_match": False, "corr_fuzzy_score": 0.0},
+            {
+                "corr_expected_null": True,
+                "corr_predicted_null": False,
+                "corr_exact_match": False,
+                "corr_fuzzy_score": 0.0,
+            },
             # False positive: predicted null but expected non-null
-            {"corr_expected_null": False, "corr_predicted_null": True, "corr_exact_match": False, "corr_fuzzy_score": 0.0},
+            {
+                "corr_expected_null": False,
+                "corr_predicted_null": True,
+                "corr_exact_match": False,
+                "corr_fuzzy_score": 0.0,
+            },
             # True negative: both non-null (doesn't count)
-            {"corr_expected_null": False, "corr_predicted_null": False, "corr_exact_match": True, "corr_fuzzy_score": 1.0},
+            {
+                "corr_expected_null": False,
+                "corr_predicted_null": False,
+                "corr_exact_match": True,
+                "corr_fuzzy_score": 1.0,
+            },
         ]
         agg = aggregate_scores(rows)
         # Precision = TP / (TP + FP) = 2 / (2 + 1) = 2/3
-        assert abs(agg["null_precision"] - 2.0/3.0) < 0.01
+        assert abs(agg["null_precision"] - 2.0 / 3.0) < 0.01
         # Recall = TP / (TP + FN) = 2 / (2 + 1) = 2/3
-        assert abs(agg["null_recall"] - 2.0/3.0) < 0.01
+        assert abs(agg["null_recall"] - 2.0 / 3.0) < 0.01
 
     def test_empty_input(self):
         agg = aggregate_scores([])

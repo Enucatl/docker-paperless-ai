@@ -113,7 +113,9 @@ async def _get_current_document_tags(doc_id: int, payload_tags: set[str]) -> set
             return payload_tags
         return set(await _paperless_client.get_tag_names(tag_ids))
     except Exception as exc:
-        log.warning("Webhook: failed to resolve current tags for document %d: %s", doc_id, exc)
+        log.warning(
+            "Webhook: failed to resolve current tags for document %d: %s", doc_id, exc
+        )
         return payload_tags
 
 

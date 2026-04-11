@@ -53,6 +53,7 @@ def _load_prompt(name: str) -> str:
 
 class JuryMemberConfig(BaseModel):
     """Configuration for a single judge in the LLM-as-a-jury panel."""
+
     model: str
     # Passed to LiteLLMModel.model_kwargs — covers api_base, reasoning_effort, etc.
     api_base: Optional[str] = None
@@ -88,7 +89,9 @@ class AgentConfig(BaseSettings):
     def strip_trailing_slash(cls, v: str) -> str:
         return v.rstrip("/")
 
-    @field_validator("ocr_api_base", "metadata_api_base", "chat_api_base", mode="before")
+    @field_validator(
+        "ocr_api_base", "metadata_api_base", "chat_api_base", mode="before"
+    )
     @classmethod
     def empty_api_base_is_none(cls, value: str | None) -> str | None:
         if value is None:
@@ -130,11 +133,15 @@ class AgentConfig(BaseSettings):
     # TEMPERATURE is a generic fallback when specific ones are not set
     ocr_temperature: Optional[float] = Field(
         default=None,
-        validation_alias=AliasChoices("ocr_temperature", "OCR_TEMPERATURE", "TEMPERATURE"),
+        validation_alias=AliasChoices(
+            "ocr_temperature", "OCR_TEMPERATURE", "TEMPERATURE"
+        ),
     )
     metadata_temperature: Optional[float] = Field(
         default=None,
-        validation_alias=AliasChoices("metadata_temperature", "METADATA_TEMPERATURE", "TEMPERATURE"),
+        validation_alias=AliasChoices(
+            "metadata_temperature", "METADATA_TEMPERATURE", "TEMPERATURE"
+        ),
     )
     chat_temperature: Optional[float] = Field(
         default=None,
@@ -142,7 +149,9 @@ class AgentConfig(BaseSettings):
     )
 
     ocr_prompt: str = Field(default_factory=lambda: _load_prompt("prompt.txt"))
-    metadata_prompt: str = Field(default_factory=lambda: _load_prompt("metadata_prompt.txt"))
+    metadata_prompt: str = Field(
+        default_factory=lambda: _load_prompt("metadata_prompt.txt")
+    )
 
     # Maximum number of retries when NuExtract returns invalid JSON.
     nuextract_json_retries: int = 5
@@ -300,6 +309,6 @@ class AgentConfig(BaseSettings):
     @classmethod
     def from_env(cls) -> "AgentConfig":
         """Load configuration from environment variables and Docker secrets."""
-        _inject_secrets()       # read *_FILE env vars and inject into os.environ
+        _inject_secrets()  # read *_FILE env vars and inject into os.environ
         litellm.drop_params = True
-        return cls()            # pydantic-settings reads all env vars automatically
+        return cls()  # pydantic-settings reads all env vars automatically

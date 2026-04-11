@@ -138,7 +138,9 @@ class CorrespondentMergePlan:
 def summarize_merge_plan(plan: CorrespondentMergePlan) -> dict[str, int]:
     merge_pairs = sum(1 for item in plan.candidate_pairs if item.decision == "merge")
     review_pairs = sum(1 for item in plan.candidate_pairs if item.decision == "review")
-    rejected_pairs = sum(1 for item in plan.candidate_pairs if item.decision == "reject")
+    rejected_pairs = sum(
+        1 for item in plan.candidate_pairs if item.decision == "reject"
+    )
     return {
         "approved_clusters": len(plan.approved_clusters),
         "orphan_correspondents": len(plan.orphan_correspondents),
@@ -146,7 +148,9 @@ def summarize_merge_plan(plan: CorrespondentMergePlan) -> dict[str, int]:
         "merge_pairs": merge_pairs,
         "review_pairs": review_pairs,
         "rejected_pairs": rejected_pairs,
-        "planned_document_moves": sum(len(item.planned_document_ids) for item in plan.approved_clusters),
+        "planned_document_moves": sum(
+            len(item.planned_document_ids) for item in plan.approved_clusters
+        ),
     }
 
 
@@ -183,8 +187,12 @@ def _token_overlap(left: str, right: str) -> float:
     return len(left_tokens & right_tokens) / max(len(left_tokens), len(right_tokens))
 
 
-def _has_conflicting_entity_shape(left: CorrespondentRecord, right: CorrespondentRecord) -> bool:
-    if _looks_like_person_name(left.normalized_name) != _looks_like_person_name(right.normalized_name):
+def _has_conflicting_entity_shape(
+    left: CorrespondentRecord, right: CorrespondentRecord
+) -> bool:
+    if _looks_like_person_name(left.normalized_name) != _looks_like_person_name(
+        right.normalized_name
+    ):
         return True
     left_tokens = set(left.normalized_name.split()) - _GENERIC_ORG_TOKENS
     right_tokens = set(right.normalized_name.split()) - _GENERIC_ORG_TOKENS
@@ -193,7 +201,9 @@ def _has_conflicting_entity_shape(left: CorrespondentRecord, right: Corresponden
     return left_tokens.isdisjoint(right_tokens)
 
 
-def _pick_canonical(left: CorrespondentRecord, right: CorrespondentRecord) -> CorrespondentRecord:
+def _pick_canonical(
+    left: CorrespondentRecord, right: CorrespondentRecord
+) -> CorrespondentRecord:
     return max(
         (left, right),
         key=lambda item: (
@@ -251,7 +261,11 @@ def _deterministic_pair_decision(
             reason="normalized_exact_match",
         )
 
-    if left.token_sort_name and left.token_sort_name == right.token_sort_name and overlap >= 1.0:
+    if (
+        left.token_sort_name
+        and left.token_sort_name == right.token_sort_name
+        and overlap >= 1.0
+    ):
         canonical = _pick_canonical(left, right)
         return CorrespondentPairDecision(
             left_id=left.id,
@@ -412,10 +426,7 @@ async def build_correspondent_merge_plan(
                 normalized_name=_normalize_correspondent_name(name),
                 token_sort_name=_token_sort_name(_normalize_correspondent_name(name)),
                 document_ids=[int(doc["id"]) for doc in docs],
-                sample_titles=[
-                    str(doc.get("title") or "Untitled")
-                    for doc in docs[:5]
-                ],
+                sample_titles=[str(doc.get("title") or "Untitled") for doc in docs[:5]],
             )
         )
 
@@ -450,7 +461,9 @@ async def build_correspondent_merge_plan(
                     by_id[pair_key[1]],
                 )
             except Exception as exc:
-                log.warning("LLM judge failed for %s vs %s: %s", pair_key[0], pair_key[1], exc)
+                log.warning(
+                    "LLM judge failed for %s vs %s: %s", pair_key[0], pair_key[1], exc
+                )
                 candidate_pairs[pair_key] = CorrespondentPairDecision(
                     left_id=decision.left_id,
                     left_name=decision.left_name,
@@ -493,11 +506,7 @@ async def build_correspondent_merge_plan(
         if not merged_members:
             continue
         planned_document_ids = sorted(
-            {
-                doc_id
-                for item in merged_members
-                for doc_id in item.document_ids
-            }
+            {doc_id for item in merged_members for doc_id in item.document_ids}
         )
         reasons = sorted(
             {
@@ -507,12 +516,16 @@ async def build_correspondent_merge_plan(
                 and decision.right_id in {item.id for item in members}
             }
         )
-        confidence = "high" if all(
-            decision.confidence == "high"
-            for decision in approved_pairs
-            if decision.left_id in {item.id for item in members}
-            and decision.right_id in {item.id for item in members}
-        ) else "medium"
+        confidence = (
+            "high"
+            if all(
+                decision.confidence == "high"
+                for decision in approved_pairs
+                if decision.left_id in {item.id for item in members}
+                and decision.right_id in {item.id for item in members}
+            )
+            else "medium"
+        )
         approved_clusters.append(
             CorrespondentCluster(
                 canonical_id=canonical.id,
@@ -520,7 +533,9 @@ async def build_correspondent_merge_plan(
                 canonical_document_count=canonical.document_count,
                 merged_ids=sorted(item.id for item in merged_members),
                 merged_names=sorted(item.name for item in merged_members),
-                source_document_count=sum(item.document_count for item in merged_members),
+                source_document_count=sum(
+                    item.document_count for item in merged_members
+                ),
                 planned_document_ids=planned_document_ids,
                 confidence=confidence,
                 status="approved",
@@ -528,7 +543,9 @@ async def build_correspondent_merge_plan(
             )
         )
 
-    approved_clusters.sort(key=lambda item: (-item.source_document_count, item.canonical_name.lower()))
+    approved_clusters.sort(
+        key=lambda item: (-item.source_document_count, item.canonical_name.lower())
+    )
     orphan_correspondents = sorted(
         [
             OrphanCorrespondent(
@@ -582,7 +599,10 @@ async def build_correspondent_merge_plan(
             ", ".join(cluster.reasons),
         )
     if len(plan.approved_clusters) > 5:
-        log.info("Plan cluster: ... %d additional cluster(s) omitted from log", len(plan.approved_clusters) - 5)
+        log.info(
+            "Plan cluster: ... %d additional cluster(s) omitted from log",
+            len(plan.approved_clusters) - 5,
+        )
     if plan.orphan_correspondents:
         preview = ", ".join(item.name for item in plan.orphan_correspondents[:10])
         log.info(
@@ -617,9 +637,17 @@ def load_merge_plan(path: str) -> CorrespondentMergePlan:
         total_documents=int(data["total_documents"]),
         judge_enabled=bool(data["judge_enabled"]),
         judged_pair_count=int(data["judged_pair_count"]),
-        approved_clusters=[CorrespondentCluster(**item) for item in data.get("approved_clusters", [])],
-        orphan_correspondents=[OrphanCorrespondent(**item) for item in data.get("orphan_correspondents", [])],
-        candidate_pairs=[CorrespondentPairDecision(**item) for item in data.get("candidate_pairs", [])],
+        approved_clusters=[
+            CorrespondentCluster(**item) for item in data.get("approved_clusters", [])
+        ],
+        orphan_correspondents=[
+            OrphanCorrespondent(**item)
+            for item in data.get("orphan_correspondents", [])
+        ],
+        candidate_pairs=[
+            CorrespondentPairDecision(**item)
+            for item in data.get("candidate_pairs", [])
+        ],
     )
 
 
@@ -661,9 +689,15 @@ async def apply_correspondent_merge_plan(
         )
         for doc_id in cluster.planned_document_ids:
             if dry_run:
-                log.info("DRY RUN: would move document %d -> correspondent %d", doc_id, cluster.canonical_id)
+                log.info(
+                    "DRY RUN: would move document %d -> correspondent %d",
+                    doc_id,
+                    cluster.canonical_id,
+                )
             else:
-                await client.patch_document(doc_id, {"correspondent": cluster.canonical_id})
+                await client.patch_document(
+                    doc_id, {"correspondent": cluster.canonical_id}
+                )
             reassigned_documents += 1
 
         for source_id in cluster.merged_ids:
@@ -683,7 +717,9 @@ async def apply_correspondent_merge_plan(
                     await client.delete_correspondent(source_id)
                 except niquests.HTTPError as exc:
                     if getattr(exc.response, "status_code", None) == 404:
-                        log.info("Correspondent %d already deleted; continuing", source_id)
+                        log.info(
+                            "Correspondent %d already deleted; continuing", source_id
+                        )
                         continue
                     raise
             deleted_correspondents += 1
@@ -708,7 +744,11 @@ async def apply_correspondent_merge_plan(
             skipped_nonempty_deletes += 1
             continue
         if dry_run:
-            log.info("DRY RUN: would delete orphan correspondent %d (%s)", orphan.id, orphan.name)
+            log.info(
+                "DRY RUN: would delete orphan correspondent %d (%s)",
+                orphan.id,
+                orphan.name,
+            )
         else:
             try:
                 await client.delete_correspondent(orphan.id)

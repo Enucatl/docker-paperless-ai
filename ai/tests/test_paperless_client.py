@@ -14,7 +14,9 @@ from paperless_ai.core.paperless import PaperlessClient
 @pytest.mark.asyncio
 async def test_paperless_client_context_manager():
     """Verify PaperlessClient async context manager properly calls close() on exit."""
-    with patch("paperless_ai.core.paperless.niquests.AsyncSession") as mock_session_class:
+    with patch(
+        "paperless_ai.core.paperless.niquests.AsyncSession"
+    ) as mock_session_class:
         mock_session = AsyncMock()
         mock_session_class.return_value = mock_session
         # Make sure close() exists and is callable
@@ -31,7 +33,9 @@ async def test_paperless_client_context_manager():
 @pytest.mark.asyncio
 async def test_paperless_client_api_calls_use_correct_parameters():
     """Verify API calls don't use httpx-specific parameters like follow_redirects."""
-    with patch("paperless_ai.core.paperless.niquests.AsyncSession") as mock_session_class:
+    with patch(
+        "paperless_ai.core.paperless.niquests.AsyncSession"
+    ) as mock_session_class:
         mock_session = AsyncMock()
         mock_session_class.return_value = mock_session
 
@@ -50,14 +54,17 @@ async def test_paperless_client_api_calls_use_correct_parameters():
 
         # Verify get() was called without follow_redirects
         call_kwargs = mock_session.get.call_args[1]
-        assert "follow_redirects" not in call_kwargs, \
+        assert "follow_redirects" not in call_kwargs, (
             "niquests.AsyncSession doesn't support follow_redirects; use allow_redirects instead"
+        )
 
 
 @pytest.mark.asyncio
 async def test_paperless_client_aclose_method_exists():
     """Verify PaperlessClient.aclose() method exists and delegates to session.close()."""
-    with patch("paperless_ai.core.paperless.niquests.AsyncSession") as mock_session_class:
+    with patch(
+        "paperless_ai.core.paperless.niquests.AsyncSession"
+    ) as mock_session_class:
         mock_session = AsyncMock()
         mock_session_class.return_value = mock_session
 
@@ -80,13 +87,17 @@ def _paged_response(results, *, next_value=None):
 
 @pytest.mark.asyncio
 async def test_paperless_client_metadata_resolvers_use_cached_lists():
-    with patch("paperless_ai.core.paperless.niquests.AsyncSession") as mock_session_class:
+    with patch(
+        "paperless_ai.core.paperless.niquests.AsyncSession"
+    ) as mock_session_class:
         mock_session = AsyncMock()
         mock_session_class.return_value = mock_session
         mock_session.close = AsyncMock()
         mock_session.get = AsyncMock(
             side_effect=[
-                _paged_response([{"id": 11, "name": "Urgent"}, {"id": 12, "name": "Personal"}]),
+                _paged_response(
+                    [{"id": 11, "name": "Urgent"}, {"id": 12, "name": "Personal"}]
+                ),
                 _paged_response([{"id": 21, "name": "Receipt"}]),
                 _paged_response([{"id": 31, "path": "Archive/2023"}]),
                 _paged_response([{"id": 41, "name": "Acme Corp"}]),
@@ -115,16 +126,33 @@ async def test_paperless_client_metadata_resolvers_use_cached_lists():
 
 @pytest.mark.asyncio
 async def test_ensure_ai_workflows_creates_added_and_updated_workflows():
-    with patch("paperless_ai.core.paperless.niquests.AsyncSession") as mock_session_class:
+    with patch(
+        "paperless_ai.core.paperless.niquests.AsyncSession"
+    ) as mock_session_class:
         mock_session = AsyncMock()
         mock_session_class.return_value = mock_session
         mock_session.close = AsyncMock()
         mock_session.get = AsyncMock(return_value=_paged_response([]))
         mock_session.post = AsyncMock(
             side_effect=[
-                MagicMock(status_code=201, ok=True, headers={}, json=MagicMock(return_value={"id": 10})),
-                MagicMock(status_code=201, ok=True, headers={}, json=MagicMock(return_value={"id": 201})),
-                MagicMock(status_code=201, ok=True, headers={}, json=MagicMock(return_value={"id": 202})),
+                MagicMock(
+                    status_code=201,
+                    ok=True,
+                    headers={},
+                    json=MagicMock(return_value={"id": 10}),
+                ),
+                MagicMock(
+                    status_code=201,
+                    ok=True,
+                    headers={},
+                    json=MagicMock(return_value={"id": 201}),
+                ),
+                MagicMock(
+                    status_code=201,
+                    ok=True,
+                    headers={},
+                    json=MagicMock(return_value={"id": 202}),
+                ),
             ]
         )
         mock_session.patch = AsyncMock()
@@ -148,8 +176,12 @@ async def test_ensure_ai_workflows_creates_added_and_updated_workflows():
         assert added_payload["actions"][0]["type"] == 1
         assert added_payload["actions"][0]["assign_tags"] == [10]
         assert added_payload["actions"][1]["type"] == 4
-        assert added_payload["actions"][1]["webhook"]["params"] == {"doc_url": "{{doc_url}}"}
-        assert added_payload["actions"][1]["webhook"]["headers"] == {"X-Webhook-Token": "secret-123"}
+        assert added_payload["actions"][1]["webhook"]["params"] == {
+            "doc_url": "{{doc_url}}"
+        }
+        assert added_payload["actions"][1]["webhook"]["headers"] == {
+            "X-Webhook-Token": "secret-123"
+        }
 
         updated_workflow_call = mock_session.post.await_args_list[2]
         updated_payload = updated_workflow_call.kwargs["json"]
@@ -157,24 +189,34 @@ async def test_ensure_ai_workflows_creates_added_and_updated_workflows():
         assert updated_payload["triggers"][0]["type"] == 3
         assert updated_payload["triggers"][0]["filter_has_tags"] == [10]
         assert updated_payload["actions"][0]["type"] == 4
-        assert updated_payload["actions"][0]["webhook"]["params"] == {"doc_url": "{{doc_url}}"}
+        assert updated_payload["actions"][0]["webhook"]["params"] == {
+            "doc_url": "{{doc_url}}"
+        }
 
 
 @pytest.mark.asyncio
 async def test_get_or_create_custom_field_updates_existing_field_type():
-    with patch("paperless_ai.core.paperless.niquests.AsyncSession") as mock_session_class:
+    with patch(
+        "paperless_ai.core.paperless.niquests.AsyncSession"
+    ) as mock_session_class:
         mock_session = AsyncMock()
         mock_session_class.return_value = mock_session
         mock_session.close = AsyncMock()
         mock_session.get = AsyncMock(
-            return_value=_paged_response([{"id": 3, "name": "ai_summary", "data_type": "string"}])
+            return_value=_paged_response(
+                [{"id": 3, "name": "ai_summary", "data_type": "string"}]
+            )
         )
         mock_session.patch = AsyncMock(
-            return_value=MagicMock(status_code=200, ok=True, headers={}, json=MagicMock(return_value={}))
+            return_value=MagicMock(
+                status_code=200, ok=True, headers={}, json=MagicMock(return_value={})
+            )
         )
 
         async with PaperlessClient("http://test:8000", "token123") as client:
-            field_id = await client.get_or_create_custom_field("ai_summary", data_type="longtext")
+            field_id = await client.get_or_create_custom_field(
+                "ai_summary", data_type="longtext"
+            )
 
         assert field_id == 3
         mock_session.patch.assert_awaited_once_with(
@@ -185,7 +227,9 @@ async def test_get_or_create_custom_field_updates_existing_field_type():
 
 @pytest.mark.asyncio
 async def test_search_documents_all_paginates_and_applies_filters():
-    with patch("paperless_ai.core.paperless.niquests.AsyncSession") as mock_session_class:
+    with patch(
+        "paperless_ai.core.paperless.niquests.AsyncSession"
+    ) as mock_session_class:
         mock_session = AsyncMock()
         mock_session_class.return_value = mock_session
         mock_session.close = AsyncMock()
@@ -195,7 +239,9 @@ async def test_search_documents_all_paginates_and_applies_filters():
                 _paged_response([{"id": 21, "name": "Invoice"}]),
                 _paged_response([{"id": 31, "path": "Archive/2024"}]),
                 _paged_response([{"id": 11, "name": "Urgent"}]),
-                _paged_response([{"id": 501}, {"id": 502}], next_value="/api/documents/?page=2"),
+                _paged_response(
+                    [{"id": 501}, {"id": 502}], next_value="/api/documents/?page=2"
+                ),
                 _paged_response([{"id": 503}]),
             ]
         )
@@ -228,14 +274,18 @@ async def test_search_documents_all_paginates_and_applies_filters():
 
 @pytest.mark.asyncio
 async def test_search_documents_all_returns_empty_when_filter_name_unknown():
-    with patch("paperless_ai.core.paperless.niquests.AsyncSession") as mock_session_class:
+    with patch(
+        "paperless_ai.core.paperless.niquests.AsyncSession"
+    ) as mock_session_class:
         mock_session = AsyncMock()
         mock_session_class.return_value = mock_session
         mock_session.close = AsyncMock()
         mock_session.get = AsyncMock(return_value=_paged_response([]))
 
         async with PaperlessClient("http://test:8000", "token123") as client:
-            results = await client.search_documents_all("invoice", correspondent="Missing Corp")
+            results = await client.search_documents_all(
+                "invoice", correspondent="Missing Corp"
+            )
 
         assert results == []
         assert mock_session.get.await_count == 1
@@ -243,12 +293,16 @@ async def test_search_documents_all_returns_empty_when_filter_name_unknown():
 
 @pytest.mark.asyncio
 async def test_iter_all_documents_brief_requests_cleanup_fields():
-    with patch("paperless_ai.core.paperless.niquests.AsyncSession") as mock_session_class:
+    with patch(
+        "paperless_ai.core.paperless.niquests.AsyncSession"
+    ) as mock_session_class:
         mock_session = AsyncMock()
         mock_session_class.return_value = mock_session
         mock_session.close = AsyncMock()
         mock_session.get = AsyncMock(
-            return_value=_paged_response([{"id": 5, "title": "Invoice", "correspondent": 7}])
+            return_value=_paged_response(
+                [{"id": 5, "title": "Invoice", "correspondent": 7}]
+            )
         )
 
         async with PaperlessClient("http://test:8000", "token123") as client:
@@ -263,7 +317,9 @@ async def test_iter_all_documents_brief_requests_cleanup_fields():
 
 @pytest.mark.asyncio
 async def test_count_documents_for_correspondent_uses_count_field():
-    with patch("paperless_ai.core.paperless.niquests.AsyncSession") as mock_session_class:
+    with patch(
+        "paperless_ai.core.paperless.niquests.AsyncSession"
+    ) as mock_session_class:
         mock_session = AsyncMock()
         mock_session_class.return_value = mock_session
         mock_session.close = AsyncMock()

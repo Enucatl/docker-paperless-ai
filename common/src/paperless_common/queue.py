@@ -70,7 +70,9 @@ class TaskQueues:
             await pipe.execute()
         log.debug("Dequeued document %d from %s", doc_id, stage)
 
-    async def mark_failure(self, doc_id: int, stage: str, *, max_attempts: int) -> tuple[int, bool]:
+    async def mark_failure(
+        self, doc_id: int, stage: str, *, max_attempts: int
+    ) -> tuple[int, bool]:
         """Increment the retry counter for a stage and dead-letter when exhausted."""
         retry_count = int(await self._redis.incr(_retry_key(stage, doc_id)))
         moved_to_failed = retry_count >= max_attempts

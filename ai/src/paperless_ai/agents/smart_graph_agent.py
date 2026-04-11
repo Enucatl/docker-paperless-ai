@@ -173,12 +173,13 @@ class StructuredOutputStrategy(BaseExtractionStrategy):
             system_prompt = config.metadata_prompt
             response_format = _ExtractedMetadata
         elif "response_format" in (
-            litellm.get_supported_openai_params(model=config.metadata_model)
-            or []
+            litellm.get_supported_openai_params(model=config.metadata_model) or []
         ):
             # vLLM / OpenAI-compatible (e.g. Qwen): structural enforcement via json_schema,
             # but model doesn't see schema descriptions — must include them in the prompt
-            system_prompt = config.metadata_prompt + "\n\n" + _field_instructions_from_schema()
+            system_prompt = (
+                config.metadata_prompt + "\n\n" + _field_instructions_from_schema()
+            )
             response_format = {
                 "type": "json_schema",
                 "json_schema": {
@@ -187,7 +188,9 @@ class StructuredOutputStrategy(BaseExtractionStrategy):
                 },
             }
         else:
-            system_prompt = config.metadata_prompt + "\n\n" + _field_instructions_from_schema()
+            system_prompt = (
+                config.metadata_prompt + "\n\n" + _field_instructions_from_schema()
+            )
             response_format = None
 
         messages = [
@@ -299,7 +302,10 @@ class NuExtractStrategy(BaseExtractionStrategy):
                     # Without this, temperature=0 produces identical output every
                     # attempt. 0.1 adds just enough stochasticity.
                     attempt_num = attempt.retry_state.attempt_number
-                    kwargs = {**base_kwargs, "temperature": 0 if attempt_num == 1 else 0.1}
+                    kwargs = {
+                        **base_kwargs,
+                        "temperature": 0 if attempt_num == 1 else 0.1,
+                    }
                     response = await litellm.acompletion(**kwargs)
                     raw = _get_completion_text(response) or "{}"
                     log.info(

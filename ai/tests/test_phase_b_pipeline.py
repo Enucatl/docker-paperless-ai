@@ -116,16 +116,22 @@ async def test_task_queues_deduplication(task_queues):
 async def test_task_queues_mark_failure_moves_to_failed_queue(task_queues):
     await task_queues.enqueue_ocr(55)
 
-    retry_count, moved = await task_queues.mark_failure(55, TaskQueues.KEY_OCR, max_attempts=3)
+    retry_count, moved = await task_queues.mark_failure(
+        55, TaskQueues.KEY_OCR, max_attempts=3
+    )
     assert (retry_count, moved) == (1, False)
     assert await task_queues.peek_stage(TaskQueues.KEY_OCR) == {55}
     assert await task_queues.peek_stage(TaskQueues.KEY_FAILED) == set()
 
-    retry_count, moved = await task_queues.mark_failure(55, TaskQueues.KEY_OCR, max_attempts=3)
+    retry_count, moved = await task_queues.mark_failure(
+        55, TaskQueues.KEY_OCR, max_attempts=3
+    )
     assert (retry_count, moved) == (2, False)
     assert await task_queues.peek_stage(TaskQueues.KEY_OCR) == {55}
 
-    retry_count, moved = await task_queues.mark_failure(55, TaskQueues.KEY_OCR, max_attempts=3)
+    retry_count, moved = await task_queues.mark_failure(
+        55, TaskQueues.KEY_OCR, max_attempts=3
+    )
     assert (retry_count, moved) == (3, True)
     assert await task_queues.peek_stage(TaskQueues.KEY_OCR) == set()
     assert await task_queues.peek_stage(TaskQueues.KEY_FAILED) == {55}
@@ -170,7 +176,9 @@ def test_route_to_stage_ocr_priority_over_embed():
 
 
 def test_route_to_stage_metadata_priority_over_embed():
-    assert _route_to_stage({"ai:run-metadata", "ai:run-embed"}) == TaskQueues.KEY_METADATA
+    assert (
+        _route_to_stage({"ai:run-metadata", "ai:run-embed"}) == TaskQueues.KEY_METADATA
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -205,7 +213,9 @@ async def test_ocr_batch_writes_content_and_transitions_tag(
     # Upload document and add ai:run-ocr tag
     doc_id = await _upload_document(paperless_client, _make_test_pdf())
     tag_ocr_id = await paperless_client.get_tag_id(config.tag_ocr, create=True)
-    tag_metadata_id = await paperless_client.get_tag_id(config.tag_metadata, create=True)
+    tag_metadata_id = await paperless_client.get_tag_id(
+        config.tag_metadata, create=True
+    )
     await paperless_client.patch_document(doc_id, {"tags": [tag_ocr_id]})
 
     # Enqueue to OCR queue
@@ -299,7 +309,9 @@ async def test_ocr_batch_moves_poison_document_to_failed_queue(
     async def _boom(*_args, **_kwargs):
         raise RuntimeError("corrupted pdf")
 
-    monkeypatch.setattr("paperless_ai.agents.smart_graph_agent.run_vision_ocr_only", _boom)
+    monkeypatch.setattr(
+        "paperless_ai.agents.smart_graph_agent.run_vision_ocr_only", _boom
+    )
 
     token = paperless_client._client.headers["Authorization"].split(" ")[1]
     config = AgentConfig(
@@ -366,7 +378,9 @@ async def test_metadata_batch_writes_metadata_and_transitions_tag(
 
     # Upload doc, write content (as if OCR stage already ran)
     doc_id = await _upload_document(paperless_client, _make_test_pdf())
-    tag_metadata_id = await paperless_client.get_tag_id(config.tag_metadata, create=True)
+    tag_metadata_id = await paperless_client.get_tag_id(
+        config.tag_metadata, create=True
+    )
     tag_embed_id = await paperless_client.get_tag_id(config.tag_embed, create=True)
 
     await paperless_client.patch_document(
@@ -379,7 +393,12 @@ async def test_metadata_batch_writes_metadata_and_transitions_tag(
     await task_queues.enqueue_metadata(doc_id)
 
     success, failure = await run_metadata_batch(
-        paperless_client, config, task_queues, custom_field_id, ai_summary_field_id, ai_result_field_id
+        paperless_client,
+        config,
+        task_queues,
+        custom_field_id,
+        ai_summary_field_id,
+        ai_result_field_id,
     )
     assert success == 1, f"Expected 1 success, got {success=} {failure=}"
     assert failure == 0
@@ -400,7 +419,10 @@ async def test_metadata_batch_writes_metadata_and_transitions_tag(
     cf_map = {cf["field"]: cf["value"] for cf in doc.get("custom_fields", [])}
     assert custom_field_id in cf_map
     assert cf_map[custom_field_id] == date.today().isoformat()
-    assert cf_map[ai_summary_field_id] == "Invoice from Acme Corp dated 2024-01-15 for $100.00."
+    assert (
+        cf_map[ai_summary_field_id]
+        == "Invoice from Acme Corp dated 2024-01-15 for $100.00."
+    )
 
     # Tag transitioned: ai:run-metadata removed, ai:run-embed added
     assert tag_metadata_id not in doc["tags"]
@@ -427,7 +449,9 @@ async def test_metadata_batch_skips_empty_content(paperless_client, task_queues)
     ai_summary_field_id = await paperless_client.get_or_create_custom_field(
         "ai_summary", data_type="longtext"
     )
-    ai_result_field_id = await paperless_client.get_or_create_custom_field("ai_result", data_type="longtext")
+    ai_result_field_id = await paperless_client.get_or_create_custom_field(
+        "ai_result", data_type="longtext"
+    )
 
     doc_id = await _upload_document(paperless_client, _make_test_pdf())
     # Leave content empty (default after upload)
@@ -435,7 +459,12 @@ async def test_metadata_batch_skips_empty_content(paperless_client, task_queues)
     await task_queues.enqueue_metadata(doc_id)
 
     success, failure = await run_metadata_batch(
-        paperless_client, config, task_queues, custom_field_id, ai_summary_field_id, ai_result_field_id
+        paperless_client,
+        config,
+        task_queues,
+        custom_field_id,
+        ai_summary_field_id,
+        ai_result_field_id,
     )
     assert success == 0
     assert failure == 0
@@ -463,7 +492,9 @@ async def test_metadata_batch_dry_run(paperless_client, task_queues):
     ai_summary_field_id = await paperless_client.get_or_create_custom_field(
         "ai_summary", data_type="longtext"
     )
-    ai_result_field_id = await paperless_client.get_or_create_custom_field("ai_result", data_type="longtext")
+    ai_result_field_id = await paperless_client.get_or_create_custom_field(
+        "ai_result", data_type="longtext"
+    )
 
     doc_id = await _upload_document(paperless_client, _make_test_pdf())
     original = await paperless_client._client.get(f"/api/documents/{doc_id}/")
@@ -475,7 +506,12 @@ async def test_metadata_batch_dry_run(paperless_client, task_queues):
     await task_queues.enqueue_metadata(doc_id)
 
     success, failure = await run_metadata_batch(
-        paperless_client, config, task_queues, custom_field_id, ai_summary_field_id, ai_result_field_id
+        paperless_client,
+        config,
+        task_queues,
+        custom_field_id,
+        ai_summary_field_id,
+        ai_result_field_id,
     )
     assert success == 1
     assert failure == 0
@@ -603,13 +639,18 @@ async def test_embed_batch_reuses_ai_summary_in_situated_chunks(
     assert success == 1
     assert failure == 0
     assert mock_embedder.last_texts
-    assert "Summary: Invoice from Acme Corp dated 2024-01-15 for $100.00." in mock_embedder.last_texts[0]
+    assert (
+        "Summary: Invoice from Acme Corp dated 2024-01-15 for $100.00."
+        in mock_embedder.last_texts[0]
+    )
 
     await paperless_client._client.delete(f"/api/documents/{doc_id}/")
 
 
 @pytest.mark.requires_redis
-async def test_embed_batch_skips_empty_content(paperless_client, task_queues, qdrant_store):
+async def test_embed_batch_skips_empty_content(
+    paperless_client, task_queues, qdrant_store
+):
     """Document with empty content is processed (tag removed) but nothing embedded."""
     from paperless_ai.core.config import AgentConfig
     from paperless_ai.core.runner import run_embed_batch
@@ -627,10 +668,14 @@ async def test_embed_batch_skips_empty_content(paperless_client, task_queues, qd
 
     doc_id = await _upload_document(paperless_client, _make_test_pdf())
     tag_embed_id = await paperless_client.get_tag_id(config.tag_embed, create=True)
-    await paperless_client.patch_document(doc_id, {"content": "", "tags": [tag_embed_id]})
+    await paperless_client.patch_document(
+        doc_id, {"content": "", "tags": [tag_embed_id]}
+    )
     await task_queues.enqueue_embed(doc_id)
 
-    success, failure = await run_embed_batch(paperless_client, config, task_queues, qdrant_store, None)
+    success, failure = await run_embed_batch(
+        paperless_client, config, task_queues, qdrant_store, None
+    )
     assert success == 1
     assert failure == 0
     assert await task_queues.peek_stage(TaskQueues.KEY_EMBED) == set()
@@ -649,7 +694,9 @@ async def test_embed_batch_skips_empty_content(paperless_client, task_queues, qd
 
 
 @pytest.mark.requires_redis
-async def test_embed_batch_dry_run(paperless_client, task_queues, mock_embedder, qdrant_store):
+async def test_embed_batch_dry_run(
+    paperless_client, task_queues, mock_embedder, qdrant_store
+):
     """Dry-run embed batch: returns success but does not remove tag or modify Qdrant."""
     from paperless_ai.core.config import AgentConfig
     from paperless_ai.core.runner import run_embed_batch
@@ -709,7 +756,11 @@ async def test_full_phase_b_pipeline_sequential(
     from datetime import date
 
     from paperless_ai.core.config import AgentConfig
-    from paperless_ai.core.runner import run_embed_batch, run_metadata_batch, run_ocr_batch
+    from paperless_ai.core.runner import (
+        run_embed_batch,
+        run_metadata_batch,
+        run_ocr_batch,
+    )
     from paperless_ai.search.qdrant_store import COLLECTION
     from qdrant_client.models import FieldCondition, Filter, MatchValue
 
@@ -737,7 +788,9 @@ async def test_full_phase_b_pipeline_sequential(
     # Upload document and add ai:run-ocr tag (as Paperless workflow would do)
     doc_id = await _upload_document(paperless_client, _make_test_pdf())
     tag_ocr_id = await paperless_client.get_tag_id(config.tag_ocr, create=True)
-    tag_metadata_id = await paperless_client.get_tag_id(config.tag_metadata, create=True)
+    tag_metadata_id = await paperless_client.get_tag_id(
+        config.tag_metadata, create=True
+    )
     tag_embed_id = await paperless_client.get_tag_id(config.tag_embed, create=True)
     await paperless_client.patch_document(doc_id, {"tags": [tag_ocr_id]})
 
@@ -749,7 +802,12 @@ async def test_full_phase_b_pipeline_sequential(
 
     # Stage 2: Metadata
     meta_s, meta_f = await run_metadata_batch(
-        paperless_client, config, task_queues, custom_field_id, ai_summary_field_id, ai_result_field_id
+        paperless_client,
+        config,
+        task_queues,
+        custom_field_id,
+        ai_summary_field_id,
+        ai_result_field_id,
     )
     assert meta_s == 1 and meta_f == 0, f"Metadata stage failed: {meta_s=} {meta_f=}"
 
@@ -774,7 +832,10 @@ async def test_full_phase_b_pipeline_sequential(
     cf_map = {cf["field"]: cf["value"] for cf in doc.get("custom_fields", [])}
     assert custom_field_id in cf_map
     assert cf_map[custom_field_id] == date.today().isoformat()
-    assert cf_map[ai_summary_field_id] == "Invoice from Acme Corp dated 2024-01-15 for $100.00."
+    assert (
+        cf_map[ai_summary_field_id]
+        == "Invoice from Acme Corp dated 2024-01-15 for $100.00."
+    )
 
     # All ai:run-* tags removed
     for tag_id in [tag_ocr_id, tag_metadata_id, tag_embed_id]:

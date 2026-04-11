@@ -28,6 +28,7 @@ from paperless_ai.eval.run_evals import run_scientific_evaluation, run_evals
 
 def _config():
     from paperless_ai.core.config import AgentConfig
+
     return AgentConfig(
         paperless_url="http://localhost:8000",
         paperless_token="dummy",
@@ -73,7 +74,9 @@ class _Phoenix:
             "phoenix": MagicMock(),
             "phoenix.client": MagicMock(AsyncClient=_client_cls),
             "phoenix.client.experiments": MagicMock(run_experiment=self.run_experiment),
-            "phoenix.evals": MagicMock(LiteLLMModel=MagicMock(), llm_classify=MagicMock()),
+            "phoenix.evals": MagicMock(
+                LiteLLMModel=MagicMock(), llm_classify=MagicMock()
+            ),
             "phoenix.evals.metrics": MagicMock(exact_match=_exact_match),
         }
         self._patches = [
@@ -99,9 +102,12 @@ class _Phoenix:
 
 async def test_all_files_missing_returns_early(tmp_path):
     """When every entry references a non-existent file, return before touching Phoenix."""
-    _write_dataset(tmp_path / "ds.json", [
-        {"file_path": str(tmp_path / "ghost.pdf"), "split": "test"},
-    ])
+    _write_dataset(
+        tmp_path / "ds.json",
+        [
+            {"file_path": str(tmp_path / "ghost.pdf"), "split": "test"},
+        ],
+    )
     _write_experiments(tmp_path / "exp.yaml")
 
     # No Phoenix mock — if Phoenix were contacted the test would hang/fail.
@@ -113,9 +119,12 @@ async def test_all_files_missing_returns_early(tmp_path):
 async def test_split_mismatch_returns_early(tmp_path):
     """Requesting a split that has no entries in the dataset returns early."""
     _existing_pdf(tmp_path)  # file exists, but it's split="test"
-    _write_dataset(tmp_path / "ds.json", [
-        {"file_path": str(tmp_path / "doc.pdf"), "split": "test"},
-    ])
+    _write_dataset(
+        tmp_path / "ds.json",
+        [
+            {"file_path": str(tmp_path / "doc.pdf"), "split": "test"},
+        ],
+    )
     _write_experiments(tmp_path / "exp.yaml")
 
     with patch.object(_module, "GOLDEN_DATASET_PATH", tmp_path / "ds.json"):
@@ -127,9 +136,12 @@ async def test_split_mismatch_returns_early(tmp_path):
 async def test_entries_without_split_field_default_to_test(tmp_path):
     """Entries that omit the 'split' key are treated as split='test'."""
     _existing_pdf(tmp_path)
-    _write_dataset(tmp_path / "ds.json", [
-        {"file_path": str(tmp_path / "doc.pdf")},  # no "split" key
-    ])
+    _write_dataset(
+        tmp_path / "ds.json",
+        [
+            {"file_path": str(tmp_path / "doc.pdf")},  # no "split" key
+        ],
+    )
     _write_experiments(tmp_path / "exp.yaml")
 
     with patch.object(_module, "GOLDEN_DATASET_PATH", tmp_path / "ds.json"):
@@ -143,24 +155,31 @@ async def test_entries_without_split_field_default_to_test(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("split,expected_count", [
-    ("test",       1),
-    ("validation", 1),
-    ("all",        2),
-])
+@pytest.mark.parametrize(
+    "split,expected_count",
+    [
+        ("test", 1),
+        ("validation", 1),
+        ("all", 2),
+    ],
+)
 async def test_split_filtering(tmp_path, split, expected_count):
     """Dataset uploaded to Phoenix contains only the entries matching the split."""
     test_pdf = _existing_pdf(tmp_path, "test.pdf")
-    val_pdf  = _existing_pdf(tmp_path, "val.pdf")
+    val_pdf = _existing_pdf(tmp_path, "val.pdf")
 
-    _write_dataset(tmp_path / "ds.json", [
-        {"file_path": str(test_pdf), "split": "test"},
-        {"file_path": str(val_pdf),  "split": "validation"},
-    ])
+    _write_dataset(
+        tmp_path / "ds.json",
+        [
+            {"file_path": str(test_pdf), "split": "test"},
+            {"file_path": str(val_pdf), "split": "validation"},
+        ],
+    )
     _write_experiments(tmp_path / "exp.yaml")
 
     captured_rows: list = []
     import pandas as pd
+
     real_df = pd.DataFrame
 
     def _capture(rows):
@@ -180,17 +199,25 @@ async def test_split_filtering(tmp_path, split, expected_count):
 
 async def test_code_test_split_selects_by_tag(tmp_path):
     """code-test split selects entries tagged 'code-test' regardless of their split field."""
-    tagged_pdf    = _existing_pdf(tmp_path, "tagged.pdf")
-    untagged_pdf  = _existing_pdf(tmp_path, "untagged.pdf")
+    tagged_pdf = _existing_pdf(tmp_path, "tagged.pdf")
+    untagged_pdf = _existing_pdf(tmp_path, "untagged.pdf")
 
-    _write_dataset(tmp_path / "ds.json", [
-        {"file_path": str(tagged_pdf),   "split": "validation", "tags": ["code-test"]},
-        {"file_path": str(untagged_pdf), "split": "test"},
-    ])
+    _write_dataset(
+        tmp_path / "ds.json",
+        [
+            {
+                "file_path": str(tagged_pdf),
+                "split": "validation",
+                "tags": ["code-test"],
+            },
+            {"file_path": str(untagged_pdf), "split": "test"},
+        ],
+    )
     _write_experiments(tmp_path / "exp.yaml")
 
     captured_rows: list = []
     import pandas as pd
+
     real_df = pd.DataFrame
 
     def _capture(rows):
@@ -215,21 +242,25 @@ async def test_code_test_split_selects_by_tag(tmp_path):
 async def test_dataset_dataframe_has_required_columns(tmp_path):
     """The DataFrame handed to Phoenix contains all six expected columns."""
     pdf = _existing_pdf(tmp_path)
-    _write_dataset(tmp_path / "ds.json", [
-        {
-            "file_path": str(pdf),
-            "split": "test",
-            "expected_correspondent": "Acme Corp",
-            "expected_date": "2024-01-15",
-            "expected_title_contains": "Invoice",
-            "_verified_null_correspondent": False,
-            "_verified_null_date": False,
-        }
-    ])
+    _write_dataset(
+        tmp_path / "ds.json",
+        [
+            {
+                "file_path": str(pdf),
+                "split": "test",
+                "expected_correspondent": "Acme Corp",
+                "expected_date": "2024-01-15",
+                "expected_title_contains": "Invoice",
+                "_verified_null_correspondent": False,
+                "_verified_null_date": False,
+            }
+        ],
+    )
     _write_experiments(tmp_path / "exp.yaml")
 
     captured_rows: list = []
     import pandas as pd
+
     real_df = pd.DataFrame
 
     def _capture(rows):
@@ -264,13 +295,19 @@ async def test_dataset_dataframe_has_required_columns(tmp_path):
 async def test_run_experiment_called_once_per_yaml_experiment(tmp_path):
     """run_experiment is called exactly once per experiment entry in experiments.yaml."""
     pdf = _existing_pdf(tmp_path)
-    _write_dataset(tmp_path / "ds.json", [
-        {"file_path": str(pdf), "split": "test"},
-    ])
-    _write_experiments(tmp_path / "exp.yaml", experiments=[
-        {"name": "exp-a", "ocr_model": "gpt-4o", "metadata_model": "gpt-4o"},
-        {"name": "exp-b", "ocr_model": "gpt-4o", "metadata_model": "gpt-4o"},
-    ])
+    _write_dataset(
+        tmp_path / "ds.json",
+        [
+            {"file_path": str(pdf), "split": "test"},
+        ],
+    )
+    _write_experiments(
+        tmp_path / "exp.yaml",
+        experiments=[
+            {"name": "exp-a", "ocr_model": "gpt-4o", "metadata_model": "gpt-4o"},
+            {"name": "exp-b", "ocr_model": "gpt-4o", "metadata_model": "gpt-4o"},
+        ],
+    )
 
     with patch.object(_module, "GOLDEN_DATASET_PATH", tmp_path / "ds.json"):
         with patch.object(_module, "EXPERIMENTS_YAML_PATH", tmp_path / "exp.yaml"):
@@ -289,7 +326,9 @@ async def test_falls_back_to_get_dataset_when_create_fails(tmp_path):
     with patch.object(_module, "GOLDEN_DATASET_PATH", tmp_path / "ds.json"):
         with patch.object(_module, "EXPERIMENTS_YAML_PATH", tmp_path / "exp.yaml"):
             with _Phoenix() as ph:
-                ph.client.datasets.create_dataset.side_effect = Exception("already exists")
+                ph.client.datasets.create_dataset.side_effect = Exception(
+                    "already exists"
+                )
                 await run_scientific_evaluation(_config())
 
     ph.client.datasets.get_dataset.assert_awaited_once()
@@ -304,9 +343,16 @@ async def test_yaml_model_fields_override_env_config(tmp_path):
     """Model/endpoint fields in YAML completely replace env-config values."""
     pdf = _existing_pdf(tmp_path)
     _write_dataset(tmp_path / "ds.json", [{"file_path": str(pdf), "split": "test"}])
-    _write_experiments(tmp_path / "exp.yaml", experiments=[
-        {"name": "custom", "ocr_model": "anthropic/claude-3-haiku", "metadata_model": "anthropic/claude-3-haiku"},
-    ])
+    _write_experiments(
+        tmp_path / "exp.yaml",
+        experiments=[
+            {
+                "name": "custom",
+                "ocr_model": "anthropic/claude-3-haiku",
+                "metadata_model": "anthropic/claude-3-haiku",
+            },
+        ],
+    )
 
     env_config = _config()
     # env_config has ocr_model = "gemini/gemini-2.5-flash" by default
@@ -348,7 +394,9 @@ async def test_missing_experiments_yaml_exits(tmp_path):
     """Missing EXPERIMENTS_YAML_PATH causes sys.exit(1)."""
     _write_dataset(tmp_path / "ds.json", [])
     with patch.object(_module, "GOLDEN_DATASET_PATH", tmp_path / "ds.json"):
-        with patch.object(_module, "EXPERIMENTS_YAML_PATH", tmp_path / "nonexistent.yaml"):
+        with patch.object(
+            _module, "EXPERIMENTS_YAML_PATH", tmp_path / "nonexistent.yaml"
+        ):
             with pytest.raises(SystemExit):
                 await run_scientific_evaluation(_config())
 
@@ -387,7 +435,9 @@ async def test_phoenix_unreachable_exits(tmp_path):
 
 async def test_run_evals_delegates_to_run_scientific_evaluation():
     """run_evals is a thin wrapper: it calls run_scientific_evaluation with the right args."""
-    with patch.object(_module, "run_scientific_evaluation", new=AsyncMock()) as mock_sci:
+    with patch.object(
+        _module, "run_scientific_evaluation", new=AsyncMock()
+    ) as mock_sci:
         config = _config()
         await run_evals(config, split="validation")
 

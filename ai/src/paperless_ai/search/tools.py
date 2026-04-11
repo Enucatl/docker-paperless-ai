@@ -105,7 +105,9 @@ def _snippet(text: str, limit: int = 280) -> str:
     return clean[: limit - 3].rstrip() + "..."
 
 
-def _chat_completion_kwargs(config: AgentConfig, messages: list[dict[str, Any]]) -> dict[str, Any]:
+def _chat_completion_kwargs(
+    config: AgentConfig, messages: list[dict[str, Any]]
+) -> dict[str, Any]:
     kwargs: dict[str, Any] = {
         "model": config.chat_model,
         "messages": messages,
@@ -177,7 +179,9 @@ async def _lookup_payloads(
             if not point.payload or point.payload.get("doc_id") is None:
                 continue
             payload_by_doc_id.setdefault(int(point.payload["doc_id"]), point.payload)
-        set_span_attributes(span, **{"paperless_ai.search.lookup_payload_count": len(payload_by_doc_id)})
+        set_span_attributes(
+            span, **{"paperless_ai.search.lookup_payload_count": len(payload_by_doc_id)}
+        )
         return payload_by_doc_id
 
 
@@ -209,7 +213,9 @@ async def _judge_precision_documents(
                     {
                         "id": int(doc_id),
                         "title": doc.get("title") or "Untitled",
-                        "content": str(doc.get("content") or "").strip()[:JUDGE_DOC_MAX_CHARS],
+                        "content": str(doc.get("content") or "").strip()[
+                            :JUDGE_DOC_MAX_CHARS
+                        ],
                     }
                 )
             if not docs:
@@ -217,7 +223,7 @@ async def _judge_precision_documents(
 
             prompt = (
                 "You are filtering candidate documents for a search query. "
-                "Return strict JSON of the form {\"keep_doc_ids\":[...]} containing only document IDs "
+                'Return strict JSON of the form {"keep_doc_ids":[...]} containing only document IDs '
                 "that are genuinely relevant to the query. Preserve the most relevant order and do not "
                 "include explanations.\n\n"
                 f"Query: {query}\n\nCandidates:\n{json.dumps(docs, ensure_ascii=True)}"
@@ -234,9 +240,13 @@ async def _judge_precision_documents(
                 )
                 raw = str(response.choices[0].message.content or "").strip()
                 parsed = json.loads(raw)
-                keep_doc_ids = [int(doc_id) for doc_id in parsed.get("keep_doc_ids", [])]
+                keep_doc_ids = [
+                    int(doc_id) for doc_id in parsed.get("keep_doc_ids", [])
+                ]
                 keep_set = set(batch)
-                kept_doc_ids.extend([doc_id for doc_id in keep_doc_ids if doc_id in keep_set])
+                kept_doc_ids.extend(
+                    [doc_id for doc_id in keep_doc_ids if doc_id in keep_set]
+                )
             except Exception:
                 failed_batches += 1
                 kept_doc_ids.extend(batch)
@@ -281,11 +291,15 @@ async def search_documents(
                 f"Allowed values: {', '.join(VALID_RETRIEVAL_MODES)}."
             )
             set_span_attributes(span, **{"paperless_ai.tool.validation_error": content})
-            return ToolExecutionResult(content=content, summary=content, preview=content)
+            return ToolExecutionResult(
+                content=content, summary=content, preview=content
+            )
         if mode == "recall" and limit is None:
             content = "Recall searches require an explicit limit."
             set_span_attributes(span, **{"paperless_ai.tool.validation_error": content})
-            return ToolExecutionResult(content=content, summary=content, preview=content)
+            return ToolExecutionResult(
+                content=content, summary=content, preview=content
+            )
         resolved_limit = 20 if limit is None else limit
         filters = SearchFilters(
             correspondent=correspondent,
@@ -305,7 +319,9 @@ async def search_documents(
             mode=mode,
             qdrant_client=qdrant_client,
         )
-        set_span_attributes(span, **{"paperless_ai.tool.prejudge_doc_count": len(fused_ids)})
+        set_span_attributes(
+            span, **{"paperless_ai.tool.prejudge_doc_count": len(fused_ids)}
+        )
         if mode == "precision" and fused_ids and client is not None:
             fused_ids = await _judge_precision_documents(
                 query=query,
@@ -329,7 +345,10 @@ async def search_documents(
         formatted: list[str] = []
         source_refs: list[ToolSourceRef] = []
         for doc_id in fused_ids[:resolved_limit]:
-            payload = payload_by_doc_id.get(int(doc_id), {"doc_id": int(doc_id), "text": chunk_map.get(int(doc_id), "")})
+            payload = payload_by_doc_id.get(
+                int(doc_id),
+                {"doc_id": int(doc_id), "text": chunk_map.get(int(doc_id), "")},
+            )
             formatted.append(_format_hit(payload))
             source_refs.append(ToolSourceRef(doc_id=int(doc_id), source_type="search"))
 
@@ -372,10 +391,14 @@ async def read_full_document(
         doc = await client.get_document_with_content(int(doc_id))
         if doc is None:
             content = f"Document {doc_id} was not found."
-            return ToolExecutionResult(content=content, summary=content, preview=content)
+            return ToolExecutionResult(
+                content=content, summary=content, preview=content
+            )
 
         content = str(doc.get("content") or "").strip()
-        set_span_attributes(span, **{"paperless_ai.tool.document_char_count": len(content)})
+        set_span_attributes(
+            span, **{"paperless_ai.tool.document_char_count": len(content)}
+        )
         if not content:
             empty = f"Document {doc_id} has no OCR content."
             return ToolExecutionResult(content=empty, summary=empty, preview=empty)
@@ -414,13 +437,19 @@ async def get_available_metadata(*, client: PaperlessClient) -> ToolExecutionRes
         set_span_attributes(
             span,
             **{
-                "paperless_ai.tool.correspondent_count": len(metadata["correspondents"]),
-                "paperless_ai.tool.document_type_count": len(metadata["document_types"]),
+                "paperless_ai.tool.correspondent_count": len(
+                    metadata["correspondents"]
+                ),
+                "paperless_ai.tool.document_type_count": len(
+                    metadata["document_types"]
+                ),
                 "paperless_ai.tool.storage_path_count": len(metadata["storage_paths"]),
                 "paperless_ai.tool.tag_count": len(metadata["tags"]),
             },
         )
-        return ToolExecutionResult(content=content, summary=summary, preview=_snippet(content, limit=420))
+        return ToolExecutionResult(
+            content=content, summary=summary, preview=_snippet(content, limit=420)
+        )
 
 
 async def execute_tool_call(

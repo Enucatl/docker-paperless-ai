@@ -72,7 +72,14 @@ def _read_secret(env_var: str) -> str | None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global _queues, _lazy_embedder, _paperless_client, _qdrant_store, _qdrant_url, _chat_copilot, _config
+    global \
+        _queues, \
+        _lazy_embedder, \
+        _paperless_client, \
+        _qdrant_store, \
+        _qdrant_url, \
+        _chat_copilot, \
+        _config
     global _local_search_idle_timeout_seconds, _local_search_start_method
     global _local_search_warm_on_startup, _local_search_warm_on_chat_load
     global _local_search_warmup_task
@@ -110,7 +117,9 @@ async def lifespan(app: FastAPI):
     if not paperless_url:
         raise RuntimeError("PAPERLESS_URL is not set for the copilot service")
     if not paperless_token:
-        raise RuntimeError("PAPERLESS_TOKEN (or PAPERLESS_TOKEN_FILE) is not set for the copilot service")
+        raise RuntimeError(
+            "PAPERLESS_TOKEN (or PAPERLESS_TOKEN_FILE) is not set for the copilot service"
+        )
 
     _paperless_client = PaperlessClient(paperless_url, paperless_token)
     log.info("Paperless keyword search enabled (%s)", paperless_url)
@@ -146,7 +155,10 @@ async def lifespan(app: FastAPI):
     log.info("Checking Paperless API connectivity...")
     response = await _paperless_client._client.get("/api/")
     _raise_for_status(response)
-    log.info("Paperless API reachable (version: %s)", response.headers.get("x-version", "unknown"))
+    log.info(
+        "Paperless API reachable (version: %s)",
+        response.headers.get("x-version", "unknown"),
+    )
 
     if _config.manage_paperless_workflows:
         added_wf_id, updated_wf_id = await _paperless_client.ensure_ai_workflows(
@@ -160,9 +172,15 @@ async def lifespan(app: FastAPI):
             updated_wf_id,
         )
 
-    custom_field_id = await _paperless_client.get_or_create_custom_field("ai_processed", data_type="date")
-    ai_summary_field_id = await _paperless_client.get_or_create_custom_field("ai_summary", data_type="longtext")
-    ai_result_field_id = await _paperless_client.get_or_create_custom_field("ai_result", data_type="longtext")
+    custom_field_id = await _paperless_client.get_or_create_custom_field(
+        "ai_processed", data_type="date"
+    )
+    ai_summary_field_id = await _paperless_client.get_or_create_custom_field(
+        "ai_summary", data_type="longtext"
+    )
+    ai_result_field_id = await _paperless_client.get_or_create_custom_field(
+        "ai_result", data_type="longtext"
+    )
     log.info(
         "Custom fields: ai_processed=%d ai_summary=%d ai_result=%d",
         custom_field_id,
@@ -209,7 +227,9 @@ async def lifespan(app: FastAPI):
     async def _ocr_worker() -> None:
         while True:
             try:
-                success, failure = await run_ocr_batch(_paperless_client, _config, _queues)
+                success, failure = await run_ocr_batch(
+                    _paperless_client, _config, _queues
+                )
                 if success or failure:
                     log.info("OCR worker: %d ok / %d failed", success, failure)
             except Exception as exc:
@@ -379,7 +399,9 @@ async def search(
                     dense_k=K,
                     rerank_candidates=max(N, limit),
                     rrf_k=RRF_K,
-                    qdrant_client=(_qdrant_store._client if _qdrant_store is not None else None),
+                    qdrant_client=(
+                        _qdrant_store._client if _qdrant_store is not None else None
+                    ),
                 ),
                 timeout=_search_request_timeout_seconds,
             )
@@ -396,7 +418,11 @@ async def search(
     except (SystemExit, KeyboardInterrupt, GeneratorExit):
         raise
     except BaseException as exc:
-        log.warning("Search endpoint error (%s: %s) — returning empty results", type(exc).__name__, exc)
+        log.warning(
+            "Search endpoint error (%s: %s) — returning empty results",
+            type(exc).__name__,
+            exc,
+        )
         return JSONResponse(content=[])
 
 
@@ -1370,14 +1396,26 @@ async def chat_ws(websocket: WebSocket) -> None:
                 await websocket.send_json(payload)
 
             try:
-                result = await _chat_copilot.run_turn(user_message, history, event_callback=emit)
+                result = await _chat_copilot.run_turn(
+                    user_message, history, event_callback=emit
+                )
             except Exception as exc:
                 log.exception("Chat turn failed")
-                await emit({"type": "error", "content": f"Chat request failed: {type(exc).__name__}: {exc}"})
+                await emit(
+                    {
+                        "type": "error",
+                        "content": f"Chat request failed: {type(exc).__name__}: {exc}",
+                    }
+                )
                 await emit({"type": "turn_completed", "success": False})
                 continue
             history = result.history
-            await emit({"type": "assistant_message", "content": result.reply or "(no response)"})
+            await emit(
+                {
+                    "type": "assistant_message",
+                    "content": result.reply or "(no response)",
+                }
+            )
             await emit(
                 {
                     "type": "usage",
@@ -1387,7 +1425,9 @@ async def chat_ws(websocket: WebSocket) -> None:
                     **(result.usage or {}),
                 }
             )
-            await emit({"type": "sources", "items": await _build_chat_sources(result.sources)})
+            await emit(
+                {"type": "sources", "items": await _build_chat_sources(result.sources)}
+            )
             await emit({"type": "turn_completed", "success": True})
     except WebSocketDisconnect:
         return
@@ -1428,7 +1468,11 @@ def _worker_health_snapshot() -> tuple[bool, dict]:
             "healthy": stage_ok,
             "age_seconds": round(age_seconds, 1),
         }
-    return healthy, {"ready": True, "stale_after_seconds": stale_after_seconds, "stages": stages}
+    return healthy, {
+        "ready": True,
+        "stale_after_seconds": stale_after_seconds,
+        "stages": stages,
+    }
 
 
 @app.get("/health")

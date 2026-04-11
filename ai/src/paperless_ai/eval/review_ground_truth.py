@@ -43,7 +43,12 @@ async def propose_ground_truth(entry: dict, agent) -> dict:
         }
     except Exception as e:
         log.error(f"Agent failed for {entry.get('original_key')}: {e}")
-        return {"title": None, "correspondent": None, "date": None, "ocr_transcript": ""}
+        return {
+            "title": None,
+            "correspondent": None,
+            "date": None,
+            "ocr_transcript": "",
+        }
 
 
 def prompt_user_confirmation(
@@ -105,7 +110,10 @@ async def review_entry(entry: dict, agent) -> None:
 
     # Prompt for correspondent (always)
     accepted, corr_value = prompt_user_confirmation(
-        key, "correspondent", proposed["correspondent"], entry.get("expected_correspondent")
+        key,
+        "correspondent",
+        proposed["correspondent"],
+        entry.get("expected_correspondent"),
     )
     if not accepted:
         return
@@ -154,7 +162,10 @@ async def main():
     log.info("Loading agent...")
 
     from paperless_ai.core.config import AgentConfig
-    from paperless_ai.agents.smart_graph_agent import SmartDocumentAgent, _select_extraction_strategy
+    from paperless_ai.agents.smart_graph_agent import (
+        SmartDocumentAgent,
+        _select_extraction_strategy,
+    )
 
     config = AgentConfig.from_env()
     strategy = _select_extraction_strategy(config)

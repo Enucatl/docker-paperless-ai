@@ -62,7 +62,9 @@ async def test_build_correspondent_merge_plan_groups_normalized_aliases():
         ],
     )
 
-    plan = await build_correspondent_merge_plan(client, _config(), judge_borderline=False)
+    plan = await build_correspondent_merge_plan(
+        client, _config(), judge_borderline=False
+    )
 
     assert len(plan.approved_clusters) == 1
     cluster = plan.approved_clusters[0]
@@ -71,7 +73,9 @@ async def test_build_correspondent_merge_plan_groups_normalized_aliases():
     assert cluster.planned_document_ids == [101]
     assert cluster.status == "approved"
     assert [item.name for item in plan.orphan_correspondents] == ["Legacy Sender"]
-    assert any(decision.reason == "normalized_exact_match" for decision in plan.candidate_pairs)
+    assert any(
+        decision.reason == "normalized_exact_match" for decision in plan.candidate_pairs
+    )
 
 
 @pytest.mark.asyncio
@@ -87,10 +91,14 @@ async def test_build_correspondent_merge_plan_rejects_person_vs_org_collision():
         ],
     )
 
-    plan = await build_correspondent_merge_plan(client, _config(), judge_borderline=False)
+    plan = await build_correspondent_merge_plan(
+        client, _config(), judge_borderline=False
+    )
 
     assert plan.approved_clusters == []
-    assert any(decision.reason == "entity_shape_conflict" for decision in plan.candidate_pairs)
+    assert any(
+        decision.reason == "entity_shape_conflict" for decision in plan.candidate_pairs
+    )
 
 
 def test_merge_plan_round_trips_json(tmp_path: Path):
@@ -137,7 +145,9 @@ def test_merge_plan_round_trips_json(tmp_path: Path):
     assert reloaded["approved_clusters"][0]["canonical_name"] == "ACME Corporation"
 
 
-def test_merge_plan_uses_stdio_for_dash(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]):
+def test_merge_plan_uses_stdio_for_dash(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+):
     data = {
         "version": 1,
         "generated_at": "2026-04-08T00:00:00+00:00",
@@ -155,7 +165,9 @@ def test_merge_plan_uses_stdio_for_dash(monkeypatch: pytest.MonkeyPatch, capsys:
     plan = load_merge_plan("-")
     write_merge_plan(plan, "-")
 
-    assert json.loads(capsys.readouterr().out)["paperless_url"] == "http://paperless:8000"
+    assert (
+        json.loads(capsys.readouterr().out)["paperless_url"] == "http://paperless:8000"
+    )
 
 
 @pytest.mark.asyncio

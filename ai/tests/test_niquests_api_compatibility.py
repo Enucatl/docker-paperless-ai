@@ -21,8 +21,9 @@ def test_niquests_async_session_close_method():
     session = niquests.AsyncSession()
     # Verify close exists and aclose doesn't
     assert hasattr(session, "close"), "niquests.AsyncSession should have close()"
-    assert not hasattr(session, "aclose"), \
+    assert not hasattr(session, "aclose"), (
         "niquests.AsyncSession should NOT have aclose() (unlike some httpx versions)"
+    )
 
 
 @pytest.mark.asyncio

@@ -13,8 +13,12 @@ async def test_embedding_api_embedder_context_manager():
     """Verify EmbeddingAPIEmbedder routes embedding calls through LiteLLM."""
     with (
         patch.dict(os.environ, {"OPENAI_API_KEY": "dummy"}, clear=False),
-        patch("paperless_ai.search.embedder.niquests.AsyncSession") as mock_session_class,
-        patch("paperless_ai.search.embedder.litellm.aembedding", new_callable=AsyncMock) as mock_aembedding,
+        patch(
+            "paperless_ai.search.embedder.niquests.AsyncSession"
+        ) as mock_session_class,
+        patch(
+            "paperless_ai.search.embedder.litellm.aembedding", new_callable=AsyncMock
+        ) as mock_aembedding,
     ):
         mock_session = AsyncMock()
         mock_session_class.return_value = mock_session
@@ -51,7 +55,9 @@ async def test_embedding_api_embedder_context_manager():
 @pytest.mark.asyncio
 async def test_embedding_api_embedder_aclose_uses_close():
     """Verify EmbeddingAPIEmbedder.aclose() delegates to session.close()."""
-    with patch("paperless_ai.search.embedder.niquests.AsyncSession") as mock_session_class:
+    with patch(
+        "paperless_ai.search.embedder.niquests.AsyncSession"
+    ) as mock_session_class:
         mock_session = AsyncMock()
         mock_session_class.return_value = mock_session
 
@@ -65,7 +71,9 @@ async def test_embedding_api_embedder_aclose_uses_close():
 @pytest.mark.asyncio
 async def test_embedding_api_embedder_health_check():
     """Verify EmbeddingAPIEmbedder.check_connectivity() works with niquests."""
-    with patch("paperless_ai.search.embedder.niquests.AsyncSession") as mock_session_class:
+    with patch(
+        "paperless_ai.search.embedder.niquests.AsyncSession"
+    ) as mock_session_class:
         mock_session = AsyncMock()
         mock_session_class.return_value = mock_session
 

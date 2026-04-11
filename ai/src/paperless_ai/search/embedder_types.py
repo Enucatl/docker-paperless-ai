@@ -16,8 +16,7 @@ class EmbeddingResult:
 class SearchEmbedder(Protocol):
     LOCAL_RERANKER_MODEL_NAME: str
 
-    async def embed_query(self, query: str) -> EmbeddingResult:
-        ...
+    async def embed_query(self, query: str) -> EmbeddingResult: ...
 
     async def rerank(
         self,
@@ -26,5 +25,4 @@ class SearchEmbedder(Protocol):
         *,
         model_name: str,
         normalize: bool = False,
-    ) -> list[float]:
-        ...
+    ) -> list[float]: ...

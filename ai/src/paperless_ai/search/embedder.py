@@ -112,8 +112,12 @@ class LocalLazySearchEmbedder:
                 if self.model is None:
                     from sentence_transformers import SentenceTransformer
 
-                    log.info("Loading SentenceTransformer %s into RAM…", self.MODEL_NAME)
-                    self.model = SentenceTransformer(self.MODEL_NAME, trust_remote_code=True)
+                    log.info(
+                        "Loading SentenceTransformer %s into RAM…", self.MODEL_NAME
+                    )
+                    self.model = SentenceTransformer(
+                        self.MODEL_NAME, trust_remote_code=True
+                    )
         return self.model
 
     def _get_reranker(self, model_name: str):

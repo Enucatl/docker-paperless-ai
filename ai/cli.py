@@ -100,7 +100,9 @@ async def main_async(args: argparse.Namespace) -> None:
     log.info("Embedding: %s @ %s", config.embedding_model, config.embedding_api_base)
     log.info(
         "Pipeline tags: ocr=%r metadata=%r embed=%r",
-        config.tag_ocr, config.tag_metadata, config.tag_embed,
+        config.tag_ocr,
+        config.tag_metadata,
+        config.tag_embed,
     )
     if config.dry_run:
         log.info("DRY RUN mode — no documents will be modified")
@@ -109,6 +111,7 @@ async def main_async(args: argparse.Namespace) -> None:
         log.info("Checking Paperless API connectivity...")
         try:
             from paperless_ai.core.paperless import _raise_for_status
+
             r = await client._client.get("/api/")
             _raise_for_status(r)
             log.info(
@@ -124,6 +127,7 @@ async def main_async(args: argparse.Namespace) -> None:
             log.info("Checking LLM connectivity (model: %s)...", config.metadata_model)
             try:
                 import litellm
+
                 _kwargs: dict = {
                     "model": config.metadata_model,
                     "messages": [{"role": "user", "content": "Reply with OK"}],
@@ -135,7 +139,8 @@ async def main_async(args: argparse.Namespace) -> None:
                 log.info("LLM connectivity OK")
             except Exception as e:
                 log.warning(
-                    "LLM connectivity check failed: %s — will retry during processing", e
+                    "LLM connectivity check failed: %s — will retry during processing",
+                    e,
                 )
 
         if args.purge_notes:
@@ -144,12 +149,16 @@ async def main_async(args: argparse.Namespace) -> None:
 
         if args.eval:
             from paperless_ai.eval.run_evals import run_evals
+
             await run_evals(config, split=args.split)
             return
 
         if args.cleanup_correspondents_plan:
             if args.cleanup_judge_borderline:
-                log.info("Correspondent cleanup: LLM judge enabled (%s)", config.llm_judge_model)
+                log.info(
+                    "Correspondent cleanup: LLM judge enabled (%s)",
+                    config.llm_judge_model,
+                )
             plan = await build_correspondent_merge_plan(
                 client,
                 config,
@@ -246,7 +255,9 @@ async def main_async(args: argparse.Namespace) -> None:
             store = None
 
         # Set up embeddings client (optional — embedding skipped if unavailable)
-        embedder = EmbeddingAPIEmbedder(config.embedding_api_base, config.embedding_model)
+        embedder = EmbeddingAPIEmbedder(
+            config.embedding_api_base, config.embedding_model
+        )
         if not await embedder.check_connectivity():
             log.warning(
                 "Embedding API not reachable at %s — embedding will be skipped",
@@ -260,15 +271,25 @@ async def main_async(args: argparse.Namespace) -> None:
                 # Sequential: OCR → metadata → embed (docs flow through all stages in one run)
                 ocr_s, ocr_f = await run_ocr_batch(client, config, queues)
                 meta_s, meta_f = await run_metadata_batch(
-                    client, config, queues, custom_field_id, ai_summary_field_id, ai_result_field_id
+                    client,
+                    config,
+                    queues,
+                    custom_field_id,
+                    ai_summary_field_id,
+                    ai_result_field_id,
                 )
-                embed_s, embed_f = await run_embed_batch(client, config, queues, store, embedder)
+                embed_s, embed_f = await run_embed_batch(
+                    client, config, queues, store, embedder
+                )
                 _write_heartbeat()
                 log.info(
                     "Done. OCR: %d/%d  Metadata: %d/%d  Embed: %d/%d",
-                    ocr_s, ocr_s + ocr_f,
-                    meta_s, meta_s + meta_f,
-                    embed_s, embed_s + embed_f,
+                    ocr_s,
+                    ocr_s + ocr_f,
+                    meta_s,
+                    meta_s + meta_f,
+                    embed_s,
+                    embed_s + embed_f,
                 )
             else:
                 # Watch mode: three concurrent workers, each polling their queue
@@ -307,7 +328,12 @@ async def main_async(args: argparse.Namespace) -> None:
                     while not is_shutdown_requested():
                         try:
                             s, f = await run_metadata_batch(
-                                client, config, queues, custom_field_id, ai_summary_field_id, ai_result_field_id
+                                client,
+                                config,
+                                queues,
+                                custom_field_id,
+                                ai_summary_field_id,
+                                ai_result_field_id,
                             )
                             if s or f:
                                 log.info("Metadata worker: %d ok / %d failed", s, f)
@@ -323,7 +349,9 @@ async def main_async(args: argparse.Namespace) -> None:
                 async def _embed_worker() -> None:
                     while not is_shutdown_requested():
                         try:
-                            s, f = await run_embed_batch(client, config, queues, store, embedder)
+                            s, f = await run_embed_batch(
+                                client, config, queues, store, embedder
+                            )
                             if s or f:
                                 log.info("Embed worker: %d ok / %d failed", s, f)
                         except Exception as e:

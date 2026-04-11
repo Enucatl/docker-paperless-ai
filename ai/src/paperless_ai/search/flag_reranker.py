@@ -8,13 +8,17 @@ from typing import Sequence
 class FlagReranker:
     """Local cross-encoder reranker with a FlagEmbedding-like interface."""
 
-    def __init__(self, model_name_or_path: str, use_fp16: bool = False, max_length: int = 512):
+    def __init__(
+        self, model_name_or_path: str, use_fp16: bool = False, max_length: int = 512
+    ):
         import torch
         from transformers import AutoModelForSequenceClassification, AutoTokenizer
 
         self._device = "cuda" if torch.cuda.is_available() else "cpu"
         self._tokenizer = AutoTokenizer.from_pretrained(model_name_or_path)
-        self._model = AutoModelForSequenceClassification.from_pretrained(model_name_or_path)
+        self._model = AutoModelForSequenceClassification.from_pretrained(
+            model_name_or_path
+        )
         self._model.eval()
         self._model.to(self._device)
         self._max_length = max_length

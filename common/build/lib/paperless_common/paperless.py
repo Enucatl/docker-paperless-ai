@@ -142,7 +142,9 @@ class PaperlessClient:
         items: list[dict] = []
         page = 1
         while True:
-            r = await self._client.get(endpoint, params={"page": page, "page_size": 250})
+            r = await self._client.get(
+                endpoint, params={"page": page, "page_size": 250}
+            )
             _raise_for_status(r)
             data = r.json()
             items.extend(data["results"])
@@ -268,7 +270,9 @@ class PaperlessClient:
             ]
 
     async def add_note(self, doc_id: int, note: str) -> None:
-        r = await self._client.post(f"/api/documents/{doc_id}/notes/", json={"note": note})
+        r = await self._client.post(
+            f"/api/documents/{doc_id}/notes/", json={"note": note}
+        )
         _raise_for_status(r)
 
     async def list_notes(self, doc_id: int) -> list[dict]:
@@ -318,12 +322,18 @@ class PaperlessClient:
     async def count_documents_for_correspondent(self, correspondent_id: int) -> int:
         r = await self._client.get(
             "/api/documents/",
-            params={"correspondent__id": correspondent_id, "page_size": 1, "fields": "id"},
+            params={
+                "correspondent__id": correspondent_id,
+                "page_size": 1,
+                "fields": "id",
+            },
         )
         _raise_for_status(r)
         return int(r.json().get("count", 0))
 
-    async def get_or_create_custom_field(self, name: str, data_type: str = "date") -> int:
+    async def get_or_create_custom_field(
+        self, name: str, data_type: str = "date"
+    ) -> int:
         """Return custom field ID by name, creating it if missing."""
         # Page through all fields — the ?name= filter is not reliable in all paperless versions
         page = 1
@@ -423,10 +433,14 @@ class PaperlessClient:
         tags = await self._get_all_tags()
         return {
             "correspondents": sorted(
-                label for item in correspondents if (label := self._resource_label(item))
+                label
+                for item in correspondents
+                if (label := self._resource_label(item))
             ),
             "document_types": sorted(
-                label for item in document_types if (label := self._resource_label(item))
+                label
+                for item in document_types
+                if (label := self._resource_label(item))
             ),
             "storage_paths": sorted(
                 label for item in storage_paths if (label := self._resource_label(item))
@@ -452,13 +466,19 @@ class PaperlessClient:
             "title": doc.get("title") or "Untitled",
             "created": doc.get("created"),
             "correspondent_name": (
-                await self.get_correspondent_name(correspondent_id) if correspondent_id else None
+                await self.get_correspondent_name(correspondent_id)
+                if correspondent_id
+                else None
             ),
             "document_type_name": (
-                await self.get_document_type_name(document_type_id) if document_type_id else None
+                await self.get_document_type_name(document_type_id)
+                if document_type_id
+                else None
             ),
             "storage_path_name": (
-                await self.get_storage_path_name(storage_path_id) if storage_path_id else None
+                await self.get_storage_path_name(storage_path_id)
+                if storage_path_id
+                else None
             ),
             "tag_names": await self.get_tag_names(tag_ids),
             "archive_serial_number": doc.get("archive_serial_number"),
@@ -570,7 +590,9 @@ class PaperlessClient:
                 "paperless_ai.search.filter.correspondent": correspondent,
                 "paperless_ai.search.filter.document_type": document_type,
                 "paperless_ai.search.filter.storage_path": storage_path,
-                "paperless_ai.search.filter.year": str(year) if year is not None else None,
+                "paperless_ai.search.filter.year": str(year)
+                if year is not None
+                else None,
                 "paperless_ai.search.filter.tag_count": len(tags or []),
             },
         ) as span:
@@ -620,7 +642,9 @@ class PaperlessClient:
             return doc_ids
 
     async def _get_all_workflows(self) -> list[dict]:
-        return await self._get_all_objects("/api/workflows/", "_workflows_cache", force=False)
+        return await self._get_all_objects(
+            "/api/workflows/", "_workflows_cache", force=False
+        )
 
     async def ensure_workflow(self, name: str, payload: dict) -> int:
         """Create or update a Paperless workflow by name."""
@@ -704,7 +728,9 @@ class PaperlessClient:
         }
 
         added_id = await self.ensure_workflow(added_payload["name"], added_payload)
-        updated_id = await self.ensure_workflow(updated_payload["name"], updated_payload)
+        updated_id = await self.ensure_workflow(
+            updated_payload["name"], updated_payload
+        )
         return added_id, updated_id
 
     async def update_tags(self, doc: dict, remove_id: int, add_id: int | None) -> None:

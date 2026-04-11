@@ -12,6 +12,7 @@ from pydantic import BaseModel, Field
 
 class SampleOutput(BaseModel):
     """Sample structured output for testing."""
+
     title: str = Field(..., description="Document title")
     date: str = Field(..., description="Document date in YYYY-MM-DD format")
     correspondent: str | None = Field(None, description="Organization or person name")
@@ -30,7 +31,9 @@ async def test_qwen_response_schema_support():
     print(f"\n=== Testing {model} ===")
 
     # Check what litellm thinks the model supports
-    print(f"\n1. litellm.supports_response_schema('{model}'): {litellm.supports_response_schema(model=model)}")
+    print(
+        f"\n1. litellm.supports_response_schema('{model}'): {litellm.supports_response_schema(model=model)}"
+    )
 
     supported_params = litellm.get_supported_openai_params(model=model) or []
     print(f"2. Supported OpenAI params: {supported_params}")
@@ -44,7 +47,10 @@ async def test_qwen_response_schema_support():
             api_base=api_base,
             messages=[
                 {"role": "system", "content": "Extract metadata from this invoice."},
-                {"role": "user", "content": "Invoice from Acme Corp dated 2024-01-15 for $100."},
+                {
+                    "role": "user",
+                    "content": "Invoice from Acme Corp dated 2024-01-15 for $100.",
+                },
             ],
             response_format=SampleOutput,
             max_tokens=100,
@@ -63,8 +69,14 @@ async def test_qwen_response_schema_support():
                 model=model,
                 api_base=api_base,
                 messages=[
-                    {"role": "system", "content": "Extract metadata as JSON: {\"title\": \"...\", \"date\": \"YYYY-MM-DD\", \"correspondent\": \"...\"}"},
-                    {"role": "user", "content": "Invoice from Acme Corp dated 2024-01-15 for $100."},
+                    {
+                        "role": "system",
+                        "content": 'Extract metadata as JSON: {"title": "...", "date": "YYYY-MM-DD", "correspondent": "..."}',
+                    },
+                    {
+                        "role": "user",
+                        "content": "Invoice from Acme Corp dated 2024-01-15 for $100.",
+                    },
                 ],
                 response_format={"type": "json_object"},
                 max_tokens=100,
@@ -74,7 +86,9 @@ async def test_qwen_response_schema_support():
             print(f"   Content: {response.choices[0].message.content}")
         except Exception as e2:
             print(f"   ✗ response_format='json_object' also failed: {e2}")
-            print(f"\n   Conclusion: Qwen doesn't support structured output constraints.")
+            print(
+                f"\n   Conclusion: Qwen doesn't support structured output constraints."
+            )
             print(f"   You'll need to parse unstructured text output instead.")
 
 

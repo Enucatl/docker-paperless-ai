@@ -73,9 +73,13 @@ def build_qdrant_filter(filters: SearchFilters) -> Filter | None:
             )
         )
     if filters.tags:
-        must_conditions.append(FieldCondition(key="tags", match=MatchAny(any=filters.tags)))
+        must_conditions.append(
+            FieldCondition(key="tags", match=MatchAny(any=filters.tags))
+        )
     if filters.year:
-        must_conditions.append(FieldCondition(key="year", match=MatchValue(value=str(filters.year))))
+        must_conditions.append(
+            FieldCondition(key="year", match=MatchValue(value=str(filters.year)))
+        )
     return Filter(must=must_conditions) if must_conditions else None
 
 
@@ -153,7 +157,9 @@ async def dense_search(
             span,
             **{
                 "paperless_ai.search.dense_chunk_count": len(candidates),
-                "paperless_ai.search.dense_doc_count": len(_doc_ids_from_chunks(candidates)),
+                "paperless_ai.search.dense_doc_count": len(
+                    _doc_ids_from_chunks(candidates)
+                ),
             },
         )
         return candidates
@@ -273,11 +279,17 @@ async def local_rerank(
             )
         except Exception as exc:
             log.warning("Local rerank failed: %s", exc)
-            set_span_attributes(span, **{"paperless_ai.search.local_rerank_failed": True})
+            set_span_attributes(
+                span, **{"paperless_ai.search.local_rerank_failed": True}
+            )
             return candidates
-        ranked_indices = sorted(range(len(candidates)), key=lambda idx: scores[idx], reverse=True)
+        ranked_indices = sorted(
+            range(len(candidates)), key=lambda idx: scores[idx], reverse=True
+        )
         reranked = [candidates[idx] for idx in ranked_indices]
-        set_span_attributes(span, **{"paperless_ai.search.local_rerank_output_count": len(reranked)})
+        set_span_attributes(
+            span, **{"paperless_ai.search.local_rerank_output_count": len(reranked)}
+        )
         return reranked
 
 
@@ -288,7 +300,9 @@ def _prune_precision_chunks(candidates: list[ChunkCandidate]) -> list[ChunkCandi
     return candidates[:keep_count]
 
 
-def _dedupe_documents(candidates: list[ChunkCandidate]) -> tuple[list[int], dict[int, str]]:
+def _dedupe_documents(
+    candidates: list[ChunkCandidate],
+) -> tuple[list[int], dict[int, str]]:
     doc_ids: list[int] = []
     chunk_map: dict[int, str] = {}
     seen: set[int] = set()
@@ -355,12 +369,16 @@ async def hybrid_retrieve(
             raise dense_result
 
         dense_chunks: list[ChunkCandidate] = dense_result
-        keyword_ids: list[int] = keyword_result if not isinstance(keyword_result, BaseException) else []
+        keyword_ids: list[int] = (
+            keyword_result if not isinstance(keyword_result, BaseException) else []
+        )
         if isinstance(keyword_result, BaseException):
             set_span_attributes(span, **{"paperless_ai.search.keyword_failed": True})
 
         dense_ids = _doc_ids_from_chunks(dense_chunks)
-        fused_ids = rrf_fuse(dense_ids, keyword_ids, k=rrf_k) if keyword_ids else dense_ids
+        fused_ids = (
+            rrf_fuse(dense_ids, keyword_ids, k=rrf_k) if keyword_ids else dense_ids
+        )
         set_span_attributes(
             span,
             **{
@@ -372,22 +390,30 @@ async def hybrid_retrieve(
         if not fused_ids:
             return [], {}
 
-        keyword_only_doc_ids = [doc_id for doc_id in fused_ids if doc_id not in set(dense_ids)]
+        keyword_only_doc_ids = [
+            doc_id for doc_id in fused_ids if doc_id not in set(dense_ids)
+        ]
         keyword_chunks = await fetch_document_chunks(
             qdrant_url,
             keyword_only_doc_ids,
             filters=resolved_filters,
             qdrant_client=qdrant_client,
         )
-        chunk_candidates = _order_chunk_candidates(fused_ids, dense_chunks, keyword_chunks)
-        bounded_rerank_candidates = min(MAX_RERANK_CANDIDATES, max(1, rerank_candidates))
+        chunk_candidates = _order_chunk_candidates(
+            fused_ids, dense_chunks, keyword_chunks
+        )
+        bounded_rerank_candidates = min(
+            MAX_RERANK_CANDIDATES, max(1, rerank_candidates)
+        )
         bounded_chunk_candidates = chunk_candidates[:bounded_rerank_candidates]
         set_span_attributes(
             span,
             **{
                 "paperless_ai.search.chunk_candidate_count": len(chunk_candidates),
                 "paperless_ai.search.rerank_candidate_limit": bounded_rerank_candidates,
-                "paperless_ai.search.rerank_candidate_count": len(bounded_chunk_candidates),
+                "paperless_ai.search.rerank_candidate_count": len(
+                    bounded_chunk_candidates
+                ),
             },
         )
         if not bounded_chunk_candidates:
@@ -400,7 +426,8 @@ async def hybrid_retrieve(
             set_span_attributes(
                 span,
                 **{
-                    "paperless_ai.search.precision_pruned_count": before_prune - len(reranked_chunks),
+                    "paperless_ai.search.precision_pruned_count": before_prune
+                    - len(reranked_chunks),
                     "paperless_ai.search.post_prune_chunk_count": len(reranked_chunks),
                 },
             )

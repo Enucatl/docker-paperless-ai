@@ -14,7 +14,12 @@ from paperless_ai.core.paperless import PaperlessClient
 from paperless_ai.core.telemetry import set_span_attributes, start_span
 from paperless_ai.search.chat_state import ChatState
 from paperless_ai.search.embedder_types import SearchEmbedder
-from paperless_ai.search.tools import TOOL_SCHEMAS, ToolExecutionResult, execute_tool_call_detailed, parse_tool_arguments
+from paperless_ai.search.tools import (
+    TOOL_SCHEMAS,
+    ToolExecutionResult,
+    execute_tool_call_detailed,
+    parse_tool_arguments,
+)
 
 SYSTEM_PROMPT = (
     "You are an AI assistant for a Paperless-ngx repository. "
@@ -71,7 +76,9 @@ def _extract_usage(response: Any) -> dict[str, int] | None:
     normalized = {
         "prompt_tokens": int(prompt_tokens or 0),
         "completion_tokens": int(completion_tokens or 0),
-        "total_tokens": int(total_tokens or (prompt_tokens or 0) + (completion_tokens or 0)),
+        "total_tokens": int(
+            total_tokens or (prompt_tokens or 0) + (completion_tokens or 0)
+        ),
     }
     return normalized
 
@@ -104,7 +111,9 @@ class ChatCopilot:
         self._qdrant_url = qdrant_url
         self._qdrant_client = qdrant_client
 
-    async def _emit(self, callback: EventCallback | None, event: dict[str, Any]) -> None:
+    async def _emit(
+        self, callback: EventCallback | None, event: dict[str, Any]
+    ) -> None:
         if callback is not None:
             await callback(event)
 
@@ -125,9 +134,13 @@ class ChatCopilot:
         return kwargs
 
     @staticmethod
-    def _merge_source_flags(sources: dict[int, dict[str, bool]], result: ToolExecutionResult) -> None:
+    def _merge_source_flags(
+        sources: dict[int, dict[str, bool]], result: ToolExecutionResult
+    ) -> None:
         for ref in result.source_refs:
-            state = sources.setdefault(ref.doc_id, {"matched": False, "inspected": False})
+            state = sources.setdefault(
+                ref.doc_id, {"matched": False, "inspected": False}
+            )
             if ref.source_type == "search":
                 state["matched"] = True
             if ref.source_type == "read":
@@ -152,13 +165,21 @@ class ChatCopilot:
             if history:
                 messages.extend(history)
             messages.append({"role": "user", "content": user_message})
-            aggregated_usage = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+            aggregated_usage = {
+                "prompt_tokens": 0,
+                "completion_tokens": 0,
+                "total_tokens": 0,
+            }
             sources: dict[int, dict[str, bool]] = {}
 
             while True:
                 await self._emit(
                     event_callback,
-                    {"type": "status", "phase": "model", "content": "Thinking about the next step."},
+                    {
+                        "type": "status",
+                        "phase": "model",
+                        "content": "Thinking about the next step.",
+                    },
                 )
                 response = await litellm.acompletion(**self._model_kwargs(messages))
                 usage = _extract_usage(response)
@@ -194,14 +215,22 @@ class ChatCopilot:
                     turn_span,
                     **{
                         "paperless_ai.chat.tool_call_count": len(tool_calls),
-                        "paperless_ai.chat.prompt_tokens": aggregated_usage["prompt_tokens"],
-                        "paperless_ai.chat.completion_tokens": aggregated_usage["completion_tokens"],
-                        "paperless_ai.chat.total_tokens": aggregated_usage["total_tokens"],
+                        "paperless_ai.chat.prompt_tokens": aggregated_usage[
+                            "prompt_tokens"
+                        ],
+                        "paperless_ai.chat.completion_tokens": aggregated_usage[
+                            "completion_tokens"
+                        ],
+                        "paperless_ai.chat.total_tokens": aggregated_usage[
+                            "total_tokens"
+                        ],
                     },
                 )
                 if not tool_calls:
                     assistant_text = str(assistant_message.get("content") or "").strip()
-                    total_usage = aggregated_usage if aggregated_usage["total_tokens"] else None
+                    total_usage = (
+                        aggregated_usage if aggregated_usage["total_tokens"] else None
+                    )
                     set_span_attributes(
                         turn_span,
                         **{
@@ -252,8 +281,12 @@ class ChatCopilot:
                             **{
                                 "paperless_ai.tool.duration_ms": duration_ms,
                                 "paperless_ai.tool.summary": result.summary,
-                                "paperless_ai.tool.source_ref_count": len(result.source_refs),
-                                "paperless_ai.tool.preview_length": len(result.preview or ""),
+                                "paperless_ai.tool.source_ref_count": len(
+                                    result.source_refs
+                                ),
+                                "paperless_ai.tool.preview_length": len(
+                                    result.preview or ""
+                                ),
                             },
                         )
                     self._merge_source_flags(sources, result)

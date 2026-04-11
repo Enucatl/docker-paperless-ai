@@ -23,7 +23,12 @@ def test_route_tools_goes_to_tool_node_when_tool_calls_present():
         "messages": [
             {
                 "role": "assistant",
-                "tool_calls": [{"id": "call_1", "function": {"name": "search_documents", "arguments": "{}"}}],
+                "tool_calls": [
+                    {
+                        "id": "call_1",
+                        "function": {"name": "search_documents", "arguments": "{}"},
+                    }
+                ],
             }
         ]
     }
@@ -31,7 +36,10 @@ def test_route_tools_goes_to_tool_node_when_tool_calls_present():
 
 
 def test_route_tools_ends_when_no_tool_calls():
-    assert route_tools({"messages": [{"role": "assistant", "content": "done"}]}) == "__end__"
+    assert (
+        route_tools({"messages": [{"role": "assistant", "content": "done"}]})
+        == "__end__"
+    )
 
 
 def test_parse_tool_arguments_accepts_json_strings_and_dicts():
@@ -78,7 +86,10 @@ async def test_search_documents_formats_qdrant_hits():
 
     with (
         patch("paperless_ai.search.tools.AsyncQdrantClient", return_value=qdrant),
-        patch("paperless_ai.search.tools.hybrid_retrieve", AsyncMock(return_value=([42], {42: "Line item one and line item two"}))),
+        patch(
+            "paperless_ai.search.tools.hybrid_retrieve",
+            AsyncMock(return_value=([42], {42: "Line item one and line item two"})),
+        ),
     ):
         result = await search_documents(
             "invoice",
@@ -111,7 +122,9 @@ async def test_search_documents_uses_chunk_map_when_scroll_payload_missing():
         patch("paperless_ai.search.tools.AsyncQdrantClient", return_value=qdrant),
         patch(
             "paperless_ai.search.tools.hybrid_retrieve",
-            AsyncMock(return_value=([99], {99: "Family admission tickets purchased online"})),
+            AsyncMock(
+                return_value=([99], {99: "Family admission tickets purchased online"})
+            ),
         ),
     ):
         result = await search_documents(
@@ -141,7 +154,10 @@ async def test_search_documents_reuses_shared_qdrant_client():
 
     with (
         patch("paperless_ai.search.tools.AsyncQdrantClient") as qdrant_cls,
-        patch("paperless_ai.search.tools.hybrid_retrieve", AsyncMock(return_value=([42], {42: "hello"}))),
+        patch(
+            "paperless_ai.search.tools.hybrid_retrieve",
+            AsyncMock(return_value=([42], {42: "hello"})),
+        ),
     ):
         result = await search_documents(
             "invoice",
@@ -249,7 +265,9 @@ async def test_search_documents_recall_requires_explicit_limit():
 
 @pytest.mark.asyncio
 async def test_search_documents_rejects_invalid_mode_without_retrieval():
-    with patch("paperless_ai.search.tools.hybrid_retrieve", AsyncMock()) as hybrid_retrieve_mock:
+    with patch(
+        "paperless_ai.search.tools.hybrid_retrieve", AsyncMock()
+    ) as hybrid_retrieve_mock:
         result = await search_documents(
             "youtube premium",
             embedder=AsyncMock(),
@@ -260,7 +278,10 @@ async def test_search_documents_rejects_invalid_mode_without_retrieval():
             limit=20,
         )
 
-    assert result.summary == "Invalid search mode 'recall,precision'. Allowed values: precision, recall."
+    assert (
+        result.summary
+        == "Invalid search mode 'recall,precision'. Allowed values: precision, recall."
+    )
     hybrid_retrieve_mock.assert_not_called()
 
 
@@ -280,7 +301,9 @@ async def test_execute_tool_call_detailed_recall_requires_explicit_limit():
 
 @pytest.mark.asyncio
 async def test_execute_tool_call_detailed_rejects_invalid_mode():
-    with patch("paperless_ai.search.tools.hybrid_retrieve", AsyncMock()) as hybrid_retrieve_mock:
+    with patch(
+        "paperless_ai.search.tools.hybrid_retrieve", AsyncMock()
+    ) as hybrid_retrieve_mock:
         result = await execute_tool_call_detailed(
             "search_documents",
             {"query": "youtube premium", "mode": "recall,precision"},
@@ -290,7 +313,10 @@ async def test_execute_tool_call_detailed_rejects_invalid_mode():
             config=MagicMock(),
         )
 
-    assert result.content == "Invalid search mode 'recall,precision'. Allowed values: precision, recall."
+    assert (
+        result.content
+        == "Invalid search mode 'recall,precision'. Allowed values: precision, recall."
+    )
     hybrid_retrieve_mock.assert_not_called()
 
 
@@ -334,13 +360,21 @@ async def test_chat_copilot_run_turn_emits_events_and_aggregates_usage():
             }
         )
     ]
-    first_response.usage = {"prompt_tokens": 10, "completion_tokens": 2, "total_tokens": 12}
+    first_response.usage = {
+        "prompt_tokens": 10,
+        "completion_tokens": 2,
+        "total_tokens": 12,
+    }
 
     second_response = MagicMock()
     second_response.choices = [
         MagicMock(message={"role": "assistant", "content": "Answer with Doc 42 cited."})
     ]
-    second_response.usage = {"prompt_tokens": 20, "completion_tokens": 4, "total_tokens": 24}
+    second_response.usage = {
+        "prompt_tokens": 20,
+        "completion_tokens": 4,
+        "total_tokens": 24,
+    }
 
     events = []
 
@@ -348,7 +382,10 @@ async def test_chat_copilot_run_turn_emits_events_and_aggregates_usage():
         events.append(event)
 
     with (
-        patch("paperless_ai.search.chat_agent.litellm.acompletion", side_effect=[first_response, second_response]),
+        patch(
+            "paperless_ai.search.chat_agent.litellm.acompletion",
+            side_effect=[first_response, second_response],
+        ),
         patch(
             "paperless_ai.search.chat_agent.execute_tool_call_detailed",
             AsyncMock(
@@ -365,10 +402,16 @@ async def test_chat_copilot_run_turn_emits_events_and_aggregates_usage():
 
     assert result.reply == "Answer with Doc 42 cited."
     assert result.sources == {42: {"matched": True, "inspected": False}}
-    assert result.usage == {"prompt_tokens": 30, "completion_tokens": 6, "total_tokens": 36}
+    assert result.usage == {
+        "prompt_tokens": 30,
+        "completion_tokens": 6,
+        "total_tokens": 36,
+    }
     assert any(event["type"] == "tool_call_started" for event in events)
     assert any(event["type"] == "tool_call_completed" for event in events)
     assert any(
-        event["type"] == "usage" and event["scope"] == "step" and event["model"] == "openai/chat-model"
+        event["type"] == "usage"
+        and event["scope"] == "step"
+        and event["model"] == "openai/chat-model"
         for event in events
     )

@@ -121,11 +121,13 @@ class TestStructuredOutputStrategy:
     @pytest.mark.asyncio
     async def test_extract_successful_json(self, strategy, mock_config):
         """Successful LLM response with valid JSON."""
-        raw_response = json.dumps({
-            "title": "Test Invoice",
-            "date": "2024-01-15",
-            "correspondent": "Acme Corp",
-        })
+        raw_response = json.dumps(
+            {
+                "title": "Test Invoice",
+                "date": "2024-01-15",
+                "correspondent": "Acme Corp",
+            }
+        )
         mock_message = MagicMock()
         mock_message.content = raw_response
         mock_response = MagicMock()
@@ -159,10 +161,12 @@ class TestStructuredOutputStrategy:
     @pytest.mark.asyncio
     async def test_extract_missing_fields(self, strategy, mock_config):
         """LLM response with only some fields should handle gracefully."""
-        raw_response = json.dumps({
-            "title": "Invoice",
-            # date and correspondent missing
-        })
+        raw_response = json.dumps(
+            {
+                "title": "Invoice",
+                # date and correspondent missing
+            }
+        )
         mock_message = MagicMock()
         mock_message.content = raw_response
         mock_response = MagicMock()
@@ -210,11 +214,13 @@ class TestNuExtractStrategy:
     async def test_extract_successful(self, strategy, mock_config):
         """Successful NuExtract response with valid JSON."""
         # NuExtract returns a specific template structure
-        raw_response = json.dumps({
-            "title_summarizing_subject_clear_concise_descriptive": "Test Invoice",
-            "document_date": "2024-01-15",
-            "issuing_organization_or_sender": "Acme Corp",
-        })
+        raw_response = json.dumps(
+            {
+                "title_summarizing_subject_clear_concise_descriptive": "Test Invoice",
+                "document_date": "2024-01-15",
+                "issuing_organization_or_sender": "Acme Corp",
+            }
+        )
         mock_message = MagicMock()
         mock_message.content = raw_response
         mock_response = MagicMock()
@@ -231,10 +237,12 @@ class TestNuExtractStrategy:
     @pytest.mark.asyncio
     async def test_extract_missing_template_fields(self, strategy, mock_config):
         """NuExtract with missing template fields should handle gracefully."""
-        raw_response = json.dumps({
-            "title_summarizing_subject_clear_concise_descriptive": "Test",
-            # Missing date and correspondent
-        })
+        raw_response = json.dumps(
+            {
+                "title_summarizing_subject_clear_concise_descriptive": "Test",
+                # Missing date and correspondent
+            }
+        )
         mock_message = MagicMock()
         mock_message.content = raw_response
         mock_response = MagicMock()

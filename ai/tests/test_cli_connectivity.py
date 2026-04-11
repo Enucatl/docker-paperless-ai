@@ -20,7 +20,9 @@ async def test_cli_paperless_connectivity_check_without_invalid_params():
     - Calls client._client.get("/api/")
     - Does NOT use follow_redirects (httpx param) or any other invalid params
     """
-    with patch("paperless_ai.core.paperless.niquests.AsyncSession") as mock_session_class:
+    with patch(
+        "paperless_ai.core.paperless.niquests.AsyncSession"
+    ) as mock_session_class:
         mock_session = AsyncMock()
         mock_session_class.return_value = mock_session
 
@@ -40,8 +42,9 @@ async def test_cli_paperless_connectivity_check_without_invalid_params():
 
             # 2. The call was made without invalid parameters
             call_kwargs = mock_session.get.call_args[1]
-            assert "follow_redirects" not in call_kwargs, \
+            assert "follow_redirects" not in call_kwargs, (
                 "follow_redirects is an httpx parameter; niquests doesn't support it"
+            )
 
             # 3. Only the path was passed (no extra params)
             call_args = mock_session.get.call_args[0]
@@ -52,7 +55,9 @@ async def test_cli_paperless_connectivity_check_without_invalid_params():
 @pytest.mark.asyncio
 async def test_cli_connectivity_check_verifies_version_header():
     """Verify the CLI can extract version info from Paperless response headers."""
-    with patch("paperless_ai.core.paperless.niquests.AsyncSession") as mock_session_class:
+    with patch(
+        "paperless_ai.core.paperless.niquests.AsyncSession"
+    ) as mock_session_class:
         mock_session = AsyncMock()
         mock_session_class.return_value = mock_session
 
@@ -71,7 +76,9 @@ async def test_cli_connectivity_check_verifies_version_header():
 @pytest.mark.asyncio
 async def test_cli_connectivity_check_handles_api_errors():
     """Verify the CLI connectivity check can handle API errors gracefully."""
-    with patch("paperless_ai.core.paperless.niquests.AsyncSession") as mock_session_class:
+    with patch(
+        "paperless_ai.core.paperless.niquests.AsyncSession"
+    ) as mock_session_class:
         mock_session = AsyncMock()
         mock_session_class.return_value = mock_session
 

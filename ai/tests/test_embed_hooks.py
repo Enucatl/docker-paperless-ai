@@ -31,6 +31,7 @@ def reset_hook_cache(monkeypatch):
 @pytest.fixture
 def meta():
     """Meta object with all fields populated."""
+
     class _Meta:
         title = "Test Invoice"
         correspondent = "Acme Corp"
@@ -43,6 +44,7 @@ def meta():
 @pytest.fixture
 def meta_none_fields():
     """Meta object where all fields are None."""
+
     class _Meta:
         title = None
         correspondent = None
@@ -142,7 +144,9 @@ async def test_tier2_calls_llm_once_per_chunk(monkeypatch, meta, config_with_sit
         assert "\n\n" in result
 
 
-async def test_tier2_context_prepended_to_chunk(monkeypatch, meta, config_with_situation):
+async def test_tier2_context_prepended_to_chunk(
+    monkeypatch, meta, config_with_situation
+):
     mock_response = MagicMock()
     mock_response.choices[0].message.content = "This is the context."
     monkeypatch.setattr("litellm.acompletion", AsyncMock(return_value=mock_response))
@@ -187,24 +191,32 @@ async def test_tier2_context_chars_truncates_full_text(monkeypatch, meta):
 # ---------------------------------------------------------------------------
 
 
-async def test_custom_hook_is_called_with_batch_signature(monkeypatch, tmp_path, meta, config):
+async def test_custom_hook_is_called_with_batch_signature(
+    monkeypatch, tmp_path, meta, config
+):
     hook_file = tmp_path / "my_hook.py"
-    hook_file.write_text(textwrap.dedent("""\
+    hook_file.write_text(
+        textwrap.dedent("""\
         async def situate_chunks(chunks, full_text, meta, config):
             return [f"CUSTOM:{c}" for c in chunks]
-    """))
+    """)
+    )
     monkeypatch.setenv("EMBED_HOOK_FILE", str(hook_file))
 
     results = await situate_chunks(["hello", "world"], "doc", meta, config)
     assert results == ["CUSTOM:hello", "CUSTOM:world"]
 
 
-async def test_custom_hook_receives_meta_and_config(monkeypatch, tmp_path, meta, config):
+async def test_custom_hook_receives_meta_and_config(
+    monkeypatch, tmp_path, meta, config
+):
     hook_file = tmp_path / "inspect_hook.py"
-    hook_file.write_text(textwrap.dedent("""\
+    hook_file.write_text(
+        textwrap.dedent("""\
         async def situate_chunks(chunks, full_text, meta, config):
             return [f"{meta.title}|{c}" for c in chunks]
-    """))
+    """)
+    )
     monkeypatch.setenv("EMBED_HOOK_FILE", str(hook_file))
 
     results = await situate_chunks(["body"], "doc", meta, config)
@@ -216,10 +228,12 @@ async def test_custom_hook_takes_precedence_over_situation_model(
 ):
     """Custom hook beats situation_model — explicit override wins."""
     hook_file = tmp_path / "override_hook.py"
-    hook_file.write_text(textwrap.dedent("""\
+    hook_file.write_text(
+        textwrap.dedent("""\
         async def situate_chunks(chunks, full_text, meta, config):
             return [f"HOOK:{c}" for c in chunks]
-    """))
+    """)
+    )
     monkeypatch.setenv("EMBED_HOOK_FILE", str(hook_file))
     mock_llm = AsyncMock()
     monkeypatch.setattr("litellm.acompletion", mock_llm)
@@ -240,7 +254,9 @@ async def test_missing_hook_file_falls_back_to_tier1(monkeypatch, caplog, meta, 
     assert any("does not exist" in r.message for r in caplog.records)
 
 
-async def test_hook_missing_function_falls_back_to_tier1(monkeypatch, tmp_path, caplog, meta, config):
+async def test_hook_missing_function_falls_back_to_tier1(
+    monkeypatch, tmp_path, caplog, meta, config
+):
     hook_file = tmp_path / "no_fn.py"
     hook_file.write_text("# nothing here\n")
     monkeypatch.setenv("EMBED_HOOK_FILE", str(hook_file))
@@ -252,7 +268,9 @@ async def test_hook_missing_function_falls_back_to_tier1(monkeypatch, tmp_path, 
     assert any(r.exc_info for r in caplog.records)
 
 
-async def test_hook_syntax_error_falls_back_to_tier1(monkeypatch, tmp_path, caplog, meta, config):
+async def test_hook_syntax_error_falls_back_to_tier1(
+    monkeypatch, tmp_path, caplog, meta, config
+):
     hook_file = tmp_path / "bad_syntax.py"
     hook_file.write_text("def situate_chunks(\n  # unclosed\n")
     monkeypatch.setenv("EMBED_HOOK_FILE", str(hook_file))
@@ -263,7 +281,9 @@ async def test_hook_syntax_error_falls_back_to_tier1(monkeypatch, tmp_path, capl
     assert "Title: Test Invoice" in results[0]
 
 
-async def test_hook_runtime_error_at_import_falls_back(monkeypatch, tmp_path, caplog, meta, config):
+async def test_hook_runtime_error_at_import_falls_back(
+    monkeypatch, tmp_path, caplog, meta, config
+):
     hook_file = tmp_path / "explodes.py"
     hook_file.write_text("raise RuntimeError('boom')\n")
     monkeypatch.setenv("EMBED_HOOK_FILE", str(hook_file))
@@ -281,13 +301,16 @@ async def test_hook_runtime_error_at_import_falls_back(monkeypatch, tmp_path, ca
 
 def test_hook_file_loaded_only_once(monkeypatch, tmp_path):
     hook_file = tmp_path / "counted.py"
-    hook_file.write_text(textwrap.dedent("""\
+    hook_file.write_text(
+        textwrap.dedent("""\
         async def situate_chunks(chunks, full_text, meta, config):
             return chunks
-    """))
+    """)
+    )
     monkeypatch.setenv("EMBED_HOOK_FILE", str(hook_file))
 
     import importlib.util
+
     real_spec = importlib.util.spec_from_file_location
     call_count = 0
 
@@ -299,6 +322,7 @@ def test_hook_file_loaded_only_once(monkeypatch, tmp_path):
     monkeypatch.setattr(importlib.util, "spec_from_file_location", counting_spec)
 
     from paperless_ai.core.hooks import _resolve_hook
+
     _resolve_hook()
     _resolve_hook()
     _resolve_hook()
@@ -310,6 +334,7 @@ def test_no_file_cache_state(monkeypatch):
     monkeypatch.delenv("EMBED_HOOK_FILE", raising=False)
 
     from paperless_ai.core.hooks import _resolve_hook
+
     result1 = _resolve_hook()
     result2 = _resolve_hook()
 

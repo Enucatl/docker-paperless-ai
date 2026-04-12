@@ -1,15 +1,36 @@
-# Paperless AI Portfolio Notes
+# Case Study: AI Document Copilot for paperless-ngx
 
-This section explains the project as a case study instead of a setup
-manual. The root [README](../../README.md) stays focused on running and
-operating the stack; these pages focus on the product problem, model choices,
-retrieval design, evaluation workflow, and production engineering tradeoffs.
+![Chat demo video](assets/chat-demo.webm)
 
-## Start Here
+This project turns a paperless-ngx archive into an AI-searchable document
+system without patching paperless-ngx itself. New documents are imported through
+the normal Paperless flow, then an external AI service re-OCRs the pages,
+extracts structured metadata, indexes the content for semantic retrieval, and
+serves a browser copilot (and API endpoint) that can search, inspect, and
+answer questions over the archive with a modern agentic architecture.
 
-- [Case study: AI document copilot for paperless-ngx](case-study.md) is the
-  high-level overview. It emphasizes the problem framing, architecture,
-  business decisions.
-- [Technical deep dive: ingestion, RAG, and observability](rag-deep-dive.md)
-  is the ML engineering write-up. It goes deeper on retrieval, agent tools,
-  evaluation, local model tradeoffs and observability.
+It supports both cloud and self-hosted
+models, and makes model quality visible through evaluation and tracing.
+
+The example query asks the copilot to search final tax bills and summarize how
+much was paid in federal taxes since 2022. The Gemini 3.1 flash-lite chat model
+inspects available metadata, searches through the hybrid retrieval pipeline,
+uses local `bge-reranker-v2-m3` reranking, reads three documents in full, and
+then returns a correct comprehensive answer. This used about 67k tokens
+and cost about one cent.
+
+![Trace detail for the tax question chat turn](assets/tax-query-trace.png)
+
+## What It Does
+
+- OCRs imported documents with a vision model and writes the transcript back
+  to Paperless.
+- Extracts title, date, correspondent, summary, and structured debug output via
+  a metadata LLM.
+- Indexes document chunks in Qdrant with dense `bge-m3` vectors.
+- Provides a `/search` endpoint for ranked document IDs.
+- Provides a browser chat copilot that can call tools, search the archive, read
+  source text, and return source-backed answers.
+- Leverages modern frameworks to provide cloud and local model compatibility (LiteLLM) and first-class observability and evaluation (Arize Phoenix)
+
+Learn more in the [deep dive](rag-deep-dive.md)

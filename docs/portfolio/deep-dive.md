@@ -1,7 +1,7 @@
-# Technical Deep Dive: Ingestion, RAG, and Observability
+# Deep Dive: Ingestion, RAG, and Observability
 
 This write-up focuses on the ML and retrieval architecture behind the
-paperless-ngx AI layer. It complements the [case study](case-study.md), which
+paperless-ngx AI layer. It complements the [index](index.md), which
 is the higher-level summary.
 
 ## Architecture

@@ -2,37 +2,120 @@
 
 This write-up focuses on the ML and retrieval architecture behind the
 paperless-ngx AI layer. It complements the [case study](case-study.md), which
-is the higher-level portfolio narrative.
+is the higher-level summary.
 
-## Ingestion Pipeline
+## Architecture
 
-The ingestion pipeline starts with Paperless workflows rather than a custom file
-watcher. New or backfilled documents enter the AI pipeline by receiving stage
-tags such as `ai:run-ocr`, and the webhook listener enqueues the document ID in
-Redis.
+The system is deliberately built around the Paperless API and workflow model.
+Paperless remains the source of truth for documents and metadata. The AI layer
+is an adjacent service that reacts to workflow tags, moves documents through
+independent stages, and writes results back through supported REST APIs.
 
-The tag transitions are shown in the
-[data ingestion diagram](data-ingestion-flow.mmd): `ai:run-ocr` moves a document
-into OCR, OCR output advances it to `ai:run-metadata`, and metadata extraction
-advances it to `ai:run-embed`.
-
-The pipeline stages are independent:
-
-- OCR downloads the original PDF, renders pages, sends page images to the
-  configured vision model, and writes the transcript back to Paperless content.
-- Metadata extraction reads the transcript from Paperless, extracts structured
-  fields, and patches Paperless through the REST API.
-- Embedding reads the final content and metadata, chunks the document, embeds
-  chunks, and upserts dense and sparse vectors into Qdrant.
-
-The separation matters because the operational profile of each step is
+The separation of models matters because the operational profile of each step is
 different. OCR may need a vision-capable model and larger image payloads.
 Metadata extraction is usually a smaller text-only call. Embedding is a batch
 indexing task. Chat is interactive and must keep latency acceptable. The repo
 therefore exposes independent model and API-base settings for OCR, metadata,
-and chat instead of tying the whole system to one endpoint.
+and chat.
 
-## Model Selection and Evaluation
+### Data ingestion
+
+![Data ingestion architecture](assets/data-ingestion-flow.png)
+
+New (or updated) documents are governed by
+Paperless stage tags (`ai:run-ocr`, `ai:run-metadata`, `ai:run-embed`) and wait
+in Redis until the GPU workstation and local vLLM models are online, which is
+managed separately in [docker-vllm](https://github.com/Enucatl/docker-vllm).
+
+The ingestion path is:
+
+1. Paperless imports a document and assigns `ai:run-ocr`.
+2. The webhook listener receives the Paperless event and enqueues the document
+   ID in Redis.
+3. The AI service downloads the original PDF, sends page images to the OCR
+   model, and writes the transcript to the Paperless content field.
+4. The metadata stage extracts document fields from the transcript and patches
+   Paperless metadata.
+5. The embedding stage chunks the document, writes vectors to Qdrant, and
+   removes the stage tag.
+
+This design accepts delays in return for operational flexibility:
+I run the energy-hungry GPU workstation on a weekly schedule to process any new documents with local models.
+This keeps running costs minimal, as my personal needs are around 1-2 documents per week.
+
+### Retrieval Design
+
+The search layer is hybrid. During indexing, chunks are written to Qdrant with
+named dense vectors from bge-m3-compatible embeddings. At query time,
+the shared retrieval pipeline combines:
+
+- dense vector search against Qdrant,
+- keyword search through the Paperless API,
+- Reciprocal Rank Fusion over dense and keyword document rankings,
+- local reranking of chunk candidates with `BAAI/bge-reranker-v2-m3`,
+- document-level deduplication after chunk-level scoring.
+
+The browser chat and `/search` endpoint share the retrieval implementation, but
+chat can choose precision or recall behavior.
+This was introduced after early tests made it clear that there was tension between two types of queries, that needed opposite optimizations:
+- "precision"-focused queries ("which (one or few) document(s) has...?")
+- "recall"-focused queries ("how many documents about ... can you find?")
+
+So the model has to choose one of the two processes based on the user query before hitting the document database.
+
+The local query embedder and reranker run in a process-backed worker. This keeps
+the FastAPI process responsive while allowing the memory-heavy local models to
+load lazily and exit after an idle timeout, freeing up RAM.
+
+### Agentic Chat
+
+The chat copilot is a LangGraph-based loop around a LiteLLM chat model. The
+agent receives tool schemas and decides when to call them. The available tools
+are intentionally narrow:
+
+- `get_available_metadata` returns exact Paperless correspondent, document
+  type, storage path, and tag names before filtered searches.
+- `search_documents` runs hybrid retrieval with optional metadata filters,
+  year filters, limit, and precision/recall mode.
+- `read_full_document` reads OCR text for a specific Paperless document when
+  the agent needs source detail beyond snippets.
+
+![Agentic chat architecture](assets/agentic-chat-flow.png)
+
+The diagram expands the `search_documents` tool because that is where most of
+the RAG-specific work happens: keyword retrieval, dense vector retrieval,
+fusion, reranking, and final precision judging.
+
+The `/chat` UI uses a WebSocket endpoint so it can show turn state, tool-call
+progress, final answers, and source cards. That makes the system easier to
+debug and easier to trust: the user can see when the model searched, what kind
+of source it used, and which documents back the answer.
+
+<video src="assets/chat-demo.webm" controls width="100%">
+  Chat copilot demo for the tax final bills query.
+</video>
+
+The example query asks: "by searching through the tax final bills, show me how
+much I paid in federal taxes since 2022". The chat model is Gemini 3.1
+flash-lite. For this turn, the agent first inspected available metadata, then
+searched documents through the hybrid retrieval pipeline, reranked candidates
+locally with `bge-reranker-v2-m3`, decided it needed the full text of three
+documents, and then produced the final answer.
+
+This is the intended shape of the agent: the LLM plans and verifies, while
+retrieval and reranking stay in deterministic tools. The turn used about 67k
+tokens, cost about $0.01, and returned the correct comprehensive answer.
+
+![Advanced Phoenix trace for a longer agentic chat turn](assets/tax-query-trace.png)
+
+A second Phoenix trace shows a more complex chat turn with a longer agentic
+flow. It is useful as an advanced example because the trace contains more tool
+calls and makes the control flow between agent decisions, retrieval, source
+inspection, and final answer generation easier to inspect.
+
+![Trace detail for the tax question chat turn](assets/chat-demo.png)
+
+## Evaluation and model choice
 
 The evaluation uses 50 PDFs downloaded from the
 [pixparse/idl-wds OCR testing dataset](https://huggingface.co/datasets/pixparse/idl-wds).
@@ -84,80 +167,10 @@ the RTX 5090 hardware, but it needed model-specific handling because it tended
 to think until it exhausted the token budget. The technical fix is clear: add a
 custom module to the logit generation loop that gradually increases the
 probability of closing the thinking section by emitting `</thinking>` as a
-predefined reasoning limit is reached. I understood and could apply that
+predefined reasoning limit is reached. I could apply that
 technique, but chose not to carry custom generation code in this project. For a
 personal document pipeline, the better tradeoff is a stable model stack that
 keeps running with minimal intervention.
-
-## Retrieval Design
-
-The search layer is hybrid. During indexing, chunks are written to Qdrant with
-named dense and sparse vectors from bge-m3-compatible embeddings. At query time,
-the shared retrieval pipeline combines:
-
-- dense vector search against Qdrant,
-- keyword search through the Paperless API,
-- Reciprocal Rank Fusion over dense and keyword document rankings,
-- local reranking of chunk candidates with `BAAI/bge-reranker-v2-m3`,
-- document-level deduplication after chunk-level scoring.
-
-The browser chat and `/search` endpoint share the retrieval implementation, but
-chat can choose precision or recall behavior. Precision uses a smaller retrieval
-surface and can apply an LLM judge to filter candidates. Recall increases the
-dense candidate pool and requires the agent to provide an explicit limit for
-broader list-style questions.
-
-The local query embedder and reranker run in a process-backed worker. This keeps
-the FastAPI process responsive while allowing the memory-heavy local models to
-load lazily and exit after an idle timeout.
-
-## Agentic Chat
-
-The chat copilot is a LangGraph-based loop around a LiteLLM chat model. The
-agent receives tool schemas and decides when to call them. The available tools
-are intentionally narrow:
-
-- `get_available_metadata` returns exact Paperless correspondent, document
-  type, storage path, and tag names before filtered searches.
-- `search_documents` runs hybrid retrieval with optional metadata filters,
-  year filters, limit, and precision/recall mode.
-- `read_full_document` reads OCR text for a specific Paperless document when
-  the agent needs source detail beyond snippets.
-
-![Agentic chat architecture](assets/agentic-chat-flow.png)
-
-The diagram expands the `search_documents` tool because that is where most of
-the RAG-specific work happens: keyword retrieval, dense vector retrieval,
-fusion, reranking, and final precision judging.
-
-The `/chat` UI uses a WebSocket endpoint so it can show turn state, tool-call
-progress, final answers, and source cards. That makes the system easier to
-debug and easier to trust: the user can see when the model searched, what kind
-of source it used, and which documents back the answer.
-
-<video src="assets/chat-demo.webm" controls width="100%">
-  Chat copilot demo for the tax final bills query.
-</video>
-
-The example query asks: "by searching through the tax final bills, show me how
-much I paid in federal taxes since 2022". The chat model is Gemini 3.1
-flash-lite. For this turn, the agent first inspected available metadata, then
-searched documents through the hybrid retrieval pipeline, reranked candidates
-locally with `bge-reranker-v2-m3`, decided it needed the full text of three
-documents, and then produced the final answer.
-
-This is the intended shape of the agent: the LLM plans and verifies, while
-retrieval and reranking stay in deterministic tools. The turn used about 67k
-tokens, cost about $0.01, and returned the correct comprehensive answer.
-
-![Trace detail for the tax question chat turn](assets/chat-demo.png)
-
-A second Phoenix trace shows a more complex chat turn with a longer agentic
-flow. It is useful as an advanced example because the trace contains more tool
-calls and makes the control flow between agent decisions, retrieval, source
-inspection, and final answer generation easier to inspect.
-
-![Advanced Phoenix trace for a longer agentic chat turn](assets/phoenix-trace.png)
 
 ## Observability and Cost Management
 
@@ -171,9 +184,3 @@ The LiteLLM and Phoenix integration is especially useful here because it gives
 native traceability for LLM calls across providers. The same trace view can show
 Gemini calls, OpenAI-compatible local endpoints, token usage, latency, and cost
 metadata without a separate tracing adapter for each model API.
-
-That observability closes the loop between product behavior and model cost. A
-chat answer is not just a string; it is a traceable sequence of search, rerank,
-read, and model calls. When a model configuration becomes too slow, too
-expensive, or too inaccurate, the evaluation and tracing setup provide evidence
-for changing that configuration instead of relying on anecdotes.

@@ -1,6 +1,6 @@
 # Case Study: AI Document Copilot for paperless-ngx
 
-![Chat demo video](assets/chat-demo.webm)
+[chat-demo.webm](https://github.com/user-attachments/assets/34e8d8ad-590b-443d-85e5-608ff87cb4dc)
 
 This project turns a paperless-ngx archive into an AI-searchable document
 system without patching paperless-ngx itself. New documents are imported through

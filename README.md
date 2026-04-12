@@ -8,7 +8,7 @@ The always-on `ai` service also exposes the browser copilot and **`GET /search`*
 
 For a portfolio-oriented explanation of the architecture, model evaluation,
 RAG design, and production tradeoffs, see
-[docs/portfolio](docs/portfolio/index.md).
+[docs/portfolio](docs/index.md).
 
 ## Privacy notice
 

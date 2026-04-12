@@ -1,4 +1,4 @@
-# Portfolio Media Assets
+# Media Assets
 
 This directory contains the media used by the portfolio write-up. Assets are
 redacted so personal document contents, names, addresses, account numbers,
@@ -19,7 +19,7 @@ turn, including the model/tool stack and cost context.
 ### `data-ingestion-flow.png`
 
 Exported architecture diagram generated from
-`docs/portfolio/data-ingestion-flow.mmd`. It shows:
+`data-ingestion-flow.mmd`. It shows:
 
 - Paperless-ngx document import and workflows,
 - the thin webhook listener,
@@ -34,8 +34,8 @@ Regenerate after editing the Mermaid source:
 ```bash
 npx --yes @mermaid-js/mermaid-cli \
   -p /tmp/mermaid-puppeteer-config.json \
-  -i docs/portfolio/data-ingestion-flow.mmd \
-  -o docs/portfolio/assets/data-ingestion-flow.png \
+  -i data-ingestion-flow.mmd \
+  -o assets/data-ingestion-flow.png \
   -b white \
   -w 2000
 ```
@@ -43,7 +43,7 @@ npx --yes @mermaid-js/mermaid-cli \
 ### `agentic-chat-flow.png`
 
 Exported agentic chat diagram generated from
-`docs/portfolio/agentic-chat-flow.mmd`. It shows the user query entering the
+`agentic-chat-flow.mmd`. It shows the user query entering the
 LangGraph agent, tool fan-out, metadata and full-document reads through the
 Paperless REST API, hybrid search over Paperless/Postgres and Qdrant, local
 `bge-reranker-v2-m3` reranking, an LLM precision judge, and the final
@@ -54,8 +54,8 @@ Regenerate after editing the Mermaid source:
 ```bash
 npx --yes @mermaid-js/mermaid-cli \
   -p /tmp/mermaid-puppeteer-config.json \
-  -i docs/portfolio/agentic-chat-flow.mmd \
-  -o docs/portfolio/assets/agentic-chat-flow.png \
+  -i agentic-chat-flow.mmd \
+  -o assets/agentic-chat-flow.png \
   -b white \
   -w 1400
 ```

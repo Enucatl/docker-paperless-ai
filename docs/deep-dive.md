@@ -63,9 +63,20 @@ This was introduced after early tests made it clear that there was tension betwe
 
 So the model has to choose one of the two processes based on the user query before hitting the document database.
 
-The local query embedder and reranker run in a process-backed worker. This keeps
-the FastAPI process responsive while allowing the memory-heavy local models to
-load lazily and exit after an idle timeout, freeing up RAM.
+The browser chat needs a local embedding and reranker model to achieve good answer quality, but the
+GPU workstation that hosts the vision LLM isn't always running. 
+Therefore, the system includes a local CPU model (`BAAI/bge-reranker-v2-m3`, ~1GB) that runs on demand.
+
+This model lives in a separate process-backed worker for two reasons:
+1. **Keep FastAPI responsive**: Loading and running the reranker is CPU-intensive. Running it in a separate process prevents blocking the main request loop.
+2. **Save RAM**: The model weighs ~1-2GB. By launching it lazily on first use and terminating it after 5 minutes of idle time, we avoid keeping memory-heavy models in RAM when no one is using the search feature.
+
+The flow looks like this:
+- First query → FastAPI spawns a child process that loads the models (~15s warmup)
+- Subsequent queries → reuse the same process for fast reranking (~50ms latency)
+- Idle for 5 min → child process exits, reclaiming ~2GB RAM
+
+This gives the best of both worlds: good search quality on CPU when needed, without the cost of keeping heavy models resident all the time (RAM is expensive!).
 
 ### Agentic Chat
 
@@ -155,15 +166,24 @@ of about 2,000 documents and roughly 7,000 pages, that kept the Google API cost
 below one dollar because page-image OCR and embeddings did not hit the hosted
 model API.
 
-The commented Qwen 3.5 9B experiments document another rejected path. Qwen fit
-the RTX 5090 hardware, but it needed model-specific handling because it tended
-to think until it exhausted the token budget. The technical fix is clear: add a
-custom module to the logit generation loop that gradually increases the
-probability of closing the thinking section by emitting `</thinking>` as a
-predefined reasoning limit is reached. I could apply that
-technique, but chose not to carry custom generation code in this project. For a
-personal document pipeline, the better tradeoff is a stable model stack that
-keeps running with minimal intervention.
+Qwen 3.5 9B fit the RTX 5090 hardware and showed promise, but it had a stubborn problem:
+when prompted to reason, the model would keep "thinking" — emitting text between
+`<thinking>` and `</thinking>` tags — until it exhausted its token budget instead
+of closing the section naturally.
+
+The technical fix was straightforward but intrusive: inject custom logic into the
+logit generation loop to gradually bias the model toward emitting `</thinking>`
+once it hit a predefined token limit. This requires intercepting the generation
+stream, modifying probability distributions on-the-fly, and managing state across
+generation steps.
+
+I could have implemented that fix, but it would mean carrying custom generation
+code in this project — a maintenance burden for a personal pipeline. The chosen
+tradeoff was simplicity: use a cloud model (Gemini flash-lite) that works
+reliably out of the box, and has quite low cost per token. For a 1-2 documents/week
+workload, the extra API cost is negligible compared to the time saved not
+maintaining model-specific hacks.
+
 
 ## Observability and Cost Management
 

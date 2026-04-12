@@ -1,9 +1,21 @@
 # Case Study: AI Document Copilot for paperless-ngx
 
+## What is paperless-ngx?
+
+paperless-ngx is a free, open-source document management system. It allows you
+to digitize, organize, and search your physical documents. You drop scanned
+documents (PDFs, images) into a watch folder, and paperless-ngx automatically
+extracts text, metadata, and performs OCR to make everything searchable. Think
+of it as a self-hosted Google Drive specifically designed for documents — with
+powerful tagging, full-text search, and automated organization.
+
+This project extends paperless-ngx with advanced AI-powered OCR and metadata
+extraction using vision and language models, while keeping the workflow entirely
+within your infrastructure, and without patching paperless-ngx itself.
+
 [chat-demo.webm](https://github.com/user-attachments/assets/34e8d8ad-590b-443d-85e5-608ff87cb4dc)
 
-This project turns a paperless-ngx archive into an AI-searchable document
-system without patching paperless-ngx itself. New documents are imported through
+New documents are imported through
 the normal Paperless flow, then an external AI service re-OCRs the pages,
 extracts structured metadata, indexes the content for semantic retrieval, and
 serves a browser copilot (and API endpoint) that can search, inspect, and
@@ -19,6 +31,8 @@ uses local `bge-reranker-v2-m3` reranking, reads three documents in full, and
 then returns a correct comprehensive answer. This costs less than one cent, and is fully traced by arize phoenix.
 
 ![Trace detail for the demo query](assets/chat-demo.png)
+
+
 
 ## What It Does
 

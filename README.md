@@ -12,6 +12,20 @@ For a portfolio-oriented explanation of the architecture, model evaluation,
 RAG design, and production tradeoffs, see
 [docs/portfolio](docs/index.md).
 
+
+## What is paperless-ngx?
+
+paperless-ngx is a free, open-source document management system. It allows you
+to digitize, organize, and search your physical documents. You drop scanned
+documents (PDFs, images) into a watch folder, and paperless-ngx automatically
+extracts text, metadata, and performs OCR to make everything searchable. Think
+of it as a self-hosted Google Drive specifically designed for documents — with
+powerful tagging, full-text search, and automated organization.
+
+This project extends paperless-ngx with advanced AI-powered OCR and metadata
+extraction using vision and language models, while keeping the workflow entirely
+within your infrastructure.
+
 ## Privacy notice
 
 > **When using cloud models (the default), the following data is sent to the configured third-party API:**

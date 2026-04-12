@@ -1,5 +1,7 @@
 # docker-paperless-ai
 
+[chat-demo.webm](https://github.com/user-attachments/assets/c14cc7c6-392d-4c8d-b0bf-c2c51b6ef124)
+
 AI batch OCR and metadata extraction for [paperless-ngx](https://github.com/paperless-ngx/paperless-ngx) — no source patches required.
 
 Documents are ingested normally via Tesseract, then routed through a three-stage AI pipeline (OCR → metadata extraction → embedding) driven by Paperless tags and a Redis queue. Each page is re-OCRd with a vision LLM, title/date/correspondent are extracted with a text LLM, and the document is indexed in Qdrant for semantic search. Everything is updated via the Paperless REST API.

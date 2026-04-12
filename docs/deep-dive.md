@@ -108,13 +108,6 @@ tokens, cost about $0.01, and returned the correct comprehensive answer.
 
 ![Advanced Phoenix trace for a longer agentic chat turn](assets/tax-query-trace.png)
 
-A second Phoenix trace shows a more complex chat turn with a longer agentic
-flow. It is useful as an advanced example because the trace contains more tool
-calls and makes the control flow between agent decisions, retrieval, source
-inspection, and final answer generation easier to inspect.
-
-![Trace detail for the tax question chat turn](assets/chat-demo.png)
-
 ## Evaluation and model choice
 
 The evaluation uses 50 PDFs downloaded from the

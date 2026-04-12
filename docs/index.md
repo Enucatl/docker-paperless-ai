@@ -12,14 +12,13 @@ answer questions over the archive with a modern agentic architecture.
 It supports both cloud and self-hosted
 models, and makes model quality visible through evaluation and tracing.
 
-The example query asks the copilot to search final tax bills and summarize how
-much was paid in federal taxes since 2022. The Gemini 3.1 flash-lite chat model
+The example query asks the copilot to search my recent tickets from the zoo.
+The Gemini 3.1 flash-lite chat model
 inspects available metadata, searches through the hybrid retrieval pipeline,
 uses local `bge-reranker-v2-m3` reranking, reads three documents in full, and
-then returns a correct comprehensive answer. This used about 67k tokens
-and cost about one cent.
+then returns a correct comprehensive answer. This costs less than one cent, and is fully traced by arize phoenix.
 
-![Trace detail for the tax question chat turn](assets/tax-query-trace.png)
+![Trace detail for the demo query](assets/chat-demo.png)
 
 ## What It Does
 

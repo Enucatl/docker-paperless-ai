@@ -33,4 +33,4 @@ and cost about one cent.
   source text, and return source-backed answers.
 - Leverages modern frameworks to provide cloud and local model compatibility (LiteLLM) and first-class observability and evaluation (Arize Phoenix)
 
-Learn more in the [deep dive](rag-deep-dive.md)
+Learn more in the [deep dive](deep-dive.md)

@@ -1,8 +1,6 @@
 # Case Study: AI Document Copilot for paperless-ngx
 
-<video src="assets/chat-demo.webm" controls width="100%">
-  Chat copilot demo for the tax final bills query.
-</video>
+![Chat demo video](assets/chat-demo.webm)
 
 This project turns a paperless-ngx archive into an AI-searchable document
 system without patching paperless-ngx itself. New documents are imported through
@@ -61,12 +59,3 @@ Important production-oriented decisions include:
 - LiteLLM and Phoenix integration: model calls are natively traceable across
   providers, which makes token usage, latency, and cost visible without writing
   custom tracing code for each model API.
-
-## Portfolio Takeaway
-
-This project is useful as a portfolio piece because it connects applied AI with
-the constraints that matter in production: data privacy, model evaluation,
-fallback behavior, cost visibility, observability, and integration with an
-existing product rather than a greenfield demo. The system demonstrates how to
-turn an LLM prototype into a maintainable workflow around real documents and
-real operational failure modes.

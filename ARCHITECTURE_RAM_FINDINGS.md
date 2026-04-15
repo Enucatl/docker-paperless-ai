@@ -97,7 +97,7 @@ Webhook logs from 2026-04-08 show:
 
 Relevant runtime settings:
 
-- [`docker-compose.override.yml`](/opt/docker/paperless-ai/docker-compose.override.yml)
+- [`docker-compose.yml`](/opt/docker/paperless-ai/docker-compose.yml)
 - [`webhook.py`](/opt/docker/paperless-ai/ai/src/paperless_ai/search/webhook.py#L118)
 
 The logs also showed:

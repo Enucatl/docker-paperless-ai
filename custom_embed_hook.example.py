@@ -4,7 +4,7 @@
 #
 #   EMBED_HOOK_FILE=/custom_hooks/my_hook.py
 #
-# Mount it into the AI container (docker-compose.override.yml):
+# Mount it into the AI container (docker-compose.yml):
 #
 #   services:
 #     ai:

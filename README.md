@@ -94,8 +94,7 @@ docker-paperless-ai/
 │   ├── Dockerfile                  # Thin webhook ingress image
 │   ├── pyproject.toml
 │   └── src/paperless_listener/     # /webhook/document and /health only
-├── docker-compose.yml              # Full server stack
-├── docker-compose.override.yml     # Local volumes and secrets
+├── docker-compose.yml              # Full server stack with local volumes and secrets
 ├── docker-compose.test.yml         # Ephemeral E2E test override
 ├── run_tests.sh                    # One-command E2E test runner
 └── .env.example                    # All environment variables documented

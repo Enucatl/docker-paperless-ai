@@ -4,13 +4,14 @@ services:
       file: ../compose-security-baseline/hardening.yml
       service: redis
     image: docker.io/library/redis:8
-    cpu_shares: 1024
-    restart: unless-stopped
+    cpu_shares: 256
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 15s
       timeout: 5s
       retries: 5
+    volumes:
+      - broker-data:/data
     networks:
       - internal
 
@@ -19,30 +20,34 @@ services:
       file: ../compose-security-baseline/hardening.yml
       service: postgres
     image: docker.io/library/postgres:17
-    cpu_shares: 1024
-    restart: unless-stopped
+    cpu_shares: 256
     environment:
       - POSTGRES_DB=paperless
       - POSTGRES_USER=paperless
       - POSTGRES_PASSWORD
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
-      interval: 15s
-      timeout: 5s
-      retries: 5
     networks:
       - internal
-    command: postgres -c max_connections=1000
+    volumes:
+      - pgdata:/var/lib/postgresql/data
 
   webserver:
     extends:
       file: ../compose-security-baseline/hardening.yml
-      service: setpcap-chown-init-xlarge
+      service: hardened-xlarge
+    cap_add:
+      - CHOWN
+      - SETGID
+      - SETUID
+    read_only: false
     image: ghcr.io/paperless-ngx/paperless-ngx:latest
-    cpu_shares: 768
+    cpu_shares: 256
+    tmpfs: !reset
+      - /tmp:rw,noexec,nosuid,size=32m
+      - /run:rw,size=16m
     extra_hosts:
       - "${DOCKER_DOMAIN}:host-gateway"
-    restart: unless-stopped
     depends_on:
       db:
         condition: service_healthy
@@ -55,7 +60,12 @@ services:
       interval: 30s
       timeout: 10s
       retries: 5
-    volumes: [] # overridden in docker-compose.override.yml and docker-compose.test.yml
+    volumes:
+      - data:/usr/src/paperless/data
+      - media:/usr/src/paperless/media
+      - export:/usr/src/paperless/export
+      - /opt/paperless-consume:/usr/src/paperless/consume
+      - /etc/ssl/certs/ca-certificates.crt:/usr/src/paperless/certs/ca-certificates.crt:ro
     environment:
       - PAPERLESS_SECRET_KEY
       - PAPERLESS_DBPASS
@@ -70,8 +80,20 @@ services:
       - PAPERLESS_ENABLE_HTTP_REMOTE_USER=true
       - PAPERLESS_LOGOUT_REDIRECT_URL=https://authelia.${DOCKER_DOMAIN}/logout
       - PAPERLESS_EMAIL_CERTIFICATE_LOCATION=/usr/src/paperless/certs/ca-certificates.crt
+      - S6_READ_ONLY_ROOT=1
     networks:
       - internal
+      - traefik_proxy
+    labels:
+      - "checkmk_monitor=true"
+      - "traefik.enable=true"
+      - "traefik.http.routers.paperless.rule=Host(`paperless.${DOCKER_DOMAIN}`)"
+      - "traefik.http.routers.paperless.entrypoints=https"
+      - "traefik.http.routers.paperless.middlewares=authelia@docker,secured@file"
+      - "traefik.http.routers.paperless.tls=true"
+      - "traefik.http.routers.paperless.service=paperless"
+      - "traefik.http.services.paperless.loadbalancer.server.port=8000"
+      - "traefik.docker.network=traefik_proxy"
 
   # Local observability & evaluation platform (Arize Phoenix).
   # UI: https://phoenix.${DOCKER_DOMAIN}  — traces, costs, and eval results.
@@ -95,6 +117,11 @@ services:
       - "traefik.http.routers.phoenix.middlewares=authelia@docker,secured@file"
       - "traefik.http.routers.phoenix.service=phoenix"
       - "traefik.http.services.phoenix.loadbalancer.server.port=6006"
+    environment:
+      - PHOENIX_DEFAULT_RETENTION_POLICY_DAYS=30
+    volumes:
+      - phoenixdata:/root/.phoenix
+
 
   # Qdrant vector database — stores document chunk embeddings for hybrid search.
   # Always-on, lightweight (~50 MB RAM, written in Rust).
@@ -105,7 +132,6 @@ services:
     image: qdrant/qdrant:latest
     cpu_shares: 512
     restart: unless-stopped
-    volumes: [] # storage volume added in docker-compose.override.yml
     healthcheck:
       # Bash TCP pseudo-device: fast, no external tooling needed.
       test: ["CMD", "bash", "-c", ":> /dev/tcp/127.0.0.1/6333"]
@@ -114,6 +140,8 @@ services:
       retries: 15
     networks:
       - internal
+    volumes:
+      - qdrantdata:/qdrant/storage
 
   # Webhook listener — receives document events from Paperless and enqueues
   # doc IDs in Redis DB 1 for the AI worker to pick up.
@@ -203,7 +231,6 @@ services:
       timeout: 5s
       retries: 5
       start_period: 120s
-    # secrets: [paperless_token] moved to override
     environment:
       - AGENT_NAME=paperless-ai
       # Paperless connection (required)
@@ -236,6 +263,12 @@ services:
       - OCR_API_BASE
       - METADATA_API_BASE
 
+      # Local search process tuning.
+      - LOCAL_SEARCH_IDLE_TIMEOUT_SECONDS=${LOCAL_SEARCH_IDLE_TIMEOUT_SECONDS:-180}
+      - LOCAL_SEARCH_WARM_ON_CHAT_LOAD=${LOCAL_SEARCH_WARM_ON_CHAT_LOAD:-true}
+      - LOCAL_SEARCH_WARM_ON_STARTUP=${LOCAL_SEARCH_WARM_ON_STARTUP:-false}
+      - LOCAL_SEARCH_START_METHOD=${LOCAL_SEARCH_START_METHOD:-spawn}
+
       # Docker secrets (_FILE variants read the key from a file, safer):
       - GOOGLE_API_KEY_FILE=/run/secrets/google_api_key
       - ANTHROPIC_API_KEY_FILE=/run/secrets/anthropic_api_key
@@ -263,10 +296,6 @@ services:
       - CHAT_REASONING_EFFORT
       - CHAT_MAX_TOKENS
       - CHAT_EXTRA_KWARGS
-      - LOCAL_SEARCH_IDLE_TIMEOUT_SECONDS
-      - LOCAL_SEARCH_WARM_ON_CHAT_LOAD
-      - LOCAL_SEARCH_WARM_ON_STARTUP
-      - LOCAL_SEARCH_START_METHOD
       - OCR_CONCURRENCY
       - LLM_RETRIES
       # - DRY_RUN=false
@@ -274,7 +303,8 @@ services:
       # OpenTelemetry → Arize Phoenix (local, no external data sent)
       - OTEL_EXPORTER_OTLP_ENDPOINT=http://phoenix:6006/v1/traces
       - PHOENIX_CLIENT_HEADERS=api_key=local
-    volumes: []
+    volumes:
+      - ./ai/eval:/app/eval
     networks:
       - internal
       - traefik_proxy
@@ -299,6 +329,13 @@ services:
         condition: service_healthy
       phoenix:
         condition: service_started
+    secrets:
+      - paperless_token
+      - webhook_secret
+      - openai_api_key
+      - anthropic_api_key
+      - google_api_key
+      - hf_token
 
   ai-cleanup:
     extends:
@@ -312,6 +349,13 @@ services:
     restart: "no"
     extra_hosts:
       - "${DOCKER_DOMAIN}:host-gateway"
+    secrets:
+      - paperless_token
+      - webhook_secret
+      - openai_api_key
+      - anthropic_api_key
+      - google_api_key
+      - hf_token
     environment:
       - AGENT_NAME=paperless-ai-cleanup
       - PAPERLESS_URL=http://webserver:8000
@@ -363,6 +407,11 @@ services:
       - "checkmk_monitor=false"
     extra_hosts:
       - "${DOCKER_DOMAIN}:host-gateway"
+    secrets:
+      - paperless_token
+      - openai_api_key
+      - anthropic_api_key
+      - google_api_key
     entrypoint: ["python", "cli.py", "--eval"]
     command: ["--split", "${EVAL_SPLIT:-code-test}"]
     environment:
@@ -401,6 +450,16 @@ services:
 secrets:
   paperless_token:
     file: ./secrets/paperless_token.txt
+  webhook_secret:
+    file: ./secrets/webhook_secret.txt
+  openai_api_key:
+    file: ./secrets/openai_api_key.txt
+  anthropic_api_key:
+    file: ./secrets/anthropic_api_key.txt
+  google_api_key:
+    file: ./secrets/google_api_key.txt
+  hf_token:
+    file: ./secrets/hf_token.txt
 
 networks:
   internal:
@@ -410,3 +469,16 @@ networks:
       driver: default
   traefik_proxy:
     external: true
+
+volumes:
+  broker-data:
+  data:
+    external: true
+    name: paperless-ai_data
+  media:
+    external: true
+    name: paperless-ai_media
+  export:
+  pgdata:
+  phoenixdata:
+  qdrantdata:

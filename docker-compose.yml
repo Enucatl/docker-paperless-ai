@@ -103,7 +103,6 @@ services:
       service: hardened-medium
     image: arizephoenix/phoenix:latest
     cpu_shares: 256
-    restart: unless-stopped
     networks:
       - internal
       - traefik_proxy
@@ -130,8 +129,9 @@ services:
       file: ../compose-security-baseline/hardening.yml
       service: hardened-medium
     image: qdrant/qdrant:latest
-    cpu_shares: 512
-    restart: unless-stopped
+    cpu_shares: 256
+    environment:
+      - QDRANT__TELEMETRY_DISABLED=true
     healthcheck:
       # Bash TCP pseudo-device: fast, no external tooling needed.
       test: ["CMD", "bash", "-c", ":> /dev/tcp/127.0.0.1/6333"]
@@ -141,7 +141,9 @@ services:
     networks:
       - internal
     volumes:
-      - qdrantdata:/qdrant/storage
+      - qdrant_data:/qdrant/storage
+      - qdrant_snapshot:/qdrant/snapshots
+      - qdrant_tmp:/qdrant/temp
 
   # Webhook listener — receives document events from Paperless and enqueues
   # doc IDs in Redis DB 1 for the AI worker to pick up.
@@ -154,7 +156,6 @@ services:
     build:
       context: .
       dockerfile: ./listener/Dockerfile
-    restart: unless-stopped
     sysctls:
       - net.ipv6.bindv6only=0
     entrypoint: []
@@ -214,7 +215,6 @@ services:
       dockerfile: ./ai/Dockerfile
       target: runtime
     cpu_shares: 256
-    restart: unless-stopped
     extra_hosts:
       - "${DOCKER_DOMAIN}:host-gateway"
     entrypoint: []
@@ -346,7 +346,7 @@ services:
       dockerfile: ./ai/Dockerfile
       target: runtime
     profiles: [cleanup]
-    restart: "no"
+    restart: no
     extra_hosts:
       - "${DOCKER_DOMAIN}:host-gateway"
     secrets:
@@ -481,4 +481,6 @@ volumes:
   export:
   pgdata:
   phoenixdata:
-  qdrantdata:
+  qdrant_data:
+  qdrant_snapshot:
+  qdrant_tmp:

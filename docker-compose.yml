@@ -64,7 +64,6 @@ services:
       - data:/usr/src/paperless/data
       - media:/usr/src/paperless/media
       - export:/usr/src/paperless/export
-      - backup:/backup
       - /opt/paperless-consume:/usr/src/paperless/consume
       - /etc/ssl/certs/ca-certificates.crt:/usr/src/paperless/certs/ca-certificates.crt:ro
     environment:
@@ -482,7 +481,6 @@ volumes:
   export:
   pgdata:
   phoenixdata:
-  backup:
   qdrant_data:
   qdrant_snapshot:
   qdrant_tmp:

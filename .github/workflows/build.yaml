@@ -26,8 +26,8 @@ jobs:
     uses: Enucatl/docker-compose-security-baseline/.github/workflows/docker-ci.yml@main
     with:
       image_name: ghcr.io/enucatl/paperless-ai-listener
-      context: listener
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: listener/Dockerfile
       platforms: linux/amd64
       push: ${{ github.event_name != 'pull_request' }}
     secrets: inherit
@@ -41,8 +41,8 @@ jobs:
     uses: Enucatl/docker-compose-security-baseline/.github/workflows/docker-ci.yml@main
     with:
       image_name: ghcr.io/enucatl/paperless-ai-ai
-      context: ai
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: ai/Dockerfile
       platforms: linux/amd64
       push: ${{ github.event_name != 'pull_request' }}
     secrets: inherit

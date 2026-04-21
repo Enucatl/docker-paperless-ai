@@ -1,0 +1,48 @@
+name: Build and Push Images
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - .github/workflows/build.yaml
+      - ai/**
+      - common/**
+      - listener/**
+  pull_request:
+    paths:
+      - .github/workflows/build.yaml
+      - ai/**
+      - common/**
+      - listener/**
+
+jobs:
+  listener:
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      security-events: write
+    uses: Enucatl/docker-compose-security-baseline/.github/workflows/docker-ci.yml@main
+    with:
+      image_name: ghcr.io/enucatl/paperless-ai-listener
+      context: listener
+      dockerfile: Dockerfile
+      platforms: linux/amd64
+      push: ${{ github.event_name != 'pull_request' }}
+    secrets: inherit
+
+  ai:
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      security-events: write
+    uses: Enucatl/docker-compose-security-baseline/.github/workflows/docker-ci.yml@main
+    with:
+      image_name: ghcr.io/enucatl/paperless-ai-ai
+      context: ai
+      dockerfile: Dockerfile
+      platforms: linux/amd64
+      push: ${{ github.event_name != 'pull_request' }}
+    secrets: inherit

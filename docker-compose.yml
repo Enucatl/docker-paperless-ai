@@ -69,8 +69,6 @@ services:
       - PAPERLESS_OCR_LANGUAGE
       - PAPERLESS_OCR_USER_ARGS
       - PAPERLESS_TIME_ZONE
-      - USERMAP_UID
-      - USERMAP_GID
       - PAPERLESS_REDIS=redis://broker:6379
       - PAPERLESS_DBHOST=db
       - PAPERLESS_URL=https://paperless.${DOCKER_DOMAIN}

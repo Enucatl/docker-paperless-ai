@@ -36,16 +36,13 @@ services:
     extends:
       file: ../compose-security-baseline/hardening.yml
       service: hardened-xlarge
-    cap_add:
-      - CHOWN
-      - SETGID
-      - SETUID
-    read_only: false
+    user: "1000:1000"
     image: ghcr.io/paperless-ngx/paperless-ngx:latest
     cpu_shares: 256
-    tmpfs: !reset
-      - /tmp:rw,noexec,nosuid,size=32m
-      - /run:rw,size=16m
+    read_only: false
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=32m,mode=1777
+      - /run:rw,exec,nosuid,size=16m,mode=1777
     extra_hosts:
       - "${DOCKER_DOMAIN}:host-gateway"
     depends_on:

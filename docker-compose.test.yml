@@ -14,10 +14,12 @@
 services:
   db:
     # RAM-disk: lightning-fast Django migrations, zero disk residue.
+    volumes: !reset []
     tmpfs:
       - /var/lib/postgresql/data:mode=777,uid=999,gid=999
 
   broker:
+    volumes: !reset []
     tmpfs:
       - /data
 
@@ -164,9 +166,3 @@ services:
         condition: service_healthy
     networks:
       - internal
-
-secrets:
-  paperless_token:
-    file: ./secrets/paperless_token.txt
-  webhook_secret:
-    file: ./secrets/webhook_secret.txt

@@ -210,6 +210,8 @@ services:
       dockerfile: ./ai/Dockerfile
       target: runtime
     cpu_shares: 256
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=32m,mode=1777
     extra_hosts:
       - "${DOCKER_DOMAIN}:host-gateway"
     entrypoint: []
@@ -400,6 +402,8 @@ services:
     memswap_limit: 0
     labels:
       - "checkmk_monitor=false"
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=32m,mode=1777
     extra_hosts:
       - "${DOCKER_DOMAIN}:host-gateway"
     secrets:

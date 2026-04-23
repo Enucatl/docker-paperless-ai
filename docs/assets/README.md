@@ -18,8 +18,7 @@ turn, including the model/tool stack and cost context.
 
 ### `data-ingestion-flow.png`
 
-Exported architecture diagram generated from
-`data-ingestion-flow.mmd`. It shows:
+Architecture diagram for the document ingestion pipeline. It shows:
 
 - Paperless-ngx document import and workflows,
 - the thin webhook listener,
@@ -29,36 +28,13 @@ Exported architecture diagram generated from
 - Qdrant for chunk vectors,
 - Phoenix for traces and token/cost visibility.
 
-Regenerate after editing the Mermaid source:
-
-```bash
-npx --yes @mermaid-js/mermaid-cli \
-  -p /tmp/mermaid-puppeteer-config.json \
-  -i data-ingestion-flow.mmd \
-  -o assets/data-ingestion-flow.png \
-  -b white \
-  -w 2000
-```
-
 ### `agentic-chat-flow.png`
 
-Exported agentic chat diagram generated from
-`agentic-chat-flow.mmd`. It shows the user query entering the
+Agentic chat architecture diagram. It shows the user query entering the
 LangGraph agent, tool fan-out, metadata and full-document reads through the
 Paperless REST API, hybrid search over Paperless/Postgres and Qdrant, local
 `bge-reranker-v2-m3` reranking, an LLM precision judge, and the final
 source-backed response.
-
-Regenerate after editing the Mermaid source:
-
-```bash
-npx --yes @mermaid-js/mermaid-cli \
-  -p /tmp/mermaid-puppeteer-config.json \
-  -i agentic-chat-flow.mmd \
-  -o assets/agentic-chat-flow.png \
-  -b white \
-  -w 1400
-```
 
 ### `phoenix-trace.png`
 

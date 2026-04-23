@@ -1,9 +1,9 @@
 # LinkedIn Post Series: docker-paperless-ai
 
-This file contains drafts for a 6-part LinkedIn thread about the paperless-ngx AI layer project.
+This file contains drafts for a 3-part LinkedIn series about the paperless-ngx AI layer project, aimed at AI engineers, applied ML practitioners, and systems-minded builders.
 
 **Posting schedule:** Monday, Wednesday, Friday (two weeks)
-**Week 1:** Posts #1-3 | **Week 2:** Posts #4-6
+**Week 1:** Posts #1-3
 
 ---
 
@@ -13,172 +13,177 @@ This file contains drafts for a 6-part LinkedIn thread about the paperless-ngx A
 
 **Draft:**
 
-For years, I've been using paperless-ngx as my personal document archive.
+I have used paperless-ngx for years as my personal document archive.
 
-It's a self-hosted document management system where you drop in scanned PDFs and images, and it OCRs everything, extracts metadata, and makes it searchable. Think: Google Drive for your physical mail, but on your own server.
+It is excellent at the core document-management job: OCR, metadata extraction, tagging, and search for scanned PDFs and images, all on your own infrastructure.
 
-Started with a few hundred documents. Now sitting on ~7,000 pages of personal docs from years of paper mail and email PDFs.
+What started as a few hundred files is now roughly 7,000 pages of paper mail and PDF attachments.
 
-Here's the problem: despite all that OCR, **search is still keyword-based**. Ask it something like "show me all invoices from 2023 about electricians" and you're out of luck.
+The problem is that search is still mostly keyword-based.
 
-So I built a layer on top.
+That works until you want to ask a normal human question:
 
-**AI batch OCR + semantic search + a chat copilot that can answer questions over your entire archive.**
+"Show me all invoices from 2023 related to electricians."
 
-In this thread: the architecture, the model stack, the tradeoffs, and why I chose stability over cleverness.
+Or:
 
-(Next: how it works without keeping 1-2GB models in RAM 24/7)
+"How much did I pay in federal taxes since 2022?"
+
+Those are not keyword queries. They are retrieval + reasoning problems.
+
+So I built an AI layer around paperless-ngx:
+
+- batch OCR and metadata extraction
+- semantic and hybrid retrieval
+- an agentic chat system that can search, inspect documents, and answer with sources
+
+The important design constraint was not "add AI everywhere."
+
+It was:
+
+- Paperless remains the system of record
+- AI runs as an adjacent service
+- retrieval stays grounded in source documents
+- model choices are driven by evaluation, not hype
+
+Over the next two posts, I’ll show the ingestion architecture and the agentic retrieval system behind it.
+
+(Next: the ingestion pipeline that moves documents through OCR, metadata extraction, and embedding without coupling Paperless to model infrastructure.)
 
 **Assets:** chat-demo.webm or chat-demo.png
-**Hashtags:** #AI #OpenSource #RAG #SelfHosted #DocumentManagement
+**Hashtags:** #AIEngineering #RAG #OpenSource #SelfHosted #DocumentAI
 
 ---
 
 ## Post 2: The Architecture
 
-**Hook:** RAM-efficient lazy loading
+**Hook:** ingestion architecture, not just model choice
 
 **Draft:**
 
-One of the trickiest parts: how do you serve semantic search with a local reranker without keeping 1-2GB models in RAM 24/7?
+In the last post, I introduced the problem: paperless-ngx stores and OCRs documents well, but answering higher-level questions needs more than keyword search.
 
-The answer: **process-backed workers with lazy loading.**
+This post is about the ingestion architecture behind that AI layer.
 
-When a query arrives:
-- FastAPI checks if the local embedder/reranker worker is running
-- If not, spawns a child process that loads the ~1GB model (~15s warmup)
-- Subsequent queries reuse that process (~50ms latency)
-- Idle for 5 minutes? The worker exits, reclaiming the RAM
+Most AI demos focus on the model.
 
-This is critical because the GPU workstation that hosts the vision LLM isn't always running. Can't depend on it for the reranker, but can't afford to keep the model resident all the time either.
+In practice, the harder problem is usually the system around it.
 
-The result: good search quality on CPU when needed, minimal memory footprint when not.
+Here is the shape I ended up with:
 
-(Next: the model stack and why each one matters)
+- Paperless stays the system of record
+- workflow tags define stage transitions: `ai:run-ocr`, `ai:run-metadata`, `ai:run-embed`
+- a thin webhook listener converts Paperless events into Redis queue entries
+- independent workers run OCR, metadata extraction, and embedding
+- vectors go to Qdrant, traces go to Phoenix
+
+Why this design works:
+
+1. **Decoupled orchestration**
+Paperless does not need to know anything about GPUs, vector databases, or model providers. It stores documents, emits events, and remains authoritative.
+
+2. **Stage-level fault isolation**
+OCR, metadata extraction, and embedding fail differently and have different compute profiles. Splitting them makes retries, debugging, and provider changes much easier.
+
+3. **Evaluation-driven boundaries**
+I did not choose the local/cloud split by intuition. I built an evaluation framework to compare OCR and metadata options by quality, cost, and operational fit for each task.
+
+That led to a practical compromise:
+- keep expensive, high-volume work local
+- use hosted models where reliability and output quality matter more than a tiny per-document API bill
+
+That was enough to backfill about 2,000 documents / 7,000 pages for under $1 in API cost.
+
+4. **Operational realism**
+My GPU workstation is not always on. The queue absorbs that constraint instead of assuming every model endpoint is permanently available.
+
+To me, this is the real AI systems question:
+
+**not just "which model is best?" but "what architecture keeps working when the environment is imperfect?"**
+
+(Diagram below. Next: the agentic chat system and how it uses tools to choose its own retrieval path.)
 
 **Assets:** data-ingestion-flow.png
-**Hashtags:** #LLM #SystemDesign #Performance #EdgeAI #OpenSource
+**Hashtags:** #AIEngineering #MLOps #RAG #SystemDesign #OpenSource
 
 ---
 
-## Post 3: The Model Stack
+## Post 3: The Agentic Chat System
 
-**Hook:** hybrid approach, cost/quality balance
-
-**Draft:**
-
-Not all models are created equal. Here's the stack I landed on:
-
-**OCR:** Nanonets-OCR2-3B running locally
-- 10x cheaper than cloud OCR in token terms
-- 40% faster in my setup
-- Keeps page images from leaving the infrastructure
-
-**Metadata extraction:** Gemini 3.1 flash-lite
-- Complex text understanding that local models struggle with
-- Still relatively cheap for the token volume we're talking about
-
-**Embeddings:** bge-m3
-- Dense + sparse vectors in one model
-- Works with Qdrant's hybrid search for best results
-
-**Reranking:** BAAI/bge-reranker-v2-m3 (~1GB)
-- Local, CPU-based
-- Crucial for query relevance, especially on mixed "precision vs recall" queries
-
-Total API cost for a backfill of ~2,000 documents (7,000 pages): **under $1**
-
-Because: page-image OCR and embeddings never hit the hosted model. Only metadata extraction does, and that's lightweight text.
-
-(Next: the path not taken)
-
-**Assets:** eval-comparison.png (Phoenix experiment chart)
-**Hashtags:** #LLM #MachineLearning #CostOptimization #OpenSource
-
----
-
-## Post 4: The Rejected Path
-
-**Hook:** why cleverness wasn't worth it
+**Hook:** agentic systems are interesting when they can choose their own path
 
 **Draft:**
 
-Qwen 3.5 9B fit my RTX 5090 hardware and showed promise. But it had a stubborn problem:
+In the last post, I showed the ingestion pipeline.
 
-**When prompted to reason, the model would keep "thinking"** — emitting text between `<thinking>` and `</thinking>` tags — **until it exhausted its token budget** instead of closing the section naturally.
+This one is about the retrieval side: the agentic chat system.
 
-The technical fix was straightforward but intrusive: inject custom logic into the logit generation loop to gradually bias the model toward emitting `</thinking>` once it hit a predefined token limit. This requires:
-- Intercepting the generation stream
-- Modifying probability distributions on-the-fly
-- Managing state across generation steps
+This is the part I find most interesting, because it is where the system starts to feel genuinely agentic.
 
-I could have implemented that fix. But it would mean carrying custom generation code in this project — a maintenance burden for a personal pipeline.
+The chat layer is not a single prompt over a giant context window.
 
-The chosen tradeoff: **use a stable model stack (Gemini flash-lite) that works reliably out of the box**, even if it costs a bit more. For a 1-2 documents/week workload, the extra API cost is negligible compared to the time saved not maintaining model-specific hacks.
+It is a tool-using agent that can decide how to gather evidence before it answers.
 
-Sometimes the boring choice is the right engineering decision.
+Its toolset is intentionally small:
 
-(Next: the results)
+- `get_available_metadata`
+- `search_documents`
+- `read_full_document`
 
-**Assets:** full-metadata-trace.png (Phoenix trace)
-**Hashtags:** #EngineeringTradeoffs #LLM #SystemDesign #OpenSource
+The interesting part is not the number of tools.
 
----
+It is that the agent can choose its own path.
 
-## Post 5: The Result
+A good answer might require:
 
-**Hook:** concrete numbers, ROI
+- checking metadata first so filters match the real schema
+- running hybrid retrieval over keywords and vectors
+- reranking candidates locally
+- deciding whether snippets are enough or whether full documents need to be read
+- stopping only when the evidence is strong enough
 
-**Draft:**
+That is the kind of agentic behavior I care about:
 
-2,000 documents processed
-7,000 pages OCR'd
-**Less than $1 in API costs**
+**not just tool calling, but adaptive path selection under uncertainty.**
 
-The numbers come from a backfill of my entire archive, using the final model stack (Nanonets OCR + Gemini metadata + bge-m3 embeddings).
+The route is not fixed.
 
-But the real ROI isn't just money. It's **time**:
-- 15 minutes to ask a question about any document in the archive
-- Source-backed answers with links to the original files
-- No manual tagging or metadata entry
+Sometimes metadata + retrieval is enough.
+Sometimes the agent needs to inspect full source documents.
+Sometimes the query needs precision.
+Sometimes it needs broad recall.
 
-The privacy-conscious option: run everything on-prem with Ollama. The cost is setup complexity and GPU requirements. For most people, the hybrid approach (local OCR + cloud metadata) is the sweet spot.
+So the agent can adapt its strategy:
 
-And yes, if you're wondering: the chat model can't hallucinate sources. Every answer includes citations with clickable links back to the Paperless document.
+- precision mode for exact facts or specific documents
+- recall mode for broader surveys
+- deeper reads only when snippets are insufficient
 
-(Next: open source)
+That matters because the agent is effectively choosing:
 
-**Assets:** phoenix_trace.png or screenshot of search query + results
-**Hashtags:** #DIY #Privacy #ROI #OpenSource #RAG
+- how much evidence to gather
+- how expensive retrieval should be
+- how targeted or broad the search should become
 
----
+This is why I prefer agentic retrieval over "dump everything into context and hope":
 
-## Post 6: Open Source
+1. **Less wasted context**
+The model fetches what it needs instead of receiving everything up front.
 
-**Hook:** no patches, easy to try
+2. **Inspectable reasoning**
+You can see which tools were called, in what order, and which documents supported the answer.
 
-**Draft:**
+3. **Grounded answers**
+Retrieval, reranking, and document reads stay deterministic. The LLM plans the path, but the evidence comes from tools.
 
-**No paperless-ngx patches required.**
+To me, this is when agentic systems become genuinely useful:
 
-The AI layer runs as an external service that:
-- Reacts to Paperless workflow tags
-- Moves documents through independent stages
-- Writes results back through supported REST APIs
+when they can autonomously gather information, optimize their retrieval path, and converge on an answer with traceable evidence.
 
-Paperless remains the source of truth. The AI is an adjacent service that enhances it.
+(Diagram below.)
 
-If you're using paperless-ngx and want AI-powered search:
-- **Try it:** `docker compose up ai` (see repo for setup)
-- **Learn from it:** the architecture is documented in `docs/deep-dive.md`
-- **Contribute:** open issues, PRs welcome
-
-The code is at [github.com/Enucatl/docker-paperless-ai](https://github.com/Enucatl/docker-paperless-ai)
-
-Thanks for reading this thread. If you find it useful, give it a repost. If you've built something similar, I'd love to hear about your approach in the comments.
-
-**Assets:** repo screenshot or architecture overview
-**Hashtags:** #OpenSource #PaperlessNGX #AI #SelfHosted #DeveloperCommunity
+**Assets:** agentic-chat-flow.png
+**Hashtags:** #AgenticAI #AIEngineering #RAG #SystemDesign #OpenSource
 
 ---
 
@@ -186,15 +191,14 @@ Thanks for reading this thread. If you find it useful, give it a repost. If you'
 
 **Engagement tips:**
 - Respond to comments within 24 hours while thread is fresh
-- Pin a comment with the repo link on posts #4-6
+- Pin a comment with the repo link on post #3
 - Ask a question in each post to encourage discussion
 
 **Timing:**
 - Best LinkedIn posting windows: 9-11am or 12-2pm (local time)
-- Avoid weekends for posts #2-5 (keep weekend for #6, broader audience)
+- Avoid weekends for posts #2-3
 
 **Metrics to track:**
 - Views, likes, comments, reposts per post
 - Click-through rate on repo link
 - New followers/contributors after thread completion
-

@@ -173,6 +173,37 @@ This starts Redis, PostgreSQL, paperless-ngx, Gotenberg, Tika, Qdrant,
 Phoenix, the thin webhook listener, and the always-on `ai` service that hosts
 both the copilot HTTP API and the long-running worker loop.
 
+### PostgreSQL 18 upgrade
+
+PostgreSQL 18 uses the versioned data directory under `/var/lib/postgresql/18/docker`,
+so the database volume now mounts at `/var/lib/postgresql`.
+
+If you already have data in the old PostgreSQL 17 volume, migrate it with a dump
+and restore before starting the upgraded stack:
+
+```bash
+docker compose down
+docker run --rm -d \
+  --name paperless-postgres-17 \
+  -e POSTGRES_PASSWORD="$POSTGRES_PASSWORD" \
+  -v paperless-ai_pgdata:/var/lib/postgresql/data \
+  docker.io/library/postgres:17
+until docker exec paperless-postgres-17 pg_isready -U postgres >/dev/null; do
+  sleep 1
+done
+docker exec paperless-postgres-17 pg_dumpall -U postgres > paperless.sql
+docker stop paperless-postgres-17
+docker volume rm paperless-ai_pgdata
+docker compose up -d db
+until docker exec "$(docker compose ps -q db)" pg_isready -U postgres >/dev/null; do
+  sleep 1
+done
+docker exec -i "$(docker compose ps -q db)" psql -U postgres < paperless.sql
+```
+
+If your Docker project name is not `paperless-ai`, replace `paperless-ai_pgdata`
+with the actual volume name reported by `docker volume ls`.
+
 ### Cleanup commands
 
 There is also a one-shot `ai-cleanup` service for metadata maintenance tasks.
@@ -486,7 +517,7 @@ Django migrations and document indexing).  A fresh pull adds image download time
 | `broker` | redis:8 | Redis on tmpfs — DB 0 for Paperless, DB 1 for AI queue |
 | `qdrant` | qdrant/qdrant | Vector DB (anonymous volume) |
 | `webhook-listener` | *(this repo)* | Receives Paperless webhook events |
-| `db` | postgres:17 | Paperless DB on tmpfs |
+| `db` | postgres:18 | Paperless DB on tmpfs |
 
 The embeddings API is **not** available in the test environment (GPU
 not present in CI).  The `mock_embedder` fixture provides deterministic 1024-d

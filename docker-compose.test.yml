@@ -16,7 +16,7 @@ services:
     # RAM-disk: lightning-fast Django migrations, zero disk residue.
     volumes: !reset []
     tmpfs:
-      - /var/lib/postgresql/data:mode=777,uid=999,gid=999
+      - /var/lib/postgresql:mode=777,uid=999,gid=999
 
   broker:
     volumes: !reset []

@@ -19,7 +19,7 @@ services:
     extends:
       file: ../compose-security-baseline/hardening.yml
       service: postgres
-    image: docker.io/library/postgres:17
+    image: docker.io/library/postgres:18
     cpu_shares: 256
     environment:
       - POSTGRES_DB=paperless
@@ -30,7 +30,7 @@ services:
     networks:
       - internal
     volumes:
-      - pgdata:/var/lib/postgresql/data
+      - pgdata:/var/lib/postgresql
 
   webserver:
     extends:

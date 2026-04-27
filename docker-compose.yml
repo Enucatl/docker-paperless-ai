@@ -41,7 +41,7 @@ services:
     cpu_shares: 256
     read_only: false
     tmpfs:
-      - /tmp:rw,noexec,nosuid,size=32m,mode=1777
+      - /tmp:rw,noexec,nosuid,size=256m,mode=1777
       - /run:rw,exec,nosuid,size=16m,mode=1777
     extra_hosts:
       - "${DOCKER_DOMAIN}:host-gateway"

@@ -2,8 +2,6 @@
 Thin FastAPI webhook ingress for Paperless document events.
 """
 
-from __future__ import annotations
-
 import logging
 import os
 import re
@@ -78,7 +76,7 @@ def _extract_doc_id(body: dict) -> int | None:
         if value is not None:
             try:
                 return int(value)
-            except (TypeError, ValueError):
+            except TypeError, ValueError:
                 pass
     return None
 
@@ -141,6 +139,9 @@ async def webhook_document(request: Request) -> Response:
         return Response(status_code=202)
 
     if _queues is not None:
+        if await _queues.is_webhook_suppressed(doc_id):
+            log.info("Webhook result: document %d ignored (suppressed)", doc_id)
+            return Response(status_code=202)
         tags = await _get_current_document_tags(doc_id, _parse_tags(body))
         stage = _route_to_stage(tags)
         if stage is None:

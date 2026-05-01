@@ -37,6 +37,8 @@ def test_agent_config_reads_chunk_settings():
         {
             "paperless_url": "http://paperless",
             "paperless_token": "token",
+            "metadata_model": "test-metadata-model",
+            "chat_model": "test-chat-model",
             "chunk_size": 512,
             "chunk_overlap": 50,
         }

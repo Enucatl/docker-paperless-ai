@@ -65,7 +65,7 @@ def _read_secret(env_var: str) -> str | None:
         try:
             if p.is_file():
                 return p.read_text().strip()
-        except (OSError, ValueError):
+        except OSError, ValueError:
             pass
     return os.environ.get(env_var)
 
@@ -415,7 +415,7 @@ async def search(
 
         return JSONResponse(content=fused_ids[:limit])
 
-    except (SystemExit, KeyboardInterrupt, GeneratorExit):
+    except SystemExit, KeyboardInterrupt, GeneratorExit:
         raise
     except BaseException as exc:
         log.warning(

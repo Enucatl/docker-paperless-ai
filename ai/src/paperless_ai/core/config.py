@@ -26,7 +26,7 @@ def _read_secret(env_var: str) -> str | None:
         try:
             if p.is_file():
                 return p.read_text().strip()
-        except (PermissionError, FileNotFoundError):
+        except PermissionError, FileNotFoundError:
             pass  # Secret file not available (not in Swarm mode)
     return os.environ.get(env_var)
 

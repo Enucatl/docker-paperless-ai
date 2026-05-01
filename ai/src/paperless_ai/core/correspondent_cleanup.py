@@ -5,8 +5,6 @@ Builds an auditable merge plan for duplicate/alias correspondents, then applies
 approved document reassignments and deletes empty correspondents.
 """
 
-from __future__ import annotations
-
 import json
 import logging
 import re

@@ -6,8 +6,6 @@ Chat retrieval differs from the HTTP endpoint in two ways:
   - chat reranks chunk candidates before deduplicating to documents
 """
 
-from __future__ import annotations
-
 import asyncio
 import logging
 from collections import defaultdict

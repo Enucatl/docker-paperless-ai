@@ -2,8 +2,6 @@
 Redis-backed deduplicating queues for the document processing pipeline.
 """
 
-from __future__ import annotations
-
 import logging
 
 import redis.asyncio as aioredis

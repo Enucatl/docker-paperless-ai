@@ -1,7 +1,5 @@
 """Launch the copilot app on explicit IPv4 and IPv6 sockets."""
 
-from __future__ import annotations
-
 import asyncio
 import socket
 

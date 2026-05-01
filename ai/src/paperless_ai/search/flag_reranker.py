@@ -1,7 +1,5 @@
 """Small local compatibility wrapper matching FlagEmbedding's reranker API."""
 
-from __future__ import annotations
-
 from typing import Sequence
 
 

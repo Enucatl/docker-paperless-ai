@@ -1,7 +1,5 @@
 """Process-backed local search inference for the copilot/search service."""
 
-from __future__ import annotations
-
 import asyncio
 import logging
 import multiprocessing as mp
@@ -327,7 +325,7 @@ class ProcessLocalSearchEmbedder:
             try:
                 await asyncio.to_thread(self._conn.send, {"action": "shutdown"})
                 await asyncio.to_thread(self._conn.recv)
-            except (EOFError, BrokenPipeError, OSError):
+            except EOFError, BrokenPipeError, OSError:
                 pass
             finally:
                 self._close_dead_worker()

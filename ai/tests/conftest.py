@@ -115,7 +115,7 @@ def _wait_for_paperless(url: str, timeout: int = 5) -> None:
             r = niquests.get(f"{url}/api/", timeout=2, allow_redirects=True)
             if r.status_code < 500:
                 return
-        except (niquests.RequestException, niquests.ConnectionError):
+        except niquests.RequestException, niquests.ConnectionError:
             pass
         time.sleep(1)
     raise RuntimeError(f"Paperless not ready at {url} after {timeout}s")

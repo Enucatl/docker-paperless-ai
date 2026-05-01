@@ -2,8 +2,6 @@
 Thin FastAPI webhook ingress for Paperless document events.
 """
 
-from __future__ import annotations
-
 import logging
 import os
 import re
@@ -78,7 +76,7 @@ def _extract_doc_id(body: dict) -> int | None:
         if value is not None:
             try:
                 return int(value)
-            except (TypeError, ValueError):
+            except TypeError, ValueError:
                 pass
     return None
 

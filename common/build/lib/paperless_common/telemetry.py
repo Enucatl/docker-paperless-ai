@@ -5,8 +5,6 @@ The listener package can import these safely without carrying OTEL deps because
 the heavier imports happen lazily inside setup_telemetry().
 """
 
-from __future__ import annotations
-
 import logging
 import os
 from contextlib import contextmanager

@@ -4,8 +4,6 @@ Pure scoring functions for document intelligence evaluation.
 No Phoenix dependency — produces scalar scores that can be logged anywhere.
 """
 
-from __future__ import annotations
-
 import re
 from datetime import date
 from difflib import SequenceMatcher
@@ -111,7 +109,7 @@ def score_date(expected: Optional[str], actual: Optional[str]) -> dict:
             "date_partial_credit": partial,
             "date_null_correct": None,
         }
-    except (ValueError, TypeError):
+    except ValueError, TypeError:
         return {
             "date_exact_match": False,
             "date_distance_days": None,

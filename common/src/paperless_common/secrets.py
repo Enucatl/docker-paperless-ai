@@ -1,7 +1,5 @@
 """Shared secret/env helpers."""
 
-from __future__ import annotations
-
 import os
 from pathlib import Path
 
@@ -14,6 +12,6 @@ def read_secret(env_var: str) -> str | None:
         try:
             if path.is_file():
                 return path.read_text().strip()
-        except (OSError, ValueError):
+        except OSError, ValueError:
             pass
     return os.environ.get(env_var)

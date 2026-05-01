@@ -14,8 +14,6 @@ on the next run.  The embedding step is skipped gracefully when the store or
 embedder are not provided (useful for tests and eval mode).
 """
 
-from __future__ import annotations
-
 import asyncio
 import json
 import logging
@@ -776,7 +774,7 @@ async def purge_ai_notes(client: PaperlessClient, dry_run: bool) -> None:
             text = note.get("note", "")
             try:
                 parsed = json.loads(text)
-            except (json.JSONDecodeError, TypeError):
+            except json.JSONDecodeError, TypeError:
                 continue
             if "OCR_MODEL" not in parsed and "ocr_model" not in parsed:
                 continue

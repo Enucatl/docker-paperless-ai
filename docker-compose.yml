@@ -110,6 +110,12 @@ services:
       - "traefik.http.routers.phoenix.tls=true"
       - "traefik.http.routers.phoenix.middlewares=authelia@docker,secured@file"
       - "traefik.http.routers.phoenix.service=phoenix"
+      - "traefik.http.routers.phoenix-otlp.rule=Host(`phoenix-otlp.${DOCKER_DOMAIN}`) && Path(`/v1/traces`)"
+      - "traefik.http.routers.phoenix-otlp.entrypoints=https"
+      - "traefik.http.routers.phoenix-otlp.tls=true"
+      - "traefik.http.routers.phoenix-otlp.tls.options=mtls@file"
+      - "traefik.http.routers.phoenix-otlp.middlewares=secured@file"
+      - "traefik.http.routers.phoenix-otlp.service=phoenix"
       - "traefik.http.services.phoenix.loadbalancer.server.port=6006"
     environment:
       - PHOENIX_DEFAULT_RETENTION_POLICY_DAYS=30

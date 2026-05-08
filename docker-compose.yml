@@ -98,6 +98,8 @@ services:
       service: hardened-medium
     image: arizephoenix/phoenix:latest
     cpu_shares: 256
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=64m,mode=1777
     networks:
       - internal
       - traefik_proxy

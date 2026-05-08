@@ -45,7 +45,7 @@ experiments:
     ocr_max_image_dimension: 1920
     ocr_temperature: 0.0
     ocr_reasoning_effort: null
-    metadata_model: "gemini/gemini-3.1-flash-lite-preview"
+    metadata_model: "gemini/gemini-3.1-flash-lite"
     metadata_temperature: 1.0
     metadata_reasoning_effort: "minimal"
     jury:
@@ -53,10 +53,10 @@ experiments:
 
   - name: "gemini-3.1-flash-lite"
     agent_class: "paperless_ai.agents.smart_graph_agent.SmartDocumentAgent"
-    ocr_model: "gemini/gemini-3.1-flash-lite-preview"
+    ocr_model: "gemini/gemini-3.1-flash-lite"
     ocr_temperature: 1.0
     ocr_reasoning_effort: "minimal"
-    metadata_model: "gemini/gemini-3.1-flash-lite-preview"
+    metadata_model: "gemini/gemini-3.1-flash-lite"
     metadata_temperature: 1.0
     metadata_reasoning_effort: "minimal"
     jury:

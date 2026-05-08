@@ -6,7 +6,6 @@ Usage:
     python repro_metadata.py --api-key AIza... --model gemini/gemini-2.5-flash
 """
 
-import json
 from pprint import pprint
 import os
 import logging
@@ -128,9 +127,7 @@ class ExtractedMetadata(BaseModel):
 @click.option(
     "--api-key", required=True, envvar="GOOGLE_API_KEY", help="Google API key"
 )
-@click.option(
-    "--model", default="gemini/gemini-3.1-flash-lite-preview", show_default=True
-)
+@click.option("--model", default="gemini/gemini-3.1-flash-lite", show_default=True)
 @click.option("--max-tokens", default=1000, show_default=True)
 @click.option(
     "--reasoning-effort", default=None, help="e.g. minimal, low (omit to disable)"
@@ -140,7 +137,7 @@ def main(api_key, model, max_tokens, reasoning_effort):
     logger.info("Starting metadata extraction script")
 
     os.environ["GOOGLE_API_KEY"] = api_key
-    logger.debug(f"API key set for environment")
+    logger.debug("API key set for environment")
 
     litellm.drop_params = True
     logger.debug("litellm.drop_params enabled")

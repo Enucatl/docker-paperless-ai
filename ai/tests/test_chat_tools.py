@@ -1,4 +1,3 @@
-import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -232,7 +231,7 @@ def test_search_tool_schema_exposes_mode_enum():
 
 def test_chat_completion_kwargs_respects_configured_chat_temperature():
     config = MagicMock()
-    config.chat_model = "gemini/gemini-3.1-flash-lite-preview"
+    config.chat_model = "gemini/gemini-3.1-flash-lite"
     config.chat_api_base = "http://llm:4000"
     config.get_chat_litellm_kwargs.return_value = {
         "max_tokens": 321,

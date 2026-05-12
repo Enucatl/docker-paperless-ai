@@ -36,7 +36,8 @@ The file must export a single coroutine::
 
 import asyncio
 import logging
-from typing import TYPE_CHECKING, Awaitable, Callable, Optional
+import threading
+from typing import TYPE_CHECKING, Callable, Optional
 
 log = logging.getLogger(__name__)
 
@@ -64,6 +65,7 @@ Answer only with the succinct context and nothing else.\
 # _hook_resolved=True + _cached_hook=<fn>  → custom hook loaded and cached.
 _cached_hook: Optional[Callable] = None
 _hook_resolved: bool = False
+_hook_lock = threading.Lock()
 
 
 # ---------------------------------------------------------------------------
@@ -133,44 +135,47 @@ def _resolve_hook() -> Optional[Callable]:
 
     global _cached_hook, _hook_resolved
 
-    if _hook_resolved:
+    with _hook_lock:
+        if _hook_resolved:
+            return _cached_hook
+
+        _hook_resolved = True
+
+        hook_path = os.environ.get("EMBED_HOOK_FILE") or None
+        if not hook_path:
+            return None
+
+        if not os.path.isfile(hook_path):
+            log.warning(
+                "EMBED_HOOK_FILE=%r does not exist — using built-in situating",
+                hook_path,
+            )
+            return None
+
+        try:
+            import importlib.util
+
+            spec = importlib.util.spec_from_file_location(
+                "_paperless_ai_embed_hook", hook_path
+            )
+            if spec is None or spec.loader is None:
+                raise ImportError(f"Could not create module spec for {hook_path!r}")
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)  # type: ignore[union-attr]
+
+            hook_fn = getattr(module, "situate_chunks", None)
+            if hook_fn is None:
+                raise AttributeError(f"{hook_path!r} does not define 'situate_chunks'")
+
+            log.info("Loaded custom situate_chunks hook from %s", hook_path)
+            _cached_hook = hook_fn
+        except Exception:
+            log.exception(
+                "Failed to load embed hook from %r — using built-in situating",
+                hook_path,
+            )
+
         return _cached_hook
-
-    _hook_resolved = True
-
-    hook_path = os.environ.get("EMBED_HOOK_FILE") or None
-    if not hook_path:
-        return None
-
-    if not os.path.isfile(hook_path):
-        log.warning(
-            "EMBED_HOOK_FILE=%r does not exist — using built-in situating", hook_path
-        )
-        return None
-
-    try:
-        import importlib.util
-
-        spec = importlib.util.spec_from_file_location(
-            "_paperless_ai_embed_hook", hook_path
-        )
-        if spec is None or spec.loader is None:
-            raise ImportError(f"Could not create module spec for {hook_path!r}")
-        module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)  # type: ignore[union-attr]
-
-        hook_fn = getattr(module, "situate_chunks", None)
-        if hook_fn is None:
-            raise AttributeError(f"{hook_path!r} does not define 'situate_chunks'")
-
-        log.info("Loaded custom situate_chunks hook from %s", hook_path)
-        _cached_hook = hook_fn
-    except Exception:
-        log.exception(
-            "Failed to load embed hook from %r — using built-in situating", hook_path
-        )
-
-    return _cached_hook
 
 
 # ---------------------------------------------------------------------------
@@ -203,10 +208,12 @@ async def situate_chunks(
             else full_text
         )
         log.info("Situating %d chunk(s) via per-chunk LLM calls", len(chunks))
-        return list(
-            await asyncio.gather(
-                *(_situate_single_chunk(c, ctx, config) for c in chunks)
-            )
-        )
+        sem = asyncio.Semaphore(max(1, config.situation_concurrency))
+
+        async def _bounded_situate(chunk: str) -> str:
+            async with sem:
+                return await _situate_single_chunk(chunk, ctx, config)
+
+        return list(await asyncio.gather(*(_bounded_situate(c) for c in chunks)))
 
     return await _default_situate_chunks(chunks, full_text, meta, config)

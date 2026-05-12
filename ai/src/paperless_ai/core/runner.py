@@ -41,6 +41,7 @@ _shutdown_requested = False
 # Enables log-once-on-down / log-once-on-recovery across poll cycles.
 _offline_servers: set[str] = set()
 _WEBHOOK_SUPPRESSION_TTL_SECONDS = 300
+_model_probe_session = None
 
 
 @dataclass
@@ -71,6 +72,11 @@ def request_shutdown() -> None:
     _shutdown_requested = True
 
 
+def clear_shutdown_request() -> None:
+    global _shutdown_requested
+    _shutdown_requested = False
+
+
 def is_shutdown_requested() -> bool:
     return _shutdown_requested
 
@@ -83,17 +89,14 @@ async def _check_server_reachable(base_url: str) -> bool:
     repeated warnings between polls so the log stays readable during a long
     GPU-off window.
     """
-    import niquests
-
     for path in ("/health", "/models"):
         try:
-            async with niquests.AsyncSession(timeout=5.0) as c:
-                r = await c.get(base_url.rstrip("/") + path)
-                if r.status_code < 500:
-                    if base_url in _offline_servers:
-                        log.info("Model server back online: %s", base_url)
-                        _offline_servers.discard(base_url)
-                    return True
+            r = await _get_model_probe_session().get(base_url.rstrip("/") + path)
+            if r.status_code < 500:
+                if base_url in _offline_servers:
+                    log.info("Model server back online: %s", base_url)
+                    _offline_servers.discard(base_url)
+                return True
         except Exception:
             continue
 
@@ -101,6 +104,22 @@ async def _check_server_reachable(base_url: str) -> bool:
         log.warning("Model server unreachable, will retry next poll: %s", base_url)
         _offline_servers.add(base_url)
     return False
+
+
+def _get_model_probe_session():
+    global _model_probe_session
+    if _model_probe_session is None:
+        import niquests
+
+        _model_probe_session = niquests.AsyncSession(timeout=5.0)
+    return _model_probe_session
+
+
+async def close_model_probe_session() -> None:
+    global _model_probe_session
+    if _model_probe_session is not None:
+        await _model_probe_session.close()
+        _model_probe_session = None
 
 
 async def _embed_and_store(
@@ -448,14 +467,14 @@ async def run_metadata_batch(
             return None  # silently skipped — not a success, not a failure
 
         async with sem:
-            # Truncate to first 4000 + last 2000 chars (same as SmartDocumentAgent)
-            if len(content) > 6000:
-                snippet = content[:4000] + "\n...\n" + content[-2000:]
-            else:
-                snippet = content
-
             try:
-                extracted = await strategy.extract(snippet, config)
+                from paperless_ai.agents.smart_graph_agent import (
+                    _build_metadata_context,
+                )
+
+                extracted = await strategy.extract(
+                    _build_metadata_context(content), config
+                )
             except Exception as e:
                 log.error("Document %d: metadata extraction failed: %s", doc_id, e)
                 await _record_stage_failure(

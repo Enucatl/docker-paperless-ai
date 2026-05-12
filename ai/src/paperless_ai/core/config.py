@@ -263,6 +263,7 @@ class AgentConfig(BaseSettings):
     situation_temperature: float = 0.0
     situation_max_tokens: int = 200
     situation_context_chars: int = 0
+    situation_concurrency: int = 8
 
     def get_ocr_litellm_kwargs(self) -> dict:
         """Hyperparameter kwargs for the OCR (vision) LiteLLM call."""

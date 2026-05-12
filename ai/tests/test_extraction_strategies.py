@@ -21,6 +21,7 @@ from paperless_ai.agents.smart_graph_agent import (
     NuExtractStrategy,
     StructuredOutputStrategy,
     _ExtractedMetadata,
+    _build_metadata_context,
     _extract_metadata,
 )
 from paperless_ai.core.config import AgentConfig
@@ -47,6 +48,25 @@ def mock_config():
 # ---------------------------------------------------------------------------
 # Tests: _fallback_parse (json-repair integration)
 # ---------------------------------------------------------------------------
+
+
+def test_build_metadata_context_keeps_start_middle_and_end() -> None:
+    text = "A" * 3000 + "B" * 3000 + "C" * 3000 + "D" * 3000 + "E" * 3000
+
+    result = _build_metadata_context(
+        text,
+        max_chars=1000,
+        start_chars=200,
+        end_chars=200,
+        middle_windows=3,
+    )
+
+    assert result.startswith("A" * 200)
+    assert "B" * 100 in result
+    assert "C" * 100 in result
+    assert "D" * 100 in result
+    assert result.endswith("E" * 200)
+    assert len(result) <= 1020
 
 
 class TestFallbackParsing:

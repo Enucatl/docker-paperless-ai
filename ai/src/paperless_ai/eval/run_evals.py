@@ -125,14 +125,14 @@ async def run_scientific_evaluation(config: AgentConfig, split: str = "test") ->
                 phoenix_dataset_name,
                 len(df),
             )
-        except Exception as e:
-            if "already exists" in str(e):
-                log.info("Using existing Phoenix dataset '%s'", phoenix_dataset_name)
+        except Exception as create_error:
+            try:
                 phoenix_dataset = await phoenix_client.datasets.get_dataset(
                     dataset=phoenix_dataset_name
                 )
-            else:
-                raise
+                log.info("Using existing Phoenix dataset '%s'", phoenix_dataset_name)
+            except Exception:
+                raise create_error
 
         # Phoenix is reachable — enable OTel so LiteLLM spans carry token/cost data.
         setup_telemetry()

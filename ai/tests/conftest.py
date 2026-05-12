@@ -56,7 +56,11 @@ _TASK_QUEUE_KEYS = [
     "paperless-ai:queue:embed",
     "paperless-ai:queue:refresh",
 ]
-_ALL_QUEUE_KEYS = list(_TASK_QUEUE_KEYS)
+_ALL_QUEUE_KEYS = [
+    *_TASK_QUEUE_KEYS,
+    "paperless-ai:queue:failed",
+    *[f"paperless-ai:queue:delayed:{key}" for key in _TASK_QUEUE_KEYS],
+]
 
 
 # ---------------------------------------------------------------------------
@@ -79,7 +83,7 @@ def _clear_redis_queue() -> None:
 def _redis_queue_size() -> int:
     """Return total pending count across all queues."""
     r = _redis_client()
-    total = sum(int(r.scard(key)) for key in _ALL_QUEUE_KEYS)
+    total = sum(int(r.scard(key)) for key in _TASK_QUEUE_KEYS)
     r.close()
     return total
 
@@ -88,7 +92,7 @@ def _redis_queue_members() -> set[int]:
     """Return all pending doc IDs across all queues."""
     r = _redis_client()
     members: set[int] = set()
-    for key in _ALL_QUEUE_KEYS:
+    for key in _TASK_QUEUE_KEYS:
         members.update(int(m) for m in r.smembers(key))
     r.close()
     return members

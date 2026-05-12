@@ -128,6 +128,72 @@ def _field_instructions_from_schema() -> str:
     return "\n".join(lines)
 
 
+def _build_metadata_context(
+    text: str,
+    *,
+    max_chars: int = 6000,
+    start_chars: int = 2500,
+    end_chars: int = 2000,
+    middle_windows: int = 3,
+) -> str:
+    """Build a bounded metadata context with start, middle, and end coverage."""
+    if len(text) <= max_chars:
+        return text
+
+    middle_budget = max(0, max_chars - start_chars - end_chars)
+    window_count = max(0, middle_windows if middle_budget else 0)
+    window_size = middle_budget // window_count if window_count else 0
+
+    ranges: list[tuple[int, int]] = [(0, min(start_chars, len(text)))]
+    middle_start = ranges[0][1]
+    middle_end = max(middle_start, len(text) - end_chars)
+    middle_span = middle_end - middle_start
+    if window_size > 0 and middle_span > 0:
+        for idx in range(window_count):
+            center = middle_start + round((idx + 1) * middle_span / (window_count + 1))
+            start = max(middle_start, center - (window_size // 2))
+            end = min(middle_end, start + window_size)
+            start = max(middle_start, end - window_size)
+            if start < end:
+                ranges.append((start, end))
+    ranges.append((max(0, len(text) - end_chars), len(text)))
+
+    merged: list[tuple[int, int]] = []
+    for start, end in sorted(ranges):
+        if not merged or start > merged[-1][1]:
+            merged.append((start, end))
+        else:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], end))
+
+    parts: list[str] = []
+    last_end = 0
+    for start, end in merged:
+        if start > last_end:
+            parts.append("\n...\n")
+        parts.append(text[start:end])
+        last_end = end
+    return "".join(parts)
+
+
+def _metadata_response_format_tier(config: AgentConfig) -> tuple[str, object | None]:
+    """Return the metadata system prompt and supported response_format."""
+    if litellm.supports_response_schema(model=config.metadata_model):
+        return config.metadata_prompt, _ExtractedMetadata
+
+    system_prompt = config.metadata_prompt + "\n\n" + _field_instructions_from_schema()
+    if "response_format" in (
+        litellm.get_supported_openai_params(model=config.metadata_model) or []
+    ):
+        return system_prompt, {
+            "type": "json_schema",
+            "json_schema": {
+                "name": "extracted-metadata",
+                "schema": _ExtractedMetadata.model_json_schema(),
+            },
+        }
+    return system_prompt, None
+
+
 # ---------------------------------------------------------------------------
 # Extraction Strategy Pattern: separate LLM extraction from orchestration
 # ---------------------------------------------------------------------------
@@ -167,31 +233,7 @@ class StructuredOutputStrategy(BaseExtractionStrategy):
 
     async def extract(self, text: str, config: AgentConfig) -> _ExtractedMetadata:
         """Use standard LLM with response_format tiering."""
-        # Tier response_format by what the model actually supports
-        if litellm.supports_response_schema(model=config.metadata_model):
-            # Gemini and similar: reads field descriptions directly from the schema
-            system_prompt = config.metadata_prompt
-            response_format = _ExtractedMetadata
-        elif "response_format" in (
-            litellm.get_supported_openai_params(model=config.metadata_model) or []
-        ):
-            # vLLM / OpenAI-compatible (e.g. Qwen): structural enforcement via json_schema,
-            # but model doesn't see schema descriptions — must include them in the prompt
-            system_prompt = (
-                config.metadata_prompt + "\n\n" + _field_instructions_from_schema()
-            )
-            response_format = {
-                "type": "json_schema",
-                "json_schema": {
-                    "name": "extracted-metadata",
-                    "schema": _ExtractedMetadata.model_json_schema(),
-                },
-            }
-        else:
-            system_prompt = (
-                config.metadata_prompt + "\n\n" + _field_instructions_from_schema()
-            )
-            response_format = None
+        system_prompt, response_format = _metadata_response_format_tier(config)
 
         messages = [
             {"role": "system", "content": system_prompt},
@@ -502,14 +544,8 @@ async def _extract_metadata(
     chunks = state["extracted_text_chunks"]
     full_text = "\n\n".join(chunks)
 
-    # Truncate to first 4000 + last 2000 chars
-    if len(full_text) > 6000:
-        snippet = full_text[:4000] + "\n...\n" + full_text[-2000:]
-    else:
-        snippet = full_text
-
     # Use the strategy to extract metadata
-    extracted = await strategy.extract(snippet, config)
+    extracted = await strategy.extract(_build_metadata_context(full_text), config)
 
     # Store final metadata back into state for the agent to read after graph completion
     return {

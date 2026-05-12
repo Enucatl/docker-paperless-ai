@@ -117,17 +117,22 @@ async def test_task_queues_mark_failure_moves_to_failed_queue(task_queues):
     await task_queues.enqueue_ocr(55)
 
     retry_count, moved = await task_queues.mark_failure(
-        55, TaskQueues.KEY_OCR, max_attempts=3
+        55, TaskQueues.KEY_OCR, max_attempts=3, base_delay_seconds=60
     )
     assert (retry_count, moved) == (1, False)
-    assert await task_queues.peek_stage(TaskQueues.KEY_OCR) == {55}
+    assert await task_queues.peek_stage(TaskQueues.KEY_OCR) == set()
     assert await task_queues.peek_stage(TaskQueues.KEY_FAILED) == set()
 
+    assert await task_queues.release_due(TaskQueues.KEY_OCR, now=0) == 0
+    assert await task_queues.release_due(TaskQueues.KEY_OCR, now=9999999999) == 1
+    assert await task_queues.peek_stage(TaskQueues.KEY_OCR) == {55}
+
     retry_count, moved = await task_queues.mark_failure(
-        55, TaskQueues.KEY_OCR, max_attempts=3
+        55, TaskQueues.KEY_OCR, max_attempts=3, base_delay_seconds=60
     )
     assert (retry_count, moved) == (2, False)
-    assert await task_queues.peek_stage(TaskQueues.KEY_OCR) == {55}
+    assert await task_queues.peek_stage(TaskQueues.KEY_OCR) == set()
+    assert await task_queues.release_due(TaskQueues.KEY_OCR, now=9999999999) == 1
 
     retry_count, moved = await task_queues.mark_failure(
         55, TaskQueues.KEY_OCR, max_attempts=3
@@ -326,10 +331,15 @@ async def test_ocr_batch_moves_poison_document_to_failed_queue(
     doc_id = await _upload_document(paperless_client, _make_test_pdf())
     await task_queues.enqueue_ocr(doc_id)
 
-    for _ in range(3):
+    for attempt in range(3):
         success, failure = await run_ocr_batch(paperless_client, config, task_queues)
         assert success == 0
         assert failure == 1
+        if attempt < 2:
+            assert await task_queues.peek_stage(TaskQueues.KEY_OCR) == set()
+            assert (
+                await task_queues.release_due(TaskQueues.KEY_OCR, now=9999999999) == 1
+            )
 
     assert await task_queues.peek_stage(TaskQueues.KEY_OCR) == set()
     assert await task_queues.peek_stage(TaskQueues.KEY_FAILED) == {doc_id}

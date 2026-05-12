@@ -1,5 +1,6 @@
 """Tool wrappers for the Paperless search copilot."""
 
+import asyncio
 import json
 from dataclasses import dataclass, field
 from typing import Any
@@ -21,7 +22,7 @@ from paperless_ai.search.retriever import (
     hybrid_retrieve,
 )
 
-JUDGE_DOC_MAX_CHARS = 12000
+JUDGE_DOC_MAX_CHARS = 2000
 JUDGE_BATCH_SIZE = 5
 VALID_RETRIEVAL_MODES = tuple(RETRIEVAL_MODE_DENSE_K)
 
@@ -190,6 +191,16 @@ async def _judge_precision_documents(
     client: PaperlessClient,
     config: AgentConfig,
 ) -> list[int]:
+    async def _fetch_judge_candidate(doc_id: int) -> dict[str, Any] | None:
+        doc = await client.get_document_with_content(int(doc_id))
+        if doc is None:
+            return None
+        return {
+            "id": int(doc_id),
+            "title": doc.get("title") or "Untitled",
+            "content": str(doc.get("content") or "").strip()[:JUDGE_DOC_MAX_CHARS],
+        }
+
     with start_span(
         "paperless_ai.search.precision_judge",
         **{
@@ -202,20 +213,13 @@ async def _judge_precision_documents(
         failed_batches = 0
         for start in range(0, len(doc_ids), JUDGE_BATCH_SIZE):
             batch = doc_ids[start : start + JUDGE_BATCH_SIZE]
-            docs = []
-            for doc_id in batch:
-                doc = await client.get_document_with_content(int(doc_id))
-                if doc is None:
-                    continue
-                docs.append(
-                    {
-                        "id": int(doc_id),
-                        "title": doc.get("title") or "Untitled",
-                        "content": str(doc.get("content") or "").strip()[
-                            :JUDGE_DOC_MAX_CHARS
-                        ],
-                    }
+            docs = [
+                doc
+                for doc in await asyncio.gather(
+                    *(_fetch_judge_candidate(int(doc_id)) for doc_id in batch)
                 )
+                if doc is not None
+            ]
             if not docs:
                 continue
 

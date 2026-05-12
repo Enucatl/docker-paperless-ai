@@ -1,3 +1,4 @@
+import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -5,10 +6,12 @@ import pytest
 from paperless_ai.core.telemetry import start_span
 from paperless_ai.search.chat_agent import ChatCopilot, route_tools
 from paperless_ai.search.tools import (
+    JUDGE_DOC_MAX_CHARS,
     TOOL_SCHEMAS,
     ToolExecutionResult,
     ToolSourceRef,
     _chat_completion_kwargs,
+    _judge_precision_documents,
     execute_tool_call,
     execute_tool_call_detailed,
     get_available_metadata,
@@ -172,6 +175,52 @@ async def test_search_documents_reuses_shared_qdrant_client():
     assert "Doc 42" in result.content
     qdrant_cls.assert_not_called()
     shared_qdrant.close.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_precision_judge_fetches_batch_in_parallel_with_short_excerpts():
+    client = AsyncMock()
+    active = 0
+    max_active = 0
+
+    async def get_document_with_content(doc_id):
+        nonlocal active, max_active
+        active += 1
+        max_active = max(max_active, active)
+        await asyncio.sleep(0.01)
+        active -= 1
+        return {"id": doc_id, "title": f"Doc {doc_id}", "content": "x" * 3000}
+
+    client.get_document_with_content.side_effect = get_document_with_content
+    config = MagicMock()
+    config.chat_model = "openai/chat-model"
+    config.chat_api_base = None
+    config.get_chat_litellm_kwargs.return_value = {}
+
+    response = MagicMock()
+    response.choices = [
+        MagicMock(message=MagicMock(content='{"keep_doc_ids":[1,2,3,4,5]}'))
+    ]
+
+    captured_prompt = ""
+
+    async def judge_call(**kwargs):
+        nonlocal captured_prompt
+        captured_prompt = kwargs["messages"][1]["content"]
+        return response
+
+    with patch("paperless_ai.search.tools.litellm.acompletion", judge_call):
+        kept = await _judge_precision_documents(
+            query="query",
+            doc_ids=[1, 2, 3, 4, 5],
+            client=client,
+            config=config,
+        )
+
+    assert kept == [1, 2, 3, 4, 5]
+    assert max_active == 5
+    assert "x" * JUDGE_DOC_MAX_CHARS in captured_prompt
+    assert "x" * (JUDGE_DOC_MAX_CHARS + 1) not in captured_prompt
 
 
 @pytest.mark.asyncio

@@ -7,6 +7,7 @@ The module-level hook cache is reset before every test via the
 """
 
 import logging
+import asyncio
 import textwrap
 from unittest.mock import AsyncMock, MagicMock
 
@@ -184,6 +185,31 @@ async def test_tier2_context_chars_truncates_full_text(monkeypatch, meta):
     # Only first 10 chars of full_text should appear in the prompt
     assert "A" * 10 in captured_prompts[0]
     assert "A" * 11 not in captured_prompts[0]
+
+
+async def test_tier2_limits_llm_concurrency(monkeypatch, meta, config):
+    cfg = config.model_copy(
+        update={"situation_model": "gemini/test-model", "situation_concurrency": 2}
+    )
+    active = 0
+    max_active = 0
+
+    async def capture_call(**kwargs):
+        nonlocal active, max_active
+        active += 1
+        max_active = max(max_active, active)
+        await asyncio.sleep(0.01)
+        active -= 1
+        resp = MagicMock()
+        resp.choices[0].message.content = "ctx"
+        return resp
+
+    monkeypatch.setattr("litellm.acompletion", capture_call)
+
+    results = await situate_chunks(["a", "b", "c", "d"], "doc", meta, cfg)
+
+    assert len(results) == 4
+    assert max_active == 2
 
 
 # ---------------------------------------------------------------------------

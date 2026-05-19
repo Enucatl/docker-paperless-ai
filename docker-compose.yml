@@ -35,7 +35,7 @@ services:
   webserver:
     extends:
       file: ../compose-security-baseline/hardening.yml
-      service: hardened-xlarge
+      service: hardened-xxlarge
     user: "1000:1000"
     image: ghcr.io/paperless-ngx/paperless-ngx:latest
     cpu_shares: 256
@@ -68,6 +68,10 @@ services:
       - PAPERLESS_DBPASS
       - PAPERLESS_OCR_LANGUAGE
       - PAPERLESS_OCR_USER_ARGS
+      - PAPERLESS_OCR_CLEAN=none
+      - PAPERLESS_TASK_WORKERS=1
+      - PAPERLESS_THREADS_PER_WORKER=1
+      - PAPERLESS_WEBSERVER_WORKERS=1
       - PAPERLESS_TIME_ZONE
       - PAPERLESS_REDIS=redis://broker:6379
       - PAPERLESS_DBHOST=db

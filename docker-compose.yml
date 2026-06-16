@@ -314,6 +314,7 @@ services:
       - PHOENIX_CLIENT_HEADERS=api_key=local
     volumes:
       - ./ai/eval:/app/eval
+      - hf_cache:/home/app/.cache/huggingface
     networks:
       - internal
       - traefik_proxy
@@ -490,6 +491,7 @@ volumes:
     external: true
     name: paperless-ai_media
   export:
+  hf_cache:
   pgdata:
   phoenixdata:
   qdrant_data:

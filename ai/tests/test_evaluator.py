@@ -82,7 +82,7 @@ class _Phoenix:
         }
         self._patches = [
             patch.dict("sys.modules", self._sys_modules),
-            patch("paperless_ai.core.telemetry.setup_telemetry"),
+            patch("paperless_common.telemetry.setup_telemetry"),
             patch("nest_asyncio.apply"),
         ]
 

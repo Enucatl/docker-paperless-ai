@@ -8,14 +8,14 @@ no follow_redirects parameter, etc).
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from paperless_ai.core.paperless import PaperlessClient
+from paperless_common.paperless import PaperlessClient
 
 
 @pytest.mark.asyncio
 async def test_paperless_client_context_manager():
     """Verify PaperlessClient async context manager properly calls close() on exit."""
     with patch(
-        "paperless_ai.core.paperless.niquests.AsyncSession"
+        "paperless_common.paperless.niquests.AsyncSession"
     ) as mock_session_class:
         mock_session = AsyncMock()
         mock_session_class.return_value = mock_session
@@ -34,7 +34,7 @@ async def test_paperless_client_context_manager():
 async def test_paperless_client_api_calls_use_correct_parameters():
     """Verify API calls don't use httpx-specific parameters like follow_redirects."""
     with patch(
-        "paperless_ai.core.paperless.niquests.AsyncSession"
+        "paperless_common.paperless.niquests.AsyncSession"
     ) as mock_session_class:
         mock_session = AsyncMock()
         mock_session_class.return_value = mock_session
@@ -63,7 +63,7 @@ async def test_paperless_client_api_calls_use_correct_parameters():
 async def test_paperless_client_aclose_method_exists():
     """Verify PaperlessClient.aclose() method exists and delegates to session.close()."""
     with patch(
-        "paperless_ai.core.paperless.niquests.AsyncSession"
+        "paperless_common.paperless.niquests.AsyncSession"
     ) as mock_session_class:
         mock_session = AsyncMock()
         mock_session_class.return_value = mock_session
@@ -88,7 +88,7 @@ def _paged_response(results, *, next_value=None):
 @pytest.mark.asyncio
 async def test_paperless_client_metadata_resolvers_use_cached_lists():
     with patch(
-        "paperless_ai.core.paperless.niquests.AsyncSession"
+        "paperless_common.paperless.niquests.AsyncSession"
     ) as mock_session_class:
         mock_session = AsyncMock()
         mock_session_class.return_value = mock_session
@@ -127,7 +127,7 @@ async def test_paperless_client_metadata_resolvers_use_cached_lists():
 @pytest.mark.asyncio
 async def test_ensure_ai_workflows_creates_added_and_updated_workflows():
     with patch(
-        "paperless_ai.core.paperless.niquests.AsyncSession"
+        "paperless_common.paperless.niquests.AsyncSession"
     ) as mock_session_class:
         mock_session = AsyncMock()
         mock_session_class.return_value = mock_session
@@ -197,7 +197,7 @@ async def test_ensure_ai_workflows_creates_added_and_updated_workflows():
 @pytest.mark.asyncio
 async def test_get_or_create_custom_field_updates_existing_field_type():
     with patch(
-        "paperless_ai.core.paperless.niquests.AsyncSession"
+        "paperless_common.paperless.niquests.AsyncSession"
     ) as mock_session_class:
         mock_session = AsyncMock()
         mock_session_class.return_value = mock_session
@@ -228,7 +228,7 @@ async def test_get_or_create_custom_field_updates_existing_field_type():
 @pytest.mark.asyncio
 async def test_search_documents_all_paginates_and_applies_filters():
     with patch(
-        "paperless_ai.core.paperless.niquests.AsyncSession"
+        "paperless_common.paperless.niquests.AsyncSession"
     ) as mock_session_class:
         mock_session = AsyncMock()
         mock_session_class.return_value = mock_session
@@ -275,7 +275,7 @@ async def test_search_documents_all_paginates_and_applies_filters():
 @pytest.mark.asyncio
 async def test_search_documents_all_returns_empty_when_filter_name_unknown():
     with patch(
-        "paperless_ai.core.paperless.niquests.AsyncSession"
+        "paperless_common.paperless.niquests.AsyncSession"
     ) as mock_session_class:
         mock_session = AsyncMock()
         mock_session_class.return_value = mock_session
@@ -294,7 +294,7 @@ async def test_search_documents_all_returns_empty_when_filter_name_unknown():
 @pytest.mark.asyncio
 async def test_iter_all_documents_brief_requests_cleanup_fields():
     with patch(
-        "paperless_ai.core.paperless.niquests.AsyncSession"
+        "paperless_common.paperless.niquests.AsyncSession"
     ) as mock_session_class:
         mock_session = AsyncMock()
         mock_session_class.return_value = mock_session
@@ -318,7 +318,7 @@ async def test_iter_all_documents_brief_requests_cleanup_fields():
 @pytest.mark.asyncio
 async def test_count_documents_for_correspondent_uses_count_field():
     with patch(
-        "paperless_ai.core.paperless.niquests.AsyncSession"
+        "paperless_common.paperless.niquests.AsyncSession"
     ) as mock_session_class:
         mock_session = AsyncMock()
         mock_session_class.return_value = mock_session

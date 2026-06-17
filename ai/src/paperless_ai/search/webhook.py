@@ -8,16 +8,16 @@ import os
 import time
 import uuid
 from contextlib import asynccontextmanager
-from pathlib import Path
 from typing import TYPE_CHECKING
 
 from fastapi import FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse, JSONResponse
+from paperless_common.secrets import read_secret
 
 from paperless_ai.core.config import AgentConfig
-from paperless_ai.core.paperless import PaperlessClient
-from paperless_ai.core.telemetry import setup_telemetry
-from paperless_ai.search.queue import TaskQueues
+from paperless_common.paperless import PaperlessClient
+from paperless_common.telemetry import setup_telemetry
+from paperless_common.queue import TaskQueues
 from paperless_ai.search.retriever import (
     SearchFilters,
     hybrid_retrieve,
@@ -58,22 +58,6 @@ N = 50  # min candidate pool size before local reranking
 RRF_K = 60  # RRF smoothing constant
 
 
-def _read_secret(env_var: str) -> str | None:
-    """Read env var, or if FOO_FILE is set, read its content from that file.
-
-    Gracefully handles missing or inaccessible secret files.
-    """
-    file_path = os.environ.get(f"{env_var}_FILE")
-    if file_path:
-        p = Path(file_path)
-        try:
-            if p.is_file():
-                return p.read_text().strip()
-        except OSError, ValueError:
-            pass
-    return os.environ.get(env_var)
-
-
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global \
@@ -93,7 +77,7 @@ async def lifespan(app: FastAPI):
     redis_url = os.environ.get("REDIS_URL", "redis://broker:6379/1")
     _qdrant_url = os.environ.get("QDRANT_URL", "http://qdrant:6333")
     paperless_url = os.environ.get("PAPERLESS_URL")
-    paperless_token = _read_secret("PAPERLESS_TOKEN")
+    paperless_token = read_secret("PAPERLESS_TOKEN")
     _local_search_idle_timeout_seconds = int(
         os.environ.get("LOCAL_SEARCH_IDLE_TIMEOUT_SECONDS", "300")
     )
@@ -135,7 +119,7 @@ async def lifespan(app: FastAPI):
     _queues = TaskQueues(redis_url)
     _lazy_embedder = None
 
-    from paperless_ai.core.paperless import _raise_for_status
+    from paperless_common.paperless import _raise_for_status
     from paperless_ai.core.runner import (
         clear_shutdown_request,
         close_model_probe_session,

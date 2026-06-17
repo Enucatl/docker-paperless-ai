@@ -57,7 +57,7 @@ async def main_async(args: argparse.Namespace) -> None:
         summarize_merge_plan,
         write_merge_plan,
     )
-    from paperless_ai.core.paperless import PaperlessClient
+    from paperless_common.paperless import PaperlessClient
     from paperless_ai.core.runner import (
         purge_ai_notes,
         request_shutdown,
@@ -66,9 +66,9 @@ async def main_async(args: argparse.Namespace) -> None:
         run_metadata_batch,
         run_embed_batch,
     )
-    from paperless_ai.core.telemetry import setup_telemetry
+    from paperless_common.telemetry import setup_telemetry
     from paperless_ai.search.embedder import EmbeddingAPIEmbedder
-    from paperless_ai.search.queue import TaskQueues
+    from paperless_common.queue import TaskQueues
     from paperless_ai.search.qdrant_store import QdrantDocumentStore
 
     config = AgentConfig.from_env()
@@ -110,7 +110,7 @@ async def main_async(args: argparse.Namespace) -> None:
     async with PaperlessClient(config.paperless_url, config.paperless_token) as client:
         log.info("Checking Paperless API connectivity...")
         try:
-            from paperless_ai.core.paperless import _raise_for_status
+            from paperless_common.paperless import _raise_for_status
 
             r = await client._client.get("/api/")
             _raise_for_status(r)

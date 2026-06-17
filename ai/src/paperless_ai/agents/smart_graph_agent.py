@@ -32,7 +32,7 @@ from pydantic import BaseModel, Field
 from paperless_ai.agents.base import AgentResult, BaseDocumentAgent, DocumentMetadata
 from paperless_ai.agents.state import AgentState
 from paperless_ai.core.config import AgentConfig
-from paperless_ai.core.telemetry import add_litellm_metadata
+from paperless_common.telemetry import add_litellm_metadata
 
 log = logging.getLogger(__name__)
 

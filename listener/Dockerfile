@@ -16,7 +16,7 @@ RUN rm -rf /common/build \
     && mkdir src \
     && uv sync --frozen --no-install-project
 
-COPY listener/fetch_paperless_token.py .
+COPY ai/fetch_paperless_token.py .
 COPY ai/uvicorn_logging.json .
 COPY listener/src/ src/
 RUN uv sync --frozen --no-dev

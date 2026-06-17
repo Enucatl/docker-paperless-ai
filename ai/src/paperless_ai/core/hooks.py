@@ -104,7 +104,7 @@ async def _situate_single_chunk(
     concurrent ``asyncio.gather`` calls in ``situate_chunks``.
     """
     import litellm
-    from paperless_ai.core.telemetry import add_litellm_metadata
+    from paperless_common.telemetry import add_litellm_metadata
 
     prompt = _SITUATION_PROMPT.format(full_text=ctx_text, chunk=chunk)
     kwargs: dict = {

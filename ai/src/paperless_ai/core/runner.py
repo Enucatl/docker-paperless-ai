@@ -25,11 +25,11 @@ from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Optional
 
 from paperless_ai.core.config import AgentConfig
-from paperless_ai.core.paperless import PaperlessClient
+from paperless_common.paperless import PaperlessClient
 
 if TYPE_CHECKING:
     from paperless_ai.search.embedder import EmbeddingAPIEmbedder
-    from paperless_ai.search.queue import TaskQueues
+    from paperless_common.queue import TaskQueues
     from paperless_ai.search.qdrant_store import QdrantDocumentStore
 
 log = logging.getLogger(__name__)
@@ -290,7 +290,7 @@ async def run_ocr_batch(
     advances without relying on webhook timing.
     """
     from paperless_ai.agents.smart_graph_agent import run_vision_ocr_only
-    from paperless_ai.search.queue import TaskQueues
+    from paperless_common.queue import TaskQueues
 
     if await queues.stage_size(TaskQueues.KEY_OCR) == 0:
         return 0, 0
@@ -423,7 +423,7 @@ async def run_metadata_batch(
     No PDF download. Reads the content written by the OCR stage.
     """
     from paperless_ai.agents.smart_graph_agent import _select_extraction_strategy
-    from paperless_ai.search.queue import TaskQueues
+    from paperless_common.queue import TaskQueues
 
     if await queues.stage_size(TaskQueues.KEY_METADATA) == 0:
         return 0, 0
@@ -605,7 +605,7 @@ async def run_embed_batch(
 
     Zero LLM calls. Can be used to rebuild the index by pushing any doc IDs to queue:embed.
     """
-    from paperless_ai.search.queue import TaskQueues
+    from paperless_common.queue import TaskQueues
 
     if await queues.stage_size(TaskQueues.KEY_EMBED) == 0:
         return 0, 0
@@ -710,7 +710,7 @@ async def run_refresh_batch(
     store: QdrantDocumentStore | None = None,
 ) -> tuple[int, int]:
     """Refresh Qdrant payload metadata for documents without re-embedding."""
-    from paperless_ai.search.queue import TaskQueues
+    from paperless_common.queue import TaskQueues
 
     if store is None:
         return 0, 0

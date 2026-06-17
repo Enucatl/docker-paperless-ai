@@ -36,7 +36,7 @@ from tests.conftest import (
     _redis_stage_members,
     _upload_document,
 )
-from paperless_ai.search.queue import TaskQueues
+from paperless_common.queue import TaskQueues
 
 # Test webhook secret — must match WEBHOOK_SECRET in docker-compose.test.yml.
 TEST_WEBHOOK_SECRET = "test-secret-key-12345"

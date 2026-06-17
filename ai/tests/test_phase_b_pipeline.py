@@ -53,7 +53,7 @@ from tests.conftest import (
     _upload_document,
 )
 from paperless_listener.app import _parse_tags, _route_to_stage
-from paperless_ai.search.queue import TaskQueues
+from paperless_common.queue import TaskQueues
 
 # ---------------------------------------------------------------------------
 # TaskQueues unit tests

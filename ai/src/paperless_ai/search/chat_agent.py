@@ -8,8 +8,8 @@ import litellm
 from qdrant_client import AsyncQdrantClient
 
 from paperless_ai.core.config import AgentConfig
-from paperless_ai.core.paperless import PaperlessClient
-from paperless_ai.core.telemetry import set_span_attributes, start_span
+from paperless_common.paperless import PaperlessClient
+from paperless_common.telemetry import set_span_attributes, start_span
 from paperless_ai.search.chat_state import ChatState
 from paperless_ai.search.embedder_types import SearchEmbedder
 from paperless_ai.search.tools import (

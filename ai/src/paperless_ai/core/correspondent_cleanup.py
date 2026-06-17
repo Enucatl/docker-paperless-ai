@@ -8,6 +8,7 @@ approved document reassignments and deletes empty correspondents.
 import json
 import logging
 import re
+import sys
 from collections import defaultdict
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
@@ -16,13 +17,12 @@ from itertools import combinations
 from pathlib import Path
 from typing import Any
 
-import click
 import litellm
 import niquests
 from pydantic import BaseModel
 
 from paperless_ai.core.config import AgentConfig
-from paperless_ai.core.paperless import PaperlessClient
+from paperless_common.paperless import PaperlessClient
 
 log = logging.getLogger(__name__)
 
@@ -619,13 +619,15 @@ async def build_correspondent_merge_plan(
 
 def write_merge_plan(plan: CorrespondentMergePlan, path: str) -> None:
     text = json.dumps(plan.to_dict(), indent=2) + "\n"
-    with click.open_file(path, "w", encoding="utf-8") as f:
+    if path == "-":
+        sys.stdout.write(text)
+        return
+    with Path(path).open("w", encoding="utf-8") as f:
         f.write(text)
 
 
 def load_merge_plan(path: str) -> CorrespondentMergePlan:
-    with click.open_file(path, "r", encoding="utf-8") as f:
-        text = f.read()
+    text = sys.stdin.read() if path == "-" else Path(path).read_text(encoding="utf-8")
     data = json.loads(text)
     return CorrespondentMergePlan(
         version=int(data["version"]),

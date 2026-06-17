@@ -1398,7 +1398,6 @@ name = "paperless-ai"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
-    { name = "click" },
     { name = "fastapi" },
     { name = "json-repair" },
     { name = "langchain-text-splitters" },
@@ -1450,7 +1449,6 @@ requires-dist = [
     { name = "arize-phoenix-client", marker = "extra == 'eval'" },
     { name = "arize-phoenix-evals", marker = "extra == 'eval'" },
     { name = "arize-phoenix-otel", marker = "extra == 'eval'" },
-    { name = "click", specifier = ">=8.0" },
     { name = "datasets", marker = "extra == 'eval'" },
     { name = "fastapi", specifier = ">=0.115" },
     { name = "json-repair", specifier = ">=0.25" },

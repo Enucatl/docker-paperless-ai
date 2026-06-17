@@ -3,7 +3,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from paperless_ai.core.telemetry import start_span
+from paperless_common.telemetry import start_span
 from paperless_ai.search.chat_agent import ChatCopilot, route_tools
 from paperless_ai.search.tools import (
     JUDGE_DOC_MAX_CHARS,

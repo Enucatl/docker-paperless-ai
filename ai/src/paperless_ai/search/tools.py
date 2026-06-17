@@ -10,8 +10,8 @@ from qdrant_client import AsyncQdrantClient
 from qdrant_client import models
 
 from paperless_ai.core.config import AgentConfig
-from paperless_ai.core.paperless import PaperlessClient
-from paperless_ai.core.telemetry import set_span_attributes, start_span
+from paperless_common.paperless import PaperlessClient
+from paperless_common.telemetry import set_span_attributes, start_span
 from paperless_ai.search.embedder_types import SearchEmbedder
 from paperless_ai.search.qdrant_store import COLLECTION
 from paperless_ai.search.retriever import (

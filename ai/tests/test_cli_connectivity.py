@@ -8,7 +8,7 @@ invalid parameters or making incorrect API calls.
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from paperless_ai.core.paperless import PaperlessClient
+from paperless_common.paperless import PaperlessClient
 
 
 @pytest.mark.asyncio
@@ -21,7 +21,7 @@ async def test_cli_paperless_connectivity_check_without_invalid_params():
     - Does NOT use follow_redirects (httpx param) or any other invalid params
     """
     with patch(
-        "paperless_ai.core.paperless.niquests.AsyncSession"
+        "paperless_common.paperless.niquests.AsyncSession"
     ) as mock_session_class:
         mock_session = AsyncMock()
         mock_session_class.return_value = mock_session
@@ -56,7 +56,7 @@ async def test_cli_paperless_connectivity_check_without_invalid_params():
 async def test_cli_connectivity_check_verifies_version_header():
     """Verify the CLI can extract version info from Paperless response headers."""
     with patch(
-        "paperless_ai.core.paperless.niquests.AsyncSession"
+        "paperless_common.paperless.niquests.AsyncSession"
     ) as mock_session_class:
         mock_session = AsyncMock()
         mock_session_class.return_value = mock_session
@@ -77,7 +77,7 @@ async def test_cli_connectivity_check_verifies_version_header():
 async def test_cli_connectivity_check_handles_api_errors():
     """Verify the CLI connectivity check can handle API errors gracefully."""
     with patch(
-        "paperless_ai.core.paperless.niquests.AsyncSession"
+        "paperless_common.paperless.niquests.AsyncSession"
     ) as mock_session_class:
         mock_session = AsyncMock()
         mock_session_class.return_value = mock_session

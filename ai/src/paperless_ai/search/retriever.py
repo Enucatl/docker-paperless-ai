@@ -15,7 +15,7 @@ from typing import Literal, Optional
 from qdrant_client import AsyncQdrantClient
 from qdrant_client.models import FieldCondition, Filter, MatchAny, MatchValue
 
-from paperless_ai.core.telemetry import set_span_attributes, start_span
+from paperless_common.telemetry import set_span_attributes, start_span
 from paperless_ai.search.embedder_types import SearchEmbedder
 from paperless_ai.search.qdrant_store import COLLECTION
 

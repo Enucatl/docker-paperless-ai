@@ -6,14 +6,14 @@ Usage:
     python repro_metadata.py --api-key AIza... --model gemini/gemini-2.5-flash
 """
 
-from pprint import pprint
+import argparse
 import os
 import logging
 import sys
 from datetime import datetime
+from pprint import pprint
 from typing import Optional
 
-import click
 import litellm
 from pydantic import BaseModel, Field, field_validator
 
@@ -123,16 +123,24 @@ class ExtractedMetadata(BaseModel):
             return v
 
 
-@click.command()
-@click.option(
-    "--api-key", required=True, envvar="GOOGLE_API_KEY", help="Google API key"
-)
-@click.option("--model", default="gemini/gemini-3.1-flash-lite", show_default=True)
-@click.option("--max-tokens", default=1000, show_default=True)
-@click.option(
-    "--reasoning-effort", default=None, help="e.g. minimal, low (omit to disable)"
-)
-def main(api_key, model, max_tokens, reasoning_effort):
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--api-key", default=os.environ.get("GOOGLE_API_KEY"))
+    parser.add_argument("--model", default="gemini/gemini-3.1-flash-lite")
+    parser.add_argument("--max-tokens", type=int, default=1000)
+    parser.add_argument("--reasoning-effort", default=None)
+    args = parser.parse_args()
+    if not args.api_key:
+        parser.error("--api-key is required or set GOOGLE_API_KEY")
+    return args
+
+
+def main() -> None:
+    args = parse_args()
+    api_key = args.api_key
+    model = args.model
+    max_tokens = args.max_tokens
+    reasoning_effort = args.reasoning_effort
     logger = logging.getLogger(__name__)
     logger.info("Starting metadata extraction script")
 

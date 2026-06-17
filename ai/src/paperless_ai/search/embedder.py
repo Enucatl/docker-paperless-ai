@@ -14,7 +14,7 @@ import threading
 import litellm
 import niquests
 
-from paperless_ai.core.telemetry import add_litellm_metadata
+from paperless_common.telemetry import add_litellm_metadata
 from paperless_ai.search.embedder_types import EmbeddingResult
 from paperless_ai.search.flag_reranker import FlagReranker
 

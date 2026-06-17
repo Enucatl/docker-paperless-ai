@@ -21,7 +21,7 @@ from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from paperless_ai.core.config import AgentConfig
-from paperless_ai.core.telemetry import setup_telemetry
+from paperless_common.telemetry import setup_telemetry
 
 log = logging.getLogger(__name__)
 

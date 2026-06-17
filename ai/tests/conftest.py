@@ -229,7 +229,7 @@ def paperless_token() -> str:
 
 @pytest.fixture
 async def paperless_client(paperless_token: str):
-    from paperless_ai.core.paperless import PaperlessClient
+    from paperless_common.paperless import PaperlessClient
 
     async with PaperlessClient(PAPERLESS_URL, paperless_token) as client:
         yield client
@@ -291,7 +291,7 @@ async def task_queues():
 
     Clears all three stage queues before and after each test.
     """
-    from paperless_ai.search.queue import TaskQueues
+    from paperless_common.queue import TaskQueues
 
     if not _redis_available():
         pytest.skip("Redis is not available")

@@ -7,28 +7,12 @@ and exposes a validated AgentConfig Pydantic model.
 
 import os
 from importlib.resources import files as _pkg_files
-from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import litellm
+from paperless_common.secrets import read_secret
 from pydantic import AliasChoices, BaseModel, Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
-
-
-def _read_secret(env_var: str) -> str | None:
-    """Read env var, or if FOO_FILE is set, read its content from that file.
-
-    Gracefully handles missing or inaccessible secret files (e.g., not in Docker Swarm).
-    """
-    file_path = os.environ.get(f"{env_var}_FILE")
-    if file_path:
-        p = Path(file_path)
-        try:
-            if p.is_file():
-                return p.read_text().strip()
-        except PermissionError, FileNotFoundError:
-            pass  # Secret file not available (not in Swarm mode)
-    return os.environ.get(env_var)
 
 
 def _inject_secrets() -> None:
@@ -41,7 +25,7 @@ def _inject_secrets() -> None:
         "PAPERLESS_TOKEN",
         "WEBHOOK_SECRET",
     ):
-        val = _read_secret(key)
+        val = read_secret(key)
         if val:
             os.environ[key] = val
 

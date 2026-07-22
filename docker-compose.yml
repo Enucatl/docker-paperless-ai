@@ -449,7 +449,6 @@ services:
     volumes: []
     networks:
       - internal
-      - traefik_proxy
     depends_on:
       webserver:
         condition: service_healthy

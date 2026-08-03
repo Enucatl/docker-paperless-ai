@@ -39,6 +39,7 @@ def mock_config():
     config.metadata_model = "test-model"
     config.metadata_api_base = None
     config.metadata_prompt = "Extract metadata from the following text:"
+    config.metadata_response_format = "auto"
     config.llm_retries = 2
     config.nuextract_json_retries = 2
     config.get_metadata_litellm_kwargs = lambda: {}
@@ -67,6 +68,29 @@ def test_build_metadata_context_keeps_start_middle_and_end() -> None:
     assert "D" * 100 in result
     assert result.endswith("E" * 200)
     assert len(result) <= 1020
+
+
+def test_metadata_response_format_defaults_to_auto() -> None:
+    config = AgentConfig(metadata_model="metadata", chat_model="chat")
+
+    assert config.metadata_response_format == "auto"
+
+
+def test_metadata_response_format_reads_environment(monkeypatch) -> None:
+    monkeypatch.setenv("METADATA_RESPONSE_FORMAT", "none")
+
+    config = AgentConfig(metadata_model="metadata", chat_model="chat")
+
+    assert config.metadata_response_format == "none"
+
+
+def test_metadata_response_format_rejects_invalid_value() -> None:
+    with pytest.raises(ValidationError):
+        AgentConfig(
+            metadata_model="metadata",
+            chat_model="chat",
+            metadata_response_format="invalid",
+        )
 
 
 class TestFallbackParsing:
@@ -138,6 +162,46 @@ class TestStructuredOutputStrategy:
     @pytest.fixture
     def strategy(self):
         return StructuredOutputStrategy()
+
+    @pytest.mark.parametrize(
+        ("policy", "supports_schema", "expected_response_format", "has_instructions"),
+        [
+            ("auto", True, _ExtractedMetadata, False),
+            ("json_schema", False, _ExtractedMetadata, False),
+            ("json_object", False, {"type": "json_object"}, True),
+            ("none", False, None, True),
+        ],
+    )
+    @pytest.mark.asyncio
+    async def test_response_format_policy_controls_prompt_and_kwargs(
+        self,
+        strategy,
+        mock_config,
+        policy,
+        supports_schema,
+        expected_response_format,
+        has_instructions,
+    ):
+        """Each response format policy selects its prompt and LiteLLM kwargs."""
+        mock_config.metadata_response_format = policy
+        mock_message = MagicMock(content='{"title": "Test"}')
+        mock_response = MagicMock(choices=[MagicMock(message=mock_message)])
+
+        with (
+            patch("litellm.supports_response_schema", return_value=supports_schema),
+            patch("litellm.get_supported_openai_params", return_value=[]),
+            patch("litellm.acompletion", new_callable=AsyncMock) as mock_llm,
+        ):
+            mock_llm.return_value = mock_response
+            await strategy.extract("Sample OCR text", mock_config)
+
+        kwargs = mock_llm.await_args.kwargs
+        system_prompt = kwargs["messages"][0]["content"]
+        assert ("Output JSON with these fields:" in system_prompt) is has_instructions
+        if expected_response_format is None:
+            assert "response_format" not in kwargs
+        else:
+            assert kwargs["response_format"] == expected_response_format
 
     @pytest.mark.asyncio
     async def test_extract_successful_json(self, strategy, mock_config):

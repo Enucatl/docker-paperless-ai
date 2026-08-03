@@ -7,7 +7,7 @@ and exposes a validated AgentConfig Pydantic model.
 
 import os
 from importlib.resources import files as _pkg_files
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 import litellm
 from paperless_common.secrets import read_secret
@@ -21,6 +21,7 @@ def _inject_secrets() -> None:
         "GOOGLE_API_KEY",
         "ANTHROPIC_API_KEY",
         "OPENAI_API_KEY",
+        "OPENROUTER_API_KEY",
         "HF_TOKEN",
         "PAPERLESS_TOKEN",
         "WEBHOOK_SECRET",
@@ -96,6 +97,14 @@ class AgentConfig(BaseSettings):
     )
     ocr_reasoning_effort: Optional[str] = "minimal"
     metadata_reasoning_effort: Optional[str] = None
+    metadata_response_format: Literal["auto", "json_schema", "json_object", "none"] = (
+        Field(
+            default="auto",
+            validation_alias=AliasChoices(
+                "metadata_response_format", "METADATA_RESPONSE_FORMAT"
+            ),
+        )
+    )
     chat_reasoning_effort: Optional[str] = Field(
         default=None,
         validation_alias=AliasChoices("chat_reasoning_effort", "CHAT_REASONING_EFFORT"),

@@ -76,14 +76,13 @@ class _Phoenix:
             "phoenix.client": MagicMock(AsyncClient=_client_cls),
             "phoenix.client.experiments": MagicMock(run_experiment=self.run_experiment),
             "phoenix.evals": MagicMock(
-                LiteLLMModel=MagicMock(), llm_classify=MagicMock()
+                ClassificationEvaluator=MagicMock(), LLM=MagicMock()
             ),
             "phoenix.evals.metrics": MagicMock(exact_match=_exact_match),
         }
         self._patches = [
             patch.dict("sys.modules", self._sys_modules),
             patch("paperless_common.telemetry.setup_telemetry"),
-            patch("nest_asyncio.apply"),
         ]
 
     def __enter__(self):
@@ -357,6 +356,7 @@ async def test_yaml_model_fields_override_env_config(tmp_path):
 
     env_config = _config()
     # env_config has ocr_model = "gemini/gemini-2.5-flash" by default
+    env_config.metadata_response_format = "none"
     built_configs: list = []
 
     real_AgentConfig = type(env_config)
@@ -376,6 +376,7 @@ async def test_yaml_model_fields_override_env_config(tmp_path):
     exp_cfg = built_configs[0]
     assert exp_cfg.ocr_model == "anthropic/claude-3-haiku"
     assert exp_cfg.name == "custom"
+    assert exp_cfg.metadata_response_format == "auto"
 
 
 # ---------------------------------------------------------------------------
@@ -417,16 +418,17 @@ async def test_phoenix_unreachable_exits(tmp_path):
         "phoenix": MagicMock(),
         "phoenix.client": MagicMock(AsyncClient=mock_client_cls),
         "phoenix.client.experiments": MagicMock(run_experiment=AsyncMock()),
-        "phoenix.evals": MagicMock(LiteLLMModel=MagicMock(), llm_classify=MagicMock()),
+        "phoenix.evals": MagicMock(
+            ClassificationEvaluator=MagicMock(), LLM=MagicMock()
+        ),
         "phoenix.evals.metrics": MagicMock(exact_match=MagicMock()),
     }
 
     with patch.object(_module, "GOLDEN_DATASET_PATH", tmp_path / "ds.json"):
         with patch.object(_module, "EXPERIMENTS_YAML_PATH", tmp_path / "exp.yaml"):
             with patch.dict("sys.modules", sys_modules):
-                with patch("nest_asyncio.apply"):
-                    with pytest.raises(SystemExit):
-                        await run_scientific_evaluation(_config())
+                with pytest.raises(SystemExit):
+                    await run_scientific_evaluation(_config())
 
 
 # ---------------------------------------------------------------------------

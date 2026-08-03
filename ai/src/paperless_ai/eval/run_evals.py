@@ -16,7 +16,6 @@ import json
 import logging
 import sys
 import yaml
-import nest_asyncio
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -45,11 +44,6 @@ async def run_scientific_evaluation(config: AgentConfig, split: str = "test") ->
     except ImportError as e:
         log.error("Missing dependencies for evaluation: %s", e)
         sys.exit(1)
-
-    # run_experiment internally calls asyncio.run() for async tasks, which
-    # would fail if we're already inside a running event loop (we are, via
-    # asyncio.run() in cli.py). nest_asyncio patches the loop to allow this.
-    nest_asyncio.apply()
 
     if not GOLDEN_DATASET_PATH.exists():
         log.error("Golden dataset not found: %s", GOLDEN_DATASET_PATH)
@@ -169,10 +163,11 @@ async def run_scientific_evaluation(config: AgentConfig, split: str = "test") ->
         "chat_api_base": None,
         "ocr_reasoning_effort": None,
         "metadata_reasoning_effort": None,
+        "metadata_response_format": "auto",
         "ocr_temperature": None,
         "metadata_temperature": None,
         "ocr_max_image_dimension": None,
-        "llm_judge_model": "gemini/gemini-2.5-flash",
+        "llm_judge_model": "gemini/gemini-3.5-flash-lite",
         "jury": None,
     }
 
@@ -251,7 +246,7 @@ An appropriate title must be:
 Respond with exactly one word: "appropriate" or "inappropriate".
 """.strip()
 
-    from phoenix.evals import llm_classify, LiteLLMModel
+    from phoenix.evals import ClassificationEvaluator, LLM
 
     def _safe_majority_vote(votes: list[str]) -> str:
         """Return the majority label, or 'tie' when no label has a strict majority."""
@@ -261,19 +256,12 @@ Respond with exactly one word: "appropriate" or "inappropriate".
             return most_common[0][0]
         return "tie"
 
-    def _run_judge(llm_model: LiteLLMModel, row_df) -> str:
-        """Run a single judge on a one-row DataFrame; returns the label or 'error'."""
+    def _run_judge(title_judge: ClassificationEvaluator, inputs: dict) -> str:
+        """Run one title judge and return its label or ``error``."""
         try:
-            result = llm_classify(
-                dataframe=row_df,
-                template=_TITLE_JUDGE_TEMPLATE,
-                model=llm_model,
-                rails=["appropriate", "inappropriate"],
-                provide_explanation=False,
-            )
-            return result["label"].iloc[0]
+            return title_judge.evaluate(inputs)[0].label
         except Exception as e:
-            log.warning("Jury member %s failed: %s", llm_model.model, e)
+            log.warning("Title judge %s failed: %s", title_judge.llm.model, e)
             return "error"
 
     # --- Agent factory ---
@@ -310,16 +298,24 @@ Respond with exactly one word: "appropriate" or "inappropriate".
                 exp_config.metadata_reasoning_effort,
             )
 
-            # Build LiteLLMModel instances for each jury member (or single judge).
+            # Build Phoenix 3 classification evaluators for each jury member (or single
+            # judge). Phoenix uses LiteLLM underneath, so existing model strings and
+            # per-model invocation options remain valid.
             # Each experiment may configure a different jury, so this is built per-run.
             if exp_config.jury:
                 jury_models = [
-                    LiteLLMModel(
-                        model=member.model,
-                        temperature=member.temperature
-                        if member.temperature is not None
-                        else 0.0,
-                        model_kwargs=member.to_litellm_model_kwargs(),
+                    ClassificationEvaluator(
+                        name="title_appropriateness",
+                        llm=LLM(provider="litellm", model=member.model),
+                        prompt_template=_TITLE_JUDGE_TEMPLATE,
+                        choices=["appropriate", "inappropriate"],
+                        include_explanation=False,
+                        temperature=(
+                            member.temperature
+                            if member.temperature is not None
+                            else 0.0
+                        ),
+                        **member.to_litellm_model_kwargs(),
                     )
                     for member in exp_config.jury
                 ]
@@ -329,31 +325,36 @@ Respond with exactly one word: "appropriate" or "inappropriate".
                     ", ".join(m.model for m in exp_config.jury),
                 )
             else:
-                jury_models = [LiteLLMModel(model=exp_config.llm_judge_model)]
+                jury_models = [
+                    ClassificationEvaluator(
+                        name="title_appropriateness",
+                        llm=LLM(provider="litellm", model=exp_config.llm_judge_model),
+                        prompt_template=_TITLE_JUDGE_TEMPLATE,
+                        choices=["appropriate", "inappropriate"],
+                        include_explanation=False,
+                        temperature=0.0,
+                    )
+                ]
                 log.info("Title judge: single model — %s", exp_config.llm_judge_model)
 
-            # _models=jury_models captures the current jury in the closure.
-            def title_llm_jury(output, _models=jury_models) -> float:
+            # _judges=jury_models captures the current jury in the closure.
+            def title_llm_jury(output, _judges=jury_models) -> float:
                 """Jury vote: 1.0 if the majority of judges find the title appropriate.
 
-                Each judge runs via llm_classify on a one-row DataFrame. Judges run in
+                Each judge runs as a Phoenix classification evaluator. Judges run in
                 parallel via ThreadPoolExecutor. The majority label wins; ties and
                 all-error cases resolve to 0.0 (conservative / "inappropriate").
                 """
                 if not output or not output.get("title"):
                     return 0.0
-                row_df = pd.DataFrame(
-                    [
-                        {
-                            "ocr_transcript": (output.get("ocr_transcript") or "")[
-                                :3000
-                            ],
-                            "title": output.get("title"),
-                        }
-                    ]
-                )
-                with ThreadPoolExecutor(max_workers=len(_models)) as pool:
-                    votes = list(pool.map(lambda m: _run_judge(m, row_df), _models))
+                inputs = {
+                    "ocr_transcript": (output.get("ocr_transcript") or "")[:3000],
+                    "title": output.get("title"),
+                }
+                with ThreadPoolExecutor(max_workers=len(_judges)) as pool:
+                    votes = list(
+                        pool.map(lambda judge: _run_judge(judge, inputs), _judges)
+                    )
                 valid_votes = [
                     v for v in votes if v in ("appropriate", "inappropriate")
                 ]

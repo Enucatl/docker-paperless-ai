@@ -424,6 +424,7 @@ services:
       - openai_api_key
       - anthropic_api_key
       - google_api_key
+      - openrouter_api_key
     entrypoint: ["python", "cli.py", "--eval"]
     command: ["--split", "${EVAL_SPLIT:-code-test}"]
     environment:
@@ -439,6 +440,7 @@ services:
       - GOOGLE_API_KEY_FILE=/run/secrets/google_api_key
       - ANTHROPIC_API_KEY_FILE=/run/secrets/anthropic_api_key
       - OPENAI_API_KEY_FILE=/run/secrets/openai_api_key
+      - OPENROUTER_API_KEY_FILE=/run/secrets/openrouter_api_key
       - REDIS_URL=redis://broker:6379/1
       - QDRANT_URL=http://qdrant:6333
       - EMBEDDING_API_BASE
@@ -449,6 +451,7 @@ services:
     volumes: []
     networks:
       - internal
+      - traefik_proxy
     depends_on:
       webserver:
         condition: service_healthy
@@ -469,6 +472,8 @@ secrets:
     file: ./secrets/anthropic_api_key.txt
   google_api_key:
     file: ./secrets/google_api_key.txt
+  openrouter_api_key:
+    file: ./secrets/openrouter_api_key.txt
   hf_token:
     file: ./secrets/hf_token.txt
 

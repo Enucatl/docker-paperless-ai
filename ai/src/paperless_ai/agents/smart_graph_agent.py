@@ -176,11 +176,20 @@ def _build_metadata_context(
 
 
 def _metadata_response_format_tier(config: AgentConfig) -> tuple[str, object | None]:
-    """Return the metadata system prompt and supported response_format."""
-    if litellm.supports_response_schema(model=config.metadata_model):
+    """Return the metadata prompt and the selected response format policy."""
+    response_format_policy = config.metadata_response_format
+    if response_format_policy == "json_schema":
         return config.metadata_prompt, _ExtractedMetadata
 
     system_prompt = config.metadata_prompt + "\n\n" + _field_instructions_from_schema()
+    if response_format_policy == "json_object":
+        return system_prompt, {"type": "json_object"}
+    if response_format_policy == "none":
+        return system_prompt, None
+
+    if litellm.supports_response_schema(model=config.metadata_model):
+        return config.metadata_prompt, _ExtractedMetadata
+
     if "response_format" in (
         litellm.get_supported_openai_params(model=config.metadata_model) or []
     ):

@@ -19,14 +19,13 @@ COPY common /common
 COPY listener /listener
 RUN rm -rf /common/build \
     && mkdir src \
-    && uv sync --frozen --no-install-project
+    && uv sync --frozen --no-dev --no-install-project
 
 # Copy source tree and tests; keep production image lean.
 COPY ai/cli.py .
 COPY ai/fetch_paperless_token.py .
 COPY ai/uvicorn_logging.json .
 COPY ai/src/ src/
-COPY ai/tests/ tests/
 RUN uv sync --frozen --no-dev \
     && uv pip install --system --reinstall --no-deps /common
 RUN mkdir -p /home/app/.cache/huggingface \
@@ -58,5 +57,6 @@ USER app
 FROM runtime AS test
 
 USER root
+COPY ai/tests/ tests/
 RUN uv sync --frozen --extra test --extra eval
 USER app

@@ -71,7 +71,7 @@ services:
       - PAPERLESS_OCR_CLEAN=none
       - PAPERLESS_TASK_WORKERS=1
       - PAPERLESS_THREADS_PER_WORKER=2
-      - PAPERLESS_WEBSERVER_WORKERS=2
+      - PAPERLESS_WEBSERVER_WORKERS=1
       - PAPERLESS_TIME_ZONE
       - PAPERLESS_REDIS=redis://broker:6379
       - PAPERLESS_DBHOST=db
@@ -124,7 +124,7 @@ services:
       - "traefik.http.routers.phoenix-otlp.service=phoenix"
       - "traefik.http.services.phoenix.loadbalancer.server.port=6006"
     environment:
-      - PHOENIX_DEFAULT_RETENTION_POLICY_DAYS=30
+      - PHOENIX_DEFAULT_RETENTION_POLICY_DAYS=90
     volumes:
       - phoenixdata:/root/.phoenix
 
@@ -216,7 +216,7 @@ services:
   ai:
     extends:
       file: ../compose-security-baseline/hardening.yml
-      service: hardened-xxlarge
+      service: hardened-xlarge
     build:
       context: .
       dockerfile: ./ai/Dockerfile
@@ -242,6 +242,7 @@ services:
       start_period: 120s
     environment:
       - AGENT_NAME=paperless-ai
+      - MALLOC_ARENA_MAX=2
       # Paperless connection (required)
       - PAPERLESS_URL=http://webserver:8000
       - PAPERLESS_TOKEN_FILE=/run/secrets/paperless_token

@@ -50,7 +50,7 @@ def mock_config():
     """Minimal AgentConfig for testing."""
     config = MagicMock(spec=AgentConfig)
     config.metadata_model = "test-model"
-    config.metadata_api_base = None
+    config.metadata_endpoint = None
     config.metadata_prompt = "Extract metadata from the following text:"
     config.metadata_response_format = "auto"
     config.llm_retries = 2
@@ -90,7 +90,7 @@ def test_metadata_response_format_defaults_to_auto() -> None:
 
 
 def test_metadata_response_format_reads_environment(monkeypatch) -> None:
-    monkeypatch.setenv("METADATA_RESPONSE_FORMAT", "none")
+    monkeypatch.setenv("INFERENCE_METADATA_RESPONSE_FORMAT", "none")
 
     config = AgentConfig(metadata_model="metadata", chat_model="chat")
 

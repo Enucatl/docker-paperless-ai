@@ -250,28 +250,28 @@ services:
       - PAPERLESS_WEBHOOK_URL=http://webhook-listener:8001/webhook/document
       - MANAGE_PAPERLESS_WORKFLOWS=${MANAGE_PAPERLESS_WORKFLOWS:-true}
 
-      # OCR model — any LiteLLM vision model string:
+      # OCR model — any OpenAI-compatible inference vision model string:
       #   gemini/gemini-2.5-flash          (cloud, default)
       #   claude-3-5-sonnet-20241022       (cloud)
       #   gpt-4o                           (cloud)
-      #   ollama/llava-llama3              (local Ollama, set OCR_API_BASE)
-      #   openai/Nanonets-OCR2-3B          (local vLLM, set OCR_API_BASE)
-      - OCR_MODEL
+      #   ollama/llava-llama3              (local Ollama, set INFERENCE_OCR_ENDPOINT)
+      #   openai/Nanonets-OCR2-3B          (local vLLM, set INFERENCE_OCR_ENDPOINT)
+      - INFERENCE_OCR_MODEL
 
       # Metadata extraction model — text-only, called once per document.
       #   ollama/llama3.2   openai/Meta-Llama-3.1-8B-Instruct   gemini/gemini-2.5-flash
-      - METADATA_MODEL
+      - INFERENCE_METADATA_MODEL
 
       # Chat model — used by the conversational copilot and tool planner.
-      # Set this explicitly; it does not fall back to METADATA_MODEL.
-      - CHAT_MODEL
+      # Set this explicitly; it does not fall back to INFERENCE_METADATA_MODEL.
+      - INFERENCE_CHAT_MODEL
 
       # Base URLs for local/self-hosted models (independent, can differ).
       # Examples:
-      #   OCR_API_BASE=http://workstation:11434       (Ollama)
-      #   OCR_API_BASE=http://workstation:8000/v1     (vLLM)
-      - OCR_API_BASE
-      - METADATA_API_BASE
+      #   INFERENCE_OCR_ENDPOINT=http://workstation:11434       (Ollama)
+      #   INFERENCE_OCR_ENDPOINT=http://workstation:8000/v1     (vLLM)
+      - INFERENCE_OCR_ENDPOINT
+      - INFERENCE_METADATA_ENDPOINT
 
       # Local search process tuning.
       - LOCAL_SEARCH_IDLE_TIMEOUT_SECONDS=${LOCAL_SEARCH_IDLE_TIMEOUT_SECONDS:-180}
@@ -289,24 +289,24 @@ services:
       # Redis queue + Qdrant + embeddings API
       - REDIS_URL=redis://broker:6379/1
       - QDRANT_URL=http://qdrant:6333
-      - EMBEDDING_API_BASE
-      - EMBEDDING_MODEL
+      - INFERENCE_EMBEDDING_ENDPOINT
+      - INFERENCE_EMBEDDING_MODEL
       - CHUNK_SIZE=${CHUNK_SIZE:-512}
       - CHUNK_OVERLAP=${CHUNK_OVERLAP:-50}
 
       # Behaviour tuning (all optional)
       - POLL_INTERVAL
       - TAG_OCR=ai:run-ocr
-      - OCR_REASONING_EFFORT
-      - OCR_TEMPERATURE
-      - METADATA_TEMPERATURE
-      - METADATA_REASONING_EFFORT
-      - METADATA_MAX_TOKENS
-      - METADATA_EXTRA_KWARGS
-      - CHAT_TEMPERATURE
-      - CHAT_REASONING_EFFORT
-      - CHAT_MAX_TOKENS
-      - CHAT_EXTRA_KWARGS
+      - INFERENCE_OCR_REASONING_EFFORT
+      - INFERENCE_OCR_TEMPERATURE
+      - INFERENCE_METADATA_TEMPERATURE
+      - INFERENCE_METADATA_REASONING_EFFORT
+      - INFERENCE_METADATA_MAX_TOKENS
+      - INFERENCE_METADATA_EXTRA_KWARGS
+      - INFERENCE_CHAT_TEMPERATURE
+      - INFERENCE_CHAT_REASONING_EFFORT
+      - INFERENCE_CHAT_MAX_TOKENS
+      - INFERENCE_CHAT_EXTRA_KWARGS
       - OCR_CONCURRENCY
       - LLM_RETRIES
       # - DRY_RUN=false
@@ -377,20 +377,20 @@ services:
       - WEBHOOK_SECRET_FILE=/run/secrets/webhook_secret
       - PAPERLESS_WEBHOOK_URL=http://webhook-listener:8001/webhook/document
       - MANAGE_PAPERLESS_WORKFLOWS=false
-      - OCR_MODEL
-      - METADATA_MODEL
-      - CHAT_MODEL
-      - OCR_API_BASE
-      - METADATA_API_BASE
+      - INFERENCE_OCR_MODEL
+      - INFERENCE_METADATA_MODEL
+      - INFERENCE_CHAT_MODEL
+      - INFERENCE_OCR_ENDPOINT
+      - INFERENCE_METADATA_ENDPOINT
       - GOOGLE_API_KEY_FILE=/run/secrets/google_api_key
       - ANTHROPIC_API_KEY_FILE=/run/secrets/anthropic_api_key
       - OPENAI_API_KEY_FILE=/run/secrets/openai_api_key
       - HF_TOKEN_FILE=/run/secrets/hf_token
       - LLM_RETRIES
-      - METADATA_REASONING_EFFORT
-      - METADATA_TEMPERATURE
-      - METADATA_MAX_TOKENS
-      - METADATA_EXTRA_KWARGS
+      - INFERENCE_METADATA_REASONING_EFFORT
+      - INFERENCE_METADATA_TEMPERATURE
+      - INFERENCE_METADATA_MAX_TOKENS
+      - INFERENCE_METADATA_EXTRA_KWARGS
       - OTEL_EXPORTER_OTLP_ENDPOINT=http://phoenix:6006/v1/traces
       - PHOENIX_CLIENT_HEADERS=api_key=local
     command: --help
@@ -435,20 +435,20 @@ services:
       - AGENT_NAME=paperless-ai-eval
       - PAPERLESS_URL=http://webserver:8000
       - PAPERLESS_TOKEN_FILE=/run/secrets/paperless_token
-      - OCR_MODEL
-      - METADATA_MODEL
-      - CHAT_MODEL
-      - OCR_API_BASE
-      - METADATA_API_BASE
-      - CHAT_API_BASE
+      - INFERENCE_OCR_MODEL
+      - INFERENCE_METADATA_MODEL
+      - INFERENCE_CHAT_MODEL
+      - INFERENCE_OCR_ENDPOINT
+      - INFERENCE_METADATA_ENDPOINT
+      - INFERENCE_CHAT_ENDPOINT
       - GOOGLE_API_KEY_FILE=/run/secrets/google_api_key
       - ANTHROPIC_API_KEY_FILE=/run/secrets/anthropic_api_key
       - OPENAI_API_KEY_FILE=/run/secrets/openai_api_key
       - OPENROUTER_API_KEY_FILE=/run/secrets/openrouter_api_key
       - REDIS_URL=redis://broker:6379/1
       - QDRANT_URL=http://qdrant:6333
-      - EMBEDDING_API_BASE
-      - EMBEDDING_MODEL
+      - INFERENCE_EMBEDDING_ENDPOINT
+      - INFERENCE_EMBEDDING_MODEL
       - CHUNK_SIZE=${CHUNK_SIZE:-512}
       - CHUNK_OVERLAP=${CHUNK_OVERLAP:-50}
       - PHOENIX_CLIENT_HEADERS=api_key=local

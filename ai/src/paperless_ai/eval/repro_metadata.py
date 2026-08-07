@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Minimal reproduction script for metadata extraction via LiteLLM.
+"""Minimal reproduction script for metadata extraction via OpenAI-compatible inference.
 
 Usage:
     python repro_metadata.py --api-key AIza...

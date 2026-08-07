@@ -406,7 +406,7 @@ async def run_ocr_batch(
     # Preflight: skip the batch when the local OCR server is offline so we
     # don't download PDFs that we can't process yet.
     return await _run_stage(
-        "OCR", config.ocr_api_base or None, TaskQueues.KEY_OCR, queues, _process_one
+        "OCR", config.ocr_endpoint or None, TaskQueues.KEY_OCR, queues, _process_one
     )
 
 
@@ -545,7 +545,7 @@ async def run_metadata_batch(
             {
                 "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
                 "metadata_model": config.metadata_model,
-                "metadata_api_base": config.metadata_api_base,
+                "metadata_endpoint": config.metadata_endpoint,
                 "paperless_version": client.paperless_version,
                 "ai_metadata": {
                     "title": extracted.title,
@@ -588,7 +588,7 @@ async def run_metadata_batch(
             return False
 
     # Preflight: determine which server drives metadata extraction.
-    meta_server = config.metadata_api_base
+    meta_server = config.metadata_endpoint
     return await _run_stage(
         "Metadata", meta_server, TaskQueues.KEY_METADATA, queues, _process_one
     )
@@ -697,7 +697,7 @@ async def run_embed_batch(
 
     # Preflight: the embedding API server is optional — bail if it is offline so
     # we don't leave documents stuck in the embed queue.
-    preflight = config.embedding_api_base if embedder is not None else None
+    preflight = config.embedding_endpoint if embedder is not None else None
     return await _run_stage(
         "Embed", preflight, TaskQueues.KEY_EMBED, queues, _process_one
     )
@@ -795,7 +795,7 @@ async def purge_ai_notes(client: PaperlessClient, dry_run: bool) -> None:
                 parsed = json.loads(text)
             except json.JSONDecodeError, TypeError:
                 continue
-            if "OCR_MODEL" not in parsed and "ocr_model" not in parsed:
+            if "INFERENCE_OCR_MODEL" not in parsed and "ocr_model" not in parsed:
                 continue
             note_id = note["id"]
             if dry_run:

@@ -126,9 +126,9 @@ class ChatCopilot:
         }
         if "temperature" not in kwargs:
             kwargs["temperature"] = 0.0
-        api_base = self._config.chat_api_base
-        if api_base:
-            kwargs["api_base"] = api_base
+        endpoint = self._config.chat_endpoint
+        if endpoint:
+            kwargs["endpoint"] = endpoint
         return kwargs
 
     @staticmethod

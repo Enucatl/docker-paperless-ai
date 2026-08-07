@@ -227,11 +227,11 @@ async def lifespan(app: FastAPI):
     _chat_copilot = None
     log.info("Chat copilot enabled lazily")
 
-    embedder = EmbeddingAPIEmbedder(_config.embedding_api_base, _config.embedding_model)
+    embedder = EmbeddingAPIEmbedder(_config.embedding_endpoint, _config.embedding_model)
     if not await embedder.check_connectivity():
         log.warning(
             "Embedding API not reachable at %s — embedding will be skipped",
-            _config.embedding_api_base,
+            _config.embedding_endpoint,
         )
         await embedder.aclose()
         embedder = None

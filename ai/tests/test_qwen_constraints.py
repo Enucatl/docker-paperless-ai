@@ -16,7 +16,7 @@ async def test_qwen_json_object_contract() -> None:
 
     response = await complete(
         model="Qwen/Qwen3.5-9B",
-        api_base="http://complex.home.arpa:8107/v1",
+        endpoint="http://complex.home.arpa:8107/v1",
         domain="metadata_contract",
         messages=[
             {"role": "system", "content": "Return only JSON."},

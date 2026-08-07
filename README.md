@@ -33,7 +33,7 @@ within your infrastructure.
 > - **Page images** — every page of every processed document is sent to the OCR model.
 > - **Document text** — the extracted text (or the first 6000 characters) is sent to the metadata model.
 >
-> Use `OCR_MODEL=ollama/...` or `OCR_MODEL=openai/...` with local servers for fully on-premises processing.
+> Use `INFERENCE_OCR_MODEL=ollama/...` or `INFERENCE_OCR_MODEL=openai/...` with local servers for fully on-premises processing.
 
 ## How it works
 
@@ -297,7 +297,7 @@ to increasingly large slices of your archive.
 
 ## Switching models
 
-Edit `OCR_MODEL`, `METADATA_MODEL`, and `CHAT_MODEL` in `.env`, then restart:
+Edit `INFERENCE_OCR_MODEL`, `INFERENCE_METADATA_MODEL`, and `INFERENCE_CHAT_MODEL` in `.env`, then restart:
 
 ```bash
 docker compose restart ai
@@ -305,50 +305,50 @@ docker compose restart ai
 
 ```env
 # Gemini (default)
-OCR_MODEL=gemini/gemini-2.5-flash
+INFERENCE_OCR_MODEL=gemini/gemini-2.5-flash
 
 # Claude
-OCR_MODEL=claude-3-5-sonnet-20241022
+INFERENCE_OCR_MODEL=claude-3-5-sonnet-20241022
 ANTHROPIC_API_KEY=your-key
 
 # OpenAI
-OCR_MODEL=gpt-4o
+INFERENCE_OCR_MODEL=gpt-4o
 OPENAI_API_KEY=your-key
 
 # Use a smarter model for metadata (called once per doc, not per page)
-METADATA_MODEL=gemini/gemini-2.5-pro
+INFERENCE_METADATA_MODEL=gemini/gemini-2.5-pro
 
 # Use a separate chat/planning model for the copilot UI
-CHAT_MODEL=gemini/gemini-2.5-flash
+INFERENCE_CHAT_MODEL=gemini/gemini-2.5-flash
 ```
 
 ## Local / self-hosted models
 
-The AI worker connects to any OpenAI-compatible API via LiteLLM.
+The AI worker connects to any OpenAI-compatible API via OpenAI-compatible inference.
 
 **Ollama** (easiest):
 
 ```env
-OCR_MODEL=ollama/llava-llama3
-METADATA_MODEL=ollama/llama3.2
-CHAT_MODEL=ollama/llama3.2
-OCR_API_BASE=http://workstation:11434
-METADATA_API_BASE=http://workstation:11434
-CHAT_API_BASE=http://workstation:11434
+INFERENCE_OCR_MODEL=ollama/llava-llama3
+INFERENCE_METADATA_MODEL=ollama/llama3.2
+INFERENCE_CHAT_MODEL=ollama/llama3.2
+INFERENCE_OCR_ENDPOINT=http://workstation:11434
+INFERENCE_METADATA_ENDPOINT=http://workstation:11434
+INFERENCE_CHAT_ENDPOINT=http://workstation:11434
 ```
 
 **vLLM** (recommended for Nanonets-OCR2-3B):
 
 ```env
-OCR_MODEL=openai/nanonets/Nanonets-OCR2-3B
-METADATA_MODEL=openai/meta-llama/Llama-3.2-3B-Instruct
-CHAT_MODEL=openai/meta-llama/Llama-3.2-3B-Instruct
-OCR_API_BASE=http://workstation:8100/v1
-METADATA_API_BASE=http://workstation:8101/v1
-CHAT_API_BASE=http://workstation:8101/v1
+INFERENCE_OCR_MODEL=openai/nanonets/Nanonets-OCR2-3B
+INFERENCE_METADATA_MODEL=openai/meta-llama/Llama-3.2-3B-Instruct
+INFERENCE_CHAT_MODEL=openai/meta-llama/Llama-3.2-3B-Instruct
+INFERENCE_OCR_ENDPOINT=http://workstation:8100/v1
+INFERENCE_METADATA_ENDPOINT=http://workstation:8101/v1
+INFERENCE_CHAT_ENDPOINT=http://workstation:8101/v1
 ```
 
-`OCR_API_BASE`, `METADATA_API_BASE`, and `CHAT_API_BASE` are independent — each stage can run on different servers or ports.
+`INFERENCE_OCR_ENDPOINT`, `INFERENCE_METADATA_ENDPOINT`, and `INFERENCE_CHAT_ENDPOINT` are independent — each stage can run on different servers or ports.
 
 Hybrid search reranking uses the local `BAAI/bge-reranker-v2-m3` model in-process. It is lazy-loaded on first use and unloaded again after an idle period, like the local query embedder.
 
@@ -380,23 +380,23 @@ Supported `_FILE` variants: `GOOGLE_API_KEY_FILE`, `ANTHROPIC_API_KEY_FILE`, `OP
 |---|---|---|
 | `PAPERLESS_URL` | `http://webserver:8000` | Paperless base URL (internal Docker network) |
 | `PAPERLESS_TOKEN` | *(required)* | API authentication token |
-| `OCR_MODEL` | `gemini/gemini-2.5-flash` | LiteLLM vision model string for OCR |
-| `METADATA_MODEL` | *(required)* | LiteLLM text model for metadata extraction |
-| `CHAT_MODEL` | *(required)* | LiteLLM chat/planning model for the browser copilot |
-| `OCR_API_BASE` | *(none)* | Base URL for local OCR server |
-| `METADATA_API_BASE` | *(none)* | Base URL for local metadata server |
-| `CHAT_API_BASE` | *(none)* | Base URL for the chat model server |
-| `OCR_TEMPERATURE` | *(none)* | Temperature override for OCR |
-| `METADATA_TEMPERATURE` | *(none)* | Temperature override for metadata extraction |
-| `CHAT_TEMPERATURE` | *(none)* | Temperature override for chat |
-| `OCR_REASONING_EFFORT` | `minimal` | LiteLLM `reasoning_effort` parameter for OCR |
-| `METADATA_REASONING_EFFORT` | *(none)* | LiteLLM `reasoning_effort` parameter for metadata extraction |
-| `CHAT_REASONING_EFFORT` | *(none)* | LiteLLM `reasoning_effort` parameter for chat |
-| `METADATA_MAX_TOKENS` | `1000` | Max output tokens for metadata extraction |
-| `CHAT_MAX_TOKENS` | `1000` | Max output tokens for chat |
-| `OCR_EXTRA_KWARGS` | *(none)* | JSON object of extra LiteLLM kwargs for OCR |
-| `METADATA_EXTRA_KWARGS` | *(none)* | JSON object of extra LiteLLM kwargs for metadata extraction |
-| `CHAT_EXTRA_KWARGS` | *(none)* | JSON object of extra LiteLLM kwargs for chat |
+| `INFERENCE_OCR_MODEL` | `gemini/gemini-2.5-flash` | OpenAI-compatible inference vision model string for OCR |
+| `INFERENCE_METADATA_MODEL` | *(required)* | OpenAI-compatible inference text model for metadata extraction |
+| `INFERENCE_CHAT_MODEL` | *(required)* | OpenAI-compatible inference chat/planning model for the browser copilot |
+| `INFERENCE_OCR_ENDPOINT` | *(none)* | Base URL for local OCR server |
+| `INFERENCE_METADATA_ENDPOINT` | *(none)* | Base URL for local metadata server |
+| `INFERENCE_CHAT_ENDPOINT` | *(none)* | Base URL for the chat model server |
+| `INFERENCE_OCR_TEMPERATURE` | *(none)* | Temperature override for OCR |
+| `INFERENCE_METADATA_TEMPERATURE` | *(none)* | Temperature override for metadata extraction |
+| `INFERENCE_CHAT_TEMPERATURE` | *(none)* | Temperature override for chat |
+| `INFERENCE_OCR_REASONING_EFFORT` | `minimal` | OpenAI-compatible inference `reasoning_effort` parameter for OCR |
+| `INFERENCE_METADATA_REASONING_EFFORT` | *(none)* | OpenAI-compatible inference `reasoning_effort` parameter for metadata extraction |
+| `INFERENCE_CHAT_REASONING_EFFORT` | *(none)* | OpenAI-compatible inference `reasoning_effort` parameter for chat |
+| `INFERENCE_METADATA_MAX_TOKENS` | `1000` | Max output tokens for metadata extraction |
+| `INFERENCE_CHAT_MAX_TOKENS` | `1000` | Max output tokens for chat |
+| `INFERENCE_OCR_EXTRA_KWARGS` | *(none)* | JSON object of extra OpenAI-compatible inference kwargs for OCR |
+| `INFERENCE_METADATA_EXTRA_KWARGS` | *(none)* | JSON object of extra OpenAI-compatible inference kwargs for metadata extraction |
+| `INFERENCE_CHAT_EXTRA_KWARGS` | *(none)* | JSON object of extra OpenAI-compatible inference kwargs for chat |
 | `GOOGLE_API_KEY` | *(none)* | For Gemini models |
 | `ANTHROPIC_API_KEY` | *(none)* | For Claude models |
 | `OPENAI_API_KEY` | *(none)* | For OpenAI / vLLM models |
@@ -437,7 +437,7 @@ local search inference, and exits after the configured idle timeout. This keeps
 the main FastAPI process responsive and reclaims RAM by terminating the worker
 process rather than relying on in-process GC.
 
-The `EMBEDDING_API_BASE` and external embeddings service availability do not affect
+The `INFERENCE_EMBEDDING_ENDPOINT` and external embeddings service availability do not affect
 `/search` — local retrieval uses the process-backed CPU search worker in the
 `ai` container.
 
@@ -638,9 +638,9 @@ experiments:
 
   - name: "local-nuextract"
     ocr_model: "openai/Nanonets-OCR2-3B"
-    ocr_api_base: "http://workstation:8100/v1"
+    ocr_endpoint: "http://workstation:8100/v1"
     metadata_model: "openai/numind/NuExtract-2.0-4B"
-    metadata_api_base: "http://workstation:8101/v1"
+    metadata_endpoint: "http://workstation:8101/v1"
     temperature: 0.0
 ```
 

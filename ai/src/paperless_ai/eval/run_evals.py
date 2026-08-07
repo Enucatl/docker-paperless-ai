@@ -131,7 +131,7 @@ async def run_scientific_evaluation(config: AgentConfig, split: str = "test") ->
             except Exception:
                 raise create_error
 
-        # Phoenix is reachable — enable OTel so LiteLLM spans carry token/cost data.
+        # Phoenix is reachable — enable OTel so OpenAI-compatible inference spans carry token/cost data.
         setup_telemetry()
     except Exception as e:
         log.error(
@@ -161,9 +161,9 @@ async def run_scientific_evaluation(config: AgentConfig, split: str = "test") ->
         "ocr_model": "gemini/gemini-2.5-flash",
         "metadata_model": "gemini/gemini-2.5-flash",
         "chat_model": "gemini/gemini-2.5-flash",
-        "ocr_api_base": None,
-        "metadata_api_base": None,
-        "chat_api_base": None,
+        "ocr_endpoint": None,
+        "metadata_endpoint": None,
+        "chat_endpoint": None,
         "ocr_reasoning_effort": None,
         "metadata_reasoning_effort": None,
         "metadata_response_format": "auto",
@@ -255,12 +255,12 @@ Respond with exactly one word: "appropriate" or "inappropriate".
         def __init__(
             self,
             model: str,
-            api_base: str | None,
+            endpoint: str | None,
             temperature: float,
             reasoning_effort: str | None,
         ):
             self.model = model
-            self.api_base = api_base
+            self.endpoint = endpoint
             self.temperature = temperature
             self.reasoning_effort = reasoning_effort
 
@@ -275,7 +275,7 @@ Respond with exactly one word: "appropriate" or "inappropriate".
                     messages=[
                         {"role": "user", "content": prompt},
                     ],
-                    api_base=self.api_base,
+                    endpoint=self.endpoint,
                     domain="evaluation_title_judge",
                     **kwargs,
                 )
@@ -340,7 +340,7 @@ Respond with exactly one word: "appropriate" or "inappropriate".
                 jury_models = [
                     SharedTitleJudge(
                         model=member.model,
-                        api_base=member.api_base,
+                        endpoint=member.endpoint,
                         temperature=member.temperature or 0.0,
                         reasoning_effort=member.reasoning_effort,
                     )
@@ -355,7 +355,7 @@ Respond with exactly one word: "appropriate" or "inappropriate".
                 jury_models = [
                     SharedTitleJudge(
                         model=exp_config.llm_judge_model,
-                        api_base=exp_config.chat_api_base,
+                        endpoint=exp_config.evaluation_endpoint,
                         temperature=0.0,
                         reasoning_effort=exp_config.chat_reasoning_effort,
                     )

@@ -210,7 +210,7 @@ async def test_precision_judge_fetches_batch_in_parallel_with_short_excerpts():
     client.get_document_with_content.side_effect = get_document_with_content
     config = MagicMock()
     config.chat_model = "openai/chat-model"
-    config.chat_api_base = None
+    config.chat_endpoint = None
     config.get_chat_kwargs.return_value = {}
 
     response = _completion('{"keep_doc_ids":[1,2,3,4,5]}')
@@ -294,7 +294,7 @@ def test_search_tool_schema_exposes_mode_enum():
 def test_chat_completion_kwargs_respects_configured_chat_temperature():
     config = MagicMock()
     config.chat_model = "gemini/gemini-3.1-flash-lite"
-    config.chat_api_base = "http://llm:4000"
+    config.chat_endpoint = "http://llm:4000"
     config.get_chat_kwargs.return_value = {
         "max_tokens": 321,
         "temperature": 1.0,
@@ -307,7 +307,7 @@ def test_chat_completion_kwargs_respects_configured_chat_temperature():
     assert kwargs["temperature"] == 1.0
     assert kwargs["max_tokens"] == 321
     assert kwargs["reasoning_effort"] == "low"
-    assert kwargs["api_base"] == "http://llm:4000"
+    assert kwargs["endpoint"] == "http://llm:4000"
 
 
 @pytest.mark.asyncio
@@ -392,8 +392,8 @@ async def test_chat_copilot_run_turn_emits_events_and_aggregates_usage():
     config = MagicMock()
     config.chat_model = "openai/chat-model"
     config.metadata_model = "openai/metadata-model"
-    config.chat_api_base = None
-    config.metadata_api_base = None
+    config.chat_endpoint = None
+    config.metadata_endpoint = None
     config.get_chat_kwargs.return_value = {}
 
     copilot = ChatCopilot(

@@ -116,8 +116,8 @@ def _chat_completion_kwargs(
         kwargs["temperature"] = 0.0
     kwargs.pop("tools", None)
     kwargs.pop("tool_choice", None)
-    if config.chat_api_base:
-        kwargs["api_base"] = config.chat_api_base
+    if config.chat_endpoint:
+        kwargs["endpoint"] = config.chat_endpoint
     return kwargs
 
 

@@ -24,7 +24,7 @@ async def format_chunk_for_embedding(chunk: str, meta, config) -> str:
     prepend the summary (and standard context) before embedding.
 
     ``meta`` exposes:  meta.title, meta.correspondent, meta.document_date
-    ``config`` exposes: config.effective_metadata_model, config.metadata_api_base, …
+    ``config`` exposes: config.effective_metadata_model, config.metadata_endpoint, …
     """
     # --- Uncomment to enable LLM summarisation ---
     # response = await litellm.acompletion(
@@ -34,7 +34,7 @@ async def format_chunk_for_embedding(chunk: str, meta, config) -> str:
     #         "content": f"Summarise the following document excerpt in one sentence:\n\n{chunk}",
     #     }],
     #     max_tokens=64,
-    #     **({"api_base": config.metadata_api_base} if config.metadata_api_base else {}),
+    #     **({"endpoint": config.metadata_endpoint} if config.metadata_endpoint else {}),
     # )
     # summary = response.choices[0].message.content.strip()
     # context = (

@@ -39,7 +39,10 @@ class JuryMemberConfig(BaseModel):
     """Configuration for a single judge in the LLM-as-a-jury panel."""
 
     model: str
-    api_base: Optional[str] = None
+    endpoint: Optional[str] = Field(
+        default=None,
+        validation_alias="INFERENCE_EVALUATION_ENDPOINT",
+    )
     reasoning_effort: Optional[str] = None
     temperature: Optional[float] = None
 
@@ -64,39 +67,71 @@ class AgentConfig(BaseSettings):
         return v.rstrip("/")
 
     @field_validator(
-        "ocr_api_base", "metadata_api_base", "chat_api_base", mode="before"
+        "ocr_endpoint",
+        "metadata_endpoint",
+        "chat_endpoint",
+        "embedding_endpoint",
+        "situation_endpoint",
+        mode="before",
     )
     @classmethod
-    def empty_api_base_is_none(cls, value: str | None) -> str | None:
+    def empty_endpoint_is_none(cls, value: str | None) -> str | None:
         if value is None:
             return None
         stripped = str(value).strip()
         return stripped or None
 
-    ocr_model: str = "gemini/gemini-2.5-flash"
-    metadata_model: str
-    chat_model: str = Field(
-        validation_alias=AliasChoices("chat_model", "CHAT_MODEL"),
+    ocr_model: str = Field(
+        default="gemini-2.5-flash",
+        validation_alias="INFERENCE_OCR_MODEL",
     )
-    ocr_api_base: Optional[str] = None
-    metadata_api_base: Optional[str] = None
-    chat_api_base: Optional[str] = Field(
+    metadata_model: str = Field(validation_alias="INFERENCE_METADATA_MODEL")
+    chat_model: str = Field(validation_alias="INFERENCE_CHAT_MODEL")
+    ocr_endpoint: Optional[str] = Field(
         default=None,
-        validation_alias=AliasChoices("chat_api_base", "CHAT_API_BASE"),
+        validation_alias="INFERENCE_OCR_ENDPOINT",
     )
-    ocr_reasoning_effort: Optional[str] = "minimal"
-    metadata_reasoning_effort: Optional[str] = None
+    metadata_endpoint: Optional[str] = Field(
+        default=None,
+        validation_alias="INFERENCE_METADATA_ENDPOINT",
+    )
+    chat_endpoint: Optional[str] = Field(
+        default=None,
+        validation_alias="INFERENCE_CHAT_ENDPOINT",
+    )
+    ocr_reasoning_effort: Optional[str] = Field(
+        default="minimal",
+        validation_alias=AliasChoices(
+            "INFERENCE_OCR_REASONING_EFFORT",
+            "OCR_REASONING_EFFORT",
+            "ocr_reasoning_effort",
+        ),
+    )
+    metadata_reasoning_effort: Optional[str] = Field(
+        default=None,
+        validation_alias=AliasChoices(
+            "INFERENCE_METADATA_REASONING_EFFORT",
+            "METADATA_REASONING_EFFORT",
+            "metadata_reasoning_effort",
+        ),
+    )
     metadata_response_format: Literal["auto", "json_schema", "json_object", "none"] = (
         Field(
             default="auto",
             validation_alias=AliasChoices(
-                "metadata_response_format", "METADATA_RESPONSE_FORMAT"
+                "metadata_response_format",
+                "INFERENCE_METADATA_RESPONSE_FORMAT",
+                "METADATA_RESPONSE_FORMAT",
             ),
         )
     )
     chat_reasoning_effort: Optional[str] = Field(
         default=None,
-        validation_alias=AliasChoices("chat_reasoning_effort", "CHAT_REASONING_EFFORT"),
+        validation_alias=AliasChoices(
+            "INFERENCE_CHAT_REASONING_EFFORT",
+            "CHAT_REASONING_EFFORT",
+            "chat_reasoning_effort",
+        ),
     )
 
     poll_interval: int = 300
@@ -116,18 +151,26 @@ class AgentConfig(BaseSettings):
     ocr_temperature: Optional[float] = Field(
         default=None,
         validation_alias=AliasChoices(
-            "ocr_temperature", "OCR_TEMPERATURE", "TEMPERATURE"
+            "INFERENCE_OCR_TEMPERATURE",
+            "OCR_TEMPERATURE",
+            "TEMPERATURE",
+            "ocr_temperature",
         ),
     )
     metadata_temperature: Optional[float] = Field(
         default=None,
         validation_alias=AliasChoices(
-            "metadata_temperature", "METADATA_TEMPERATURE", "TEMPERATURE"
+            "INFERENCE_METADATA_TEMPERATURE",
+            "METADATA_TEMPERATURE",
+            "TEMPERATURE",
+            "metadata_temperature",
         ),
     )
     chat_temperature: Optional[float] = Field(
         default=None,
-        validation_alias=AliasChoices("chat_temperature", "CHAT_TEMPERATURE"),
+        validation_alias=AliasChoices(
+            "INFERENCE_CHAT_TEMPERATURE", "CHAT_TEMPERATURE", "chat_temperature"
+        ),
     )
 
     ocr_prompt: str = Field(default_factory=lambda: _load_prompt("prompt.txt"))
@@ -150,11 +193,14 @@ class AgentConfig(BaseSettings):
     webhook_secret: Optional[str] = None
 
     # Embedding API server (vLLM OpenAI-compatible embeddings endpoint).
-    embedding_api_base: str = Field(
+    embedding_endpoint: str = Field(
         default="http://complex.home.arpa:8102",
-        validation_alias=AliasChoices("embedding_api_base", "EMBEDDING_API_BASE"),
+        validation_alias=AliasChoices("INFERENCE_EMBEDDING_ENDPOINT"),
     )
-    embedding_model: str = "BAAI/bge-m3"
+    embedding_model: str = Field(
+        default="BAAI/bge-m3",
+        validation_alias=AliasChoices("INFERENCE_EMBEDDING_MODEL"),
+    )
 
     # Text chunking for embedding
     chunk_size: int = Field(
@@ -190,14 +236,25 @@ class AgentConfig(BaseSettings):
     # needs more than ~2000 tokens; a hard limit prevents runaway generation
     # when a model transcribes embedded binary data (e.g. base64 images in
     # web-archive documents) instead of summarising it.
-    ocr_max_tokens: int = 4096
+    ocr_max_tokens: int = Field(
+        default=4096,
+        validation_alias=AliasChoices(
+            "INFERENCE_OCR_MAX_TOKENS", "OCR_MAX_TOKENS", "ocr_max_tokens"
+        ),
+    )
     metadata_max_tokens: int = Field(
         default=1000,
-        validation_alias=AliasChoices("metadata_max_tokens", "METADATA_MAX_TOKENS"),
+        validation_alias=AliasChoices(
+            "INFERENCE_METADATA_MAX_TOKENS",
+            "METADATA_MAX_TOKENS",
+            "metadata_max_tokens",
+        ),
     )
     chat_max_tokens: int = Field(
         default=1000,
-        validation_alias=AliasChoices("chat_max_tokens", "CHAT_MAX_TOKENS"),
+        validation_alias=AliasChoices(
+            "INFERENCE_CHAT_MAX_TOKENS", "CHAT_MAX_TOKENS", "chat_max_tokens"
+        ),
     )
 
     # Dotted import path to the agent class to use in eval experiments.
@@ -206,7 +263,26 @@ class AgentConfig(BaseSettings):
     # Model used as LLM judge for title quality evaluation.
     # Should be a strong, fixed model independent of the experiment being
     # evaluated to avoid self-grading bias.
-    llm_judge_model: str = "gemini/gemini-2.5-flash"
+    llm_judge_model: str = Field(
+        default="gemini-2.5-flash",
+        validation_alias=AliasChoices("INFERENCE_EVALUATION_MODEL"),
+    )
+    evaluation_endpoint: Optional[str] = Field(
+        default=None,
+        validation_alias=AliasChoices("INFERENCE_EVALUATION_ENDPOINT"),
+    )
+    evaluation_temperature: Optional[float] = Field(
+        default=None, alias="INFERENCE_EVALUATION_TEMPERATURE"
+    )
+    evaluation_reasoning_effort: Optional[str] = Field(
+        default=None, alias="INFERENCE_EVALUATION_REASONING_EFFORT"
+    )
+    evaluation_max_tokens: Optional[int] = Field(
+        default=None, alias="INFERENCE_EVALUATION_MAX_TOKENS"
+    )
+    evaluation_extra_kwargs: Optional[Dict[str, Any]] = Field(
+        default=None, alias="INFERENCE_EVALUATION_EXTRA_KWARGS"
+    )
 
     # Optional jury of LLM judges for title quality evaluation.
     # When set, each member votes independently and the final score is
@@ -215,24 +291,32 @@ class AgentConfig(BaseSettings):
     # If None, falls back to a single judge using llm_judge_model.
     jury: Optional[List[JuryMemberConfig]] = None
 
-    # Extra kwargs to forward to LiteLLM for OCR calls.
+    # Extra kwargs to forward to OpenAI-compatible inference for OCR calls.
     # Supports any parameter the downstream API accepts (e.g., top_p, top_k,
     # presence_penalty, or vLLM-specific fields via extra_body).
     ocr_extra_kwargs: Optional[Dict[str, Any]] = Field(
         default=None,
-        validation_alias=AliasChoices("ocr_extra_kwargs", "OCR_EXTRA_KWARGS"),
+        validation_alias=AliasChoices(
+            "INFERENCE_OCR_EXTRA_KWARGS", "OCR_EXTRA_KWARGS", "ocr_extra_kwargs"
+        ),
     )
 
-    # Extra kwargs to forward to LiteLLM for metadata extraction calls.
+    # Extra kwargs to forward to OpenAI-compatible inference for metadata extraction calls.
     metadata_extra_kwargs: Optional[Dict[str, Any]] = Field(
         default=None,
-        validation_alias=AliasChoices("metadata_extra_kwargs", "METADATA_EXTRA_KWARGS"),
+        validation_alias=AliasChoices(
+            "INFERENCE_METADATA_EXTRA_KWARGS",
+            "METADATA_EXTRA_KWARGS",
+            "metadata_extra_kwargs",
+        ),
     )
 
-    # Extra kwargs to forward to LiteLLM for chat calls.
+    # Extra kwargs to forward to OpenAI-compatible inference for chat calls.
     chat_extra_kwargs: Optional[Dict[str, Any]] = Field(
         default=None,
-        validation_alias=AliasChoices("chat_extra_kwargs", "CHAT_EXTRA_KWARGS"),
+        validation_alias=AliasChoices(
+            "INFERENCE_CHAT_EXTRA_KWARGS", "CHAT_EXTRA_KWARGS", "chat_extra_kwargs"
+        ),
     )
 
     # LLM-based chunk situating for embeddings (contextual retrieval).
@@ -240,12 +324,65 @@ class AgentConfig(BaseSettings):
     # generated context before being sent to the embedding model.
     # situation_context_chars caps how much of the full document text is passed
     # to the situation model; 0 = disabled (pass the full text).
-    situation_model: Optional[str] = None
-    situation_api_base: Optional[str] = None
-    situation_temperature: float = 0.0
-    situation_max_tokens: int = 200
-    situation_context_chars: int = 0
+    situation_model: Optional[str] = Field(
+        default=None,
+        validation_alias=AliasChoices("INFERENCE_SITUATION_MODEL"),
+    )
+    situation_endpoint: Optional[str] = Field(
+        default=None,
+        validation_alias=AliasChoices("INFERENCE_SITUATION_ENDPOINT"),
+    )
+    situation_temperature: float = Field(
+        default=0.0,
+        validation_alias=AliasChoices(
+            "INFERENCE_SITUATION_TEMPERATURE",
+            "SITUATION_TEMPERATURE",
+            "situation_temperature",
+        ),
+    )
+    situation_reasoning_effort: Optional[str] = Field(
+        default=None,
+        validation_alias=AliasChoices(
+            "INFERENCE_SITUATION_REASONING_EFFORT",
+            "SITUATION_REASONING_EFFORT",
+            "situation_reasoning_effort",
+        ),
+    )
+    situation_max_tokens: int = Field(
+        default=200,
+        validation_alias=AliasChoices(
+            "INFERENCE_SITUATION_MAX_TOKENS",
+            "SITUATION_MAX_TOKENS",
+            "situation_max_tokens",
+        ),
+    )
+    situation_extra_kwargs: Optional[Dict[str, Any]] = Field(
+        default=None,
+        validation_alias=AliasChoices(
+            "INFERENCE_SITUATION_EXTRA_KWARGS",
+            "SITUATION_EXTRA_KWARGS",
+            "situation_extra_kwargs",
+        ),
+    )
+    situation_context_chars: int = Field(
+        default=0, alias="INFERENCE_SITUATION_CONTEXT_CHARS"
+    )
     situation_concurrency: int = 8
+
+    @field_validator(
+        "ocr_model",
+        "metadata_model",
+        "chat_model",
+        "embedding_model",
+        "situation_model",
+        "llm_judge_model",
+        mode="before",
+    )
+    @classmethod
+    def normalize_model_prefix(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        return str(value).removeprefix("openrouter/").removeprefix("openai/")
 
     def get_ocr_kwargs(self) -> dict:
         """Hyperparameter kwargs for OCR (vision) requests."""
@@ -284,10 +421,15 @@ class AgentConfig(BaseSettings):
 
     def get_situation_kwargs(self) -> dict:
         """Hyperparameter kwargs for chunk-situation requests."""
-        return {
+        kwargs = {
             "max_tokens": self.situation_max_tokens,
             "temperature": self.situation_temperature,
         }
+        if self.situation_reasoning_effort:
+            kwargs["reasoning_effort"] = self.situation_reasoning_effort
+        if self.situation_extra_kwargs:
+            kwargs.update(self.situation_extra_kwargs)
+        return kwargs
 
     @classmethod
     def from_env(cls) -> "AgentConfig":

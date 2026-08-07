@@ -10,8 +10,8 @@
 # self-grading bias. Defaults to "gemini/gemini-3.5-flash-lite".
 #
 # jury replaces llm_judge_model with a panel of judges that vote by majority.
-# Each member supports: model (required), api_base, reasoning_effort, temperature.
-# api_base and reasoning_effort are forwarded to LiteLLM as model_kwargs.
+# Each member supports: model (required), endpoint, reasoning_effort, temperature.
+# endpoint and reasoning_effort are forwarded to the inference client.
 # Ties in an even-sized jury resolve to 0.0 (conservative / "inappropriate").
 experiments:
   # - name: "gemini-2.5"
@@ -28,7 +28,7 @@ experiments:
   - name: "nanonets-ocr-gemini-3.1-flash-lite-metadata"
     agent_class: "paperless_ai.agents.smart_graph_agent.SmartDocumentAgent"
     ocr_model: "openai/nanonets/Nanonets-OCR2-3B"
-    ocr_api_base: "http://complex.home.arpa:8100/v1"
+    ocr_endpoint: "http://complex.home.arpa:8100/v1"
     ocr_max_image_dimension: 1920
     ocr_temperature: 0.0
     ocr_reasoning_effort: null
@@ -41,7 +41,7 @@ experiments:
   - name: "nanonets-ocr-deepseek-v4-flash-latest-metadata"
     agent_class: "paperless_ai.agents.smart_graph_agent.SmartDocumentAgent"
     ocr_model: "openai/nanonets/Nanonets-OCR2-3B"
-    ocr_api_base: "http://complex.home.arpa:8100/v1"
+    ocr_endpoint: "http://complex.home.arpa:8100/v1"
     ocr_max_image_dimension: 1920
     ocr_temperature: 0.0
     ocr_reasoning_effort: null
@@ -55,7 +55,7 @@ experiments:
   # - name: "qwen-3.5-thinking-enabled"
   #   agent_class: "paperless_ai.agents.smart_graph_agent.SmartDocumentAgent"
   #   ocr_model: "openai/Qwen/Qwen3.5-9B"
-  #   ocr_api_base: "http://complex.home.arpa:8107/v1"
+  #   ocr_endpoint: "http://complex.home.arpa:8107/v1"
   #   ocr_max_image_dimension: 1920
   #   ocr_temperature: 1.0
   #   # Qwen-recommended parameters for thinking mode (general tasks).
@@ -70,7 +70,7 @@ experiments:
   #       chat_template_kwargs:
   #         enable_thinking: true
   #   metadata_model: "openai/Qwen/Qwen3.5-9B"
-  #   metadata_api_base: "http://complex.home.arpa:8107/v1"
+  #   metadata_endpoint: "http://complex.home.arpa:8107/v1"
   #   metadata_temperature: 1.0
   #   metadata_max_tokens: 20000
   #   metadata_extra_kwargs:
@@ -88,7 +88,7 @@ experiments:
   # - name: "qwen-3.5-thinking-disabled"
   #   agent_class: "paperless_ai.agents.smart_graph_agent.SmartDocumentAgent"
   #   ocr_model: "openai/Qwen/Qwen3.5-9B"
-  #   ocr_api_base: "http://complex.home.arpa:8107/v1"
+  #   ocr_endpoint: "http://complex.home.arpa:8107/v1"
   #   ocr_max_image_dimension: 1920
   #   ocr_temperature: 0.7
   #   # Qwen-recommended parameters for instruct mode (general tasks)
@@ -102,7 +102,7 @@ experiments:
   #       chat_template_kwargs:
   #         enable_thinking: false
   #   metadata_model: "openai/Qwen/Qwen3.5-9B"
-  #   metadata_api_base: "http://complex.home.arpa:8107/v1"
+  #   metadata_endpoint: "http://complex.home.arpa:8107/v1"
   #   metadata_temperature: 0.7
   #   metadata_max_tokens: 20000
   #   metadata_extra_kwargs:

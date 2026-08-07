@@ -37,24 +37,24 @@ log = logging.getLogger(__name__)
 
 # Regex patterns for thinking tags emitted by some reasoning models
 # (DeepSeek-R1, Qwen-QwQ, etc.) when thinking is not separated into
-# reasoning_content by the provider/LiteLLM.
+# reasoning_content by the provider/OpenAI-compatible inference.
 _THINK_RE = re.compile(r"<(think|thinking)>.*?</\1>", re.DOTALL | re.IGNORECASE)
 
 
 def _get_completion_text(response) -> str:
-    """Return only the final answer text from a LiteLLM completion response.
+    """Return only the final answer text from a OpenAI-compatible inference completion response.
 
-    LiteLLM normalises reasoning providers so that:
+    OpenAI-compatible inference normalises reasoning providers so that:
       - ``message.reasoning_content`` holds the thinking trace (string).
       - ``message.content`` holds only the final answer.
 
     Two edge cases still need handling:
 
     1. **Block-list content** – Anthropic passes thinking as typed content
-       blocks (``{"type": "thinking", ...}``).  When LiteLLM surfaces this as
+       blocks (``{"type": "thinking", ...}``).  When OpenAI-compatible inference surfaces this as
        a list we filter to ``type == "text"`` blocks only.
 
-    2. **Inline tags** – Older LiteLLM versions or models not yet normalised
+    2. **Inline tags** – Older OpenAI-compatible inference versions or models not yet normalised
        (DeepSeek-R1, Qwen-QwQ via Ollama, …) may prepend the thinking wrapped
        in ``<think>…</think>`` inside the content string.  We strip those.
     """
@@ -72,7 +72,7 @@ def _get_completion_text(response) -> str:
 
     content = content or ""
 
-    # If LiteLLM already separated thinking into reasoning_content the content
+    # If OpenAI-compatible inference already separated thinking into reasoning_content the content
     # string is clean — return it directly.
     if response.reasoning:
         return content
@@ -255,7 +255,7 @@ class StructuredOutputStrategy(BaseExtractionStrategy):
         response = await complete(
             model=kwargs.pop("model"),
             messages=kwargs.pop("messages"),
-            api_base=config.metadata_api_base,
+            endpoint=config.metadata_endpoint,
             domain="metadata_extraction",
             **kwargs,
         )
@@ -342,7 +342,7 @@ class NuExtractStrategy(BaseExtractionStrategy):
                     response = await complete(
                         model=kwargs.pop("model"),
                         messages=kwargs.pop("messages"),
-                        api_base=config.metadata_api_base,
+                        endpoint=config.metadata_endpoint,
                         domain="metadata_extraction",
                         **kwargs,
                     )
@@ -520,7 +520,7 @@ async def _batched_vision_ocr(state: AgentState, config: AgentConfig) -> dict:
             complete(
                 model=kwargs.pop("model"),
                 messages=kwargs.pop("messages"),
-                api_base=config.ocr_api_base,
+                endpoint=config.ocr_endpoint,
                 domain="vision_ocr",
                 **kwargs,
             )

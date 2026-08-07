@@ -90,14 +90,14 @@ async def main_async(args: argparse.Namespace) -> None:
     log.info(
         "OCR model: %s%s",
         config.ocr_model,
-        f" (api_base={config.ocr_api_base})" if config.ocr_api_base else "",
+        f" (endpoint={config.ocr_endpoint})" if config.ocr_endpoint else "",
     )
     log.info(
         "Metadata model: %s%s",
         config.metadata_model,
-        f" (api_base={config.metadata_api_base})" if config.metadata_api_base else "",
+        f" (endpoint={config.metadata_endpoint})" if config.metadata_endpoint else "",
     )
-    log.info("Embedding: %s @ %s", config.embedding_model, config.embedding_api_base)
+    log.info("Embedding: %s @ %s", config.embedding_model, config.embedding_endpoint)
     log.info(
         "Pipeline tags: ocr=%r metadata=%r embed=%r",
         config.tag_ocr,
@@ -134,7 +134,7 @@ async def main_async(args: argparse.Namespace) -> None:
 
                 await complete(
                     model=config.metadata_model,
-                    api_base=config.metadata_api_base,
+                    endpoint=config.metadata_endpoint,
                     domain="startup_connectivity",
                     **_kwargs,
                 )
@@ -258,12 +258,12 @@ async def main_async(args: argparse.Namespace) -> None:
 
         # Set up embeddings client (optional — embedding skipped if unavailable)
         embedder = EmbeddingAPIEmbedder(
-            config.embedding_api_base, config.embedding_model
+            config.embedding_endpoint, config.embedding_model
         )
         if not await embedder.check_connectivity():
             log.warning(
                 "Embedding API not reachable at %s — embedding will be skipped",
-                config.embedding_api_base,
+                config.embedding_endpoint,
             )
             await embedder.aclose()
             embedder = None

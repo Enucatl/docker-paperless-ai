@@ -109,7 +109,7 @@ async def _situate_single_chunk(
     response = await complete(
         model=config.situation_model,
         messages=[{"role": "user", "content": prompt}],
-        api_base=config.situation_api_base,
+        endpoint=config.situation_endpoint,
         domain="chunk_situating",
         **config.get_situation_kwargs(),
     )

@@ -7,9 +7,9 @@ from typing import Any
 from shared_inference import CompletionResult, InferenceClient
 
 
-def _endpoint(api_base: str | None) -> str:
+def _endpoint(endpoint: str | None) -> str:
     return (
-        api_base
+        endpoint
         or os.environ.get("INFERENCE_CHAT_ENDPOINT")
         or os.environ.get("OPENROUTER_BASE_URL")
         or "https://openrouter.ai/api/v1"
@@ -37,13 +37,13 @@ async def complete(
     *,
     model: str,
     messages: list[dict[str, Any]],
-    api_base: str | None = None,
+    endpoint: str | None = None,
     domain: str,
     **kwargs: Any,
 ) -> CompletionResult:
     """Send one non-streaming completion, dropping legacy routing-only options."""
     kwargs.pop("num_retries", None)
     kwargs.pop("metadata", None)
-    return await get_client(_endpoint(api_base), domain).complete(
+    return await get_client(_endpoint(endpoint), domain).complete(
         model=model.removeprefix("openrouter/"), messages=messages, **kwargs
     )

@@ -283,6 +283,7 @@ services:
       - GOOGLE_API_KEY_FILE=/run/secrets/google_api_key
       - ANTHROPIC_API_KEY_FILE=/run/secrets/anthropic_api_key
       - OPENAI_API_KEY_FILE=/run/secrets/openai_api_key
+      - OPENROUTER_API_KEY_FILE=/run/secrets/openrouter_api_key
       - HF_TOKEN_FILE=/run/secrets/hf_token
 
       # Redis queue + Qdrant + embeddings API
@@ -346,6 +347,7 @@ services:
       - openai_api_key
       - anthropic_api_key
       - google_api_key
+      - openrouter_api_key
       - hf_token
 
   ai-cleanup:
@@ -366,6 +368,7 @@ services:
       - openai_api_key
       - anthropic_api_key
       - google_api_key
+      - openrouter_api_key
       - hf_token
     environment:
       - AGENT_NAME=paperless-ai-cleanup

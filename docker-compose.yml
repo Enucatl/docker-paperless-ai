@@ -99,7 +99,7 @@ services:
   phoenix:
     extends:
       file: ../compose-security-baseline/hardening.yml
-      service: hardened-medium
+      service: hardened-large
     image: arizephoenix/phoenix:latest
     cpu_shares: 256
     tmpfs:

@@ -126,16 +126,18 @@ async def main_async(args: argparse.Namespace) -> None:
         if not args.eval:
             log.info("Checking LLM connectivity (model: %s)...", config.metadata_model)
             try:
-                import litellm
-
                 _kwargs: dict = {
-                    "model": config.metadata_model,
                     "messages": [{"role": "user", "content": "Reply with OK"}],
                     "max_tokens": 5,
                 }
-                if config.metadata_api_base:
-                    _kwargs["api_base"] = config.metadata_api_base
-                await litellm.acompletion(**_kwargs)
+                from paperless_ai.inference import complete
+
+                await complete(
+                    model=config.metadata_model,
+                    api_base=config.metadata_api_base,
+                    domain="startup_connectivity",
+                    **_kwargs,
+                )
                 log.info("LLM connectivity OK")
             except Exception as e:
                 log.warning(

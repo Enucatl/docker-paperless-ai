@@ -5,7 +5,7 @@ description = "AI batch post-processing for Paperless-ngx"
 requires-python = ">=3.14"
 dependencies = [
     "paperless-common",
-    "litellm>=1.50",
+    "shared-inference",
     "niquests>=3.0",
     "PyMuPDF>=1.25",
     "Pillow>=10.0",
@@ -13,7 +13,6 @@ dependencies = [
     "json-repair>=0.25",
     "tenacity>=8.0",
     "pydantic-settings>=2.0",
-    "openinference-instrumentation-litellm",
     "openinference-instrumentation-langchain",
     "openinference-instrumentation",
     "opentelemetry-sdk",
@@ -46,6 +45,7 @@ test = [
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
+markers = ["live: contact configured inference endpoints"]
 
 [build-system]
 requires = ["setuptools>=61.0"]
@@ -62,6 +62,7 @@ where = ["src"]
 [tool.uv.sources]
 paperless-common = { path = "../common" }
 paperless-listener = { path = "../listener" }
+shared-inference = { git = "https://github.com/Enucatl/shared-inference.git", branch = "main" }
 torch = { index = "pytorch-cpu" }
 
 [[tool.uv.index]]

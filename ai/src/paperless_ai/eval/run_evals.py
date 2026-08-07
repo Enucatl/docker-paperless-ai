@@ -12,15 +12,18 @@ Usage:
 """
 
 import importlib
+import asyncio
 import json
 import logging
 import sys
 import yaml
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
+from types import SimpleNamespace
 from pathlib import Path
 from paperless_ai.core.config import AgentConfig
 from paperless_common.telemetry import setup_telemetry
+from paperless_ai.inference import complete
 
 log = logging.getLogger(__name__)
 
@@ -246,7 +249,40 @@ An appropriate title must be:
 Respond with exactly one word: "appropriate" or "inappropriate".
 """.strip()
 
-    from phoenix.evals import ClassificationEvaluator, LLM
+    class SharedTitleJudge:
+        """Synchronous Phoenix-compatible adapter backed by shared inference."""
+
+        def __init__(
+            self,
+            model: str,
+            api_base: str | None,
+            temperature: float,
+            reasoning_effort: str | None,
+        ):
+            self.model = model
+            self.api_base = api_base
+            self.temperature = temperature
+            self.reasoning_effort = reasoning_effort
+
+        def evaluate(self, inputs: dict) -> list[SimpleNamespace]:
+            prompt = _TITLE_JUDGE_TEMPLATE.format(**inputs)
+            kwargs = {"temperature": self.temperature, "max_tokens": 8}
+            if self.reasoning_effort:
+                kwargs["reasoning_effort"] = self.reasoning_effort
+            result = asyncio.run(
+                complete(
+                    model=self.model,
+                    messages=[
+                        {"role": "user", "content": prompt},
+                    ],
+                    api_base=self.api_base,
+                    domain="evaluation_title_judge",
+                    **kwargs,
+                )
+            )
+            label = (result.content or "").strip().lower()
+            label = "inappropriate" if "inappropriate" in label else "appropriate"
+            return [SimpleNamespace(label=label)]
 
     def _safe_majority_vote(votes: list[str]) -> str:
         """Return the majority label, or 'tie' when no label has a strict majority."""
@@ -256,7 +292,7 @@ Respond with exactly one word: "appropriate" or "inappropriate".
             return most_common[0][0]
         return "tie"
 
-    def _run_judge(title_judge: ClassificationEvaluator, inputs: dict) -> str:
+    def _run_judge(title_judge: SharedTitleJudge, inputs: dict) -> str:
         """Run one title judge and return its label or ``error``."""
         try:
             return title_judge.evaluate(inputs)[0].label
@@ -298,24 +334,15 @@ Respond with exactly one word: "appropriate" or "inappropriate".
                 exp_config.metadata_reasoning_effort,
             )
 
-            # Build Phoenix 3 classification evaluators for each jury member (or single
-            # judge). Phoenix uses LiteLLM underneath, so existing model strings and
-            # per-model invocation options remain valid.
-            # Each experiment may configure a different jury, so this is built per-run.
+            # Build shared-client-backed classification evaluators for each jury member
+            # (or a single judge). Each experiment may configure a different jury.
             if exp_config.jury:
                 jury_models = [
-                    ClassificationEvaluator(
-                        name="title_appropriateness",
-                        llm=LLM(provider="litellm", model=member.model),
-                        prompt_template=_TITLE_JUDGE_TEMPLATE,
-                        choices=["appropriate", "inappropriate"],
-                        include_explanation=False,
-                        temperature=(
-                            member.temperature
-                            if member.temperature is not None
-                            else 0.0
-                        ),
-                        **member.to_litellm_model_kwargs(),
+                    SharedTitleJudge(
+                        model=member.model,
+                        api_base=member.api_base,
+                        temperature=member.temperature or 0.0,
+                        reasoning_effort=member.reasoning_effort,
                     )
                     for member in exp_config.jury
                 ]
@@ -326,13 +353,11 @@ Respond with exactly one word: "appropriate" or "inappropriate".
                 )
             else:
                 jury_models = [
-                    ClassificationEvaluator(
-                        name="title_appropriateness",
-                        llm=LLM(provider="litellm", model=exp_config.llm_judge_model),
-                        prompt_template=_TITLE_JUDGE_TEMPLATE,
-                        choices=["appropriate", "inappropriate"],
-                        include_explanation=False,
+                    SharedTitleJudge(
+                        model=exp_config.llm_judge_model,
+                        api_base=exp_config.chat_api_base,
                         temperature=0.0,
+                        reasoning_effort=exp_config.chat_reasoning_effort,
                     )
                 ]
                 log.info("Title judge: single model — %s", exp_config.llm_judge_model)

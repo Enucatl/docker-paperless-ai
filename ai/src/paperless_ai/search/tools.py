@@ -5,11 +5,11 @@ import json
 from dataclasses import dataclass, field
 from typing import Any
 
-import litellm
 from qdrant_client import AsyncQdrantClient
 from qdrant_client import models
 
 from paperless_ai.core.config import AgentConfig
+from paperless_ai.inference import complete
 from paperless_common.paperless import PaperlessClient
 from paperless_common.telemetry import set_span_attributes, start_span
 from paperless_ai.search.embedder_types import SearchEmbedder
@@ -110,7 +110,7 @@ def _chat_completion_kwargs(
     kwargs: dict[str, Any] = {
         "model": config.chat_model,
         "messages": messages,
-        **config.get_chat_litellm_kwargs(),
+        **config.get_chat_kwargs(),
     }
     if "temperature" not in kwargs:
         kwargs["temperature"] = 0.0
@@ -231,16 +231,17 @@ async def _judge_precision_documents(
                 f"Query: {query}\n\nCandidates:\n{json.dumps(docs, ensure_ascii=True)}"
             )
             try:
-                response = await litellm.acompletion(
+                response = await complete(
+                    domain="precision_search_judge",
                     **_chat_completion_kwargs(
                         config,
                         [
                             {"role": "system", "content": "Return only strict JSON."},
                             {"role": "user", "content": prompt},
                         ],
-                    )
+                    ),
                 )
-                raw = str(response.choices[0].message.content or "").strip()
+                raw = str(response.content or "").strip()
                 parsed = json.loads(raw)
                 keep_doc_ids = [
                     int(doc_id) for doc_id in parsed.get("keep_doc_ids", [])

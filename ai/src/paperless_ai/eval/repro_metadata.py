@@ -7,6 +7,7 @@ Usage:
 """
 
 import argparse
+import asyncio
 import os
 import logging
 import sys
@@ -14,8 +15,8 @@ from datetime import datetime
 from pprint import pprint
 from typing import Optional
 
-import litellm
 from pydantic import BaseModel, Field, field_validator
+from paperless_ai.inference import complete
 
 # Configure comprehensive logging for debugging
 logging.basicConfig(
@@ -25,9 +26,6 @@ logging.basicConfig(
         logging.StreamHandler(sys.stdout),
     ],
 )
-
-# Enable litellm debug mode
-litellm.set_verbose = True
 
 OCR_TEXT = """\
 BROWN & WILLIAMSON TOBACCO CORPORATION
@@ -144,22 +142,11 @@ def main() -> None:
     logger = logging.getLogger(__name__)
     logger.info("Starting metadata extraction script")
 
-    os.environ["GOOGLE_API_KEY"] = api_key
+    os.environ["OPENROUTER_API_KEY"] = api_key
     logger.debug("API key set for environment")
 
-    litellm.drop_params = True
-    logger.debug("litellm.drop_params enabled")
-
-    logger.debug(f"Checking model capabilities for: {model}")
-    schema_support = litellm.supports_response_schema(model=model)
-    json_support = "response_format" in (
-        litellm.get_supported_openai_params(model=model) or []
-    )
-    logger.info(f"Model capabilities - Schema: {schema_support}, JSON: {json_support}")
-
     print(f"Model            : {model}")
-    print(f"Schema support   : {schema_support}")
-    print(f"JSON obj support : {json_support}")
+    print("Response format  : json_object")
     print()
 
     messages = [
@@ -179,34 +166,24 @@ def main() -> None:
         kwargs["reasoning_effort"] = reasoning_effort
         logger.debug(f"reasoning_effort set to: {reasoning_effort}")
 
-    if schema_support:
-        kwargs["response_format"] = ExtractedMetadata
-        print("response_format  : Pydantic schema")
-        logger.debug("Using Pydantic schema response format")
-    elif json_support:
-        kwargs["response_format"] = {"type": "json_object"}
-        print("response_format  : json_object")
-        logger.debug("Using json_object response format")
-    else:
-        print("response_format  : none (prompt only)")
-        logger.debug("No response format specified")
+    kwargs["response_format"] = {"type": "json_object"}
 
     print()
     pprint(kwargs)
 
-    logger.info("Making litellm.completion call...")
+    logger.info("Making shared inference completion call...")
     logger.debug(
         f"Completion kwargs: model={model}, max_tokens={max_tokens}, temperature={kwargs['temperature']}"
     )
-    response = litellm.completion(**kwargs)
-    logger.info("Received response from litellm")
+    response = asyncio.run(complete(domain="metadata_repro", **kwargs))
+    logger.info("Received response from shared inference")
 
-    message = response.choices[0].message
+    message = response.message
     logger.debug(
-        f"Message type: {type(message)}, has reasoning: {hasattr(message, 'reasoning_content')}"
+        f"Message type: {type(message)}, has reasoning: {bool(response.reasoning)}"
     )
 
-    reasoning = getattr(message, "reasoning_content", None)
+    reasoning = response.reasoning
     if reasoning:
         logger.debug(f"Reasoning content present: {len(reasoning)} chars")
         print(
@@ -215,7 +192,7 @@ def main() -> None:
     else:
         logger.debug("No reasoning content in response")
 
-    raw = message.content or ""
+    raw = response.content or ""
     logger.debug(f"Raw content received: {len(raw)} chars")
     logger.debug(f"Raw content preview: {raw[:200]}")
     print(f"content ({len(raw)} chars):\n{raw}\n")

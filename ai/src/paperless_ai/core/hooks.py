@@ -39,6 +39,8 @@ import logging
 import threading
 from typing import TYPE_CHECKING, Callable, Optional
 
+from paperless_ai.inference import complete
+
 log = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
@@ -103,25 +105,15 @@ async def _situate_single_chunk(
     so providers with prefix caching reuse those KV entries across the
     concurrent ``asyncio.gather`` calls in ``situate_chunks``.
     """
-    import litellm
-    from paperless_common.telemetry import add_litellm_metadata
-
     prompt = _SITUATION_PROMPT.format(full_text=ctx_text, chunk=chunk)
-    kwargs: dict = {
-        "model": config.situation_model,
-        "messages": [{"role": "user", "content": prompt}],
-        **config.get_situation_litellm_kwargs(),
-    }
-    if config.situation_api_base:
-        kwargs["api_base"] = config.situation_api_base
-    add_litellm_metadata(
-        kwargs,
-        stage="embedding",
-        operation="situate_chunk",
+    response = await complete(
+        model=config.situation_model,
+        messages=[{"role": "user", "content": prompt}],
+        api_base=config.situation_api_base,
+        domain="chunk_situating",
+        **config.get_situation_kwargs(),
     )
-
-    response = await litellm.acompletion(**kwargs)
-    context = response.choices[0].message.content.strip()
+    context = (response.content or "").strip()
     return f"{context}\n\n{chunk}"
 
 

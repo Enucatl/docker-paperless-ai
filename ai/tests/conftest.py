@@ -19,7 +19,8 @@ import json
 import os
 import time
 import uuid
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
+from shared_inference import CompletionResult, Usage
 
 import niquests
 import pytest
@@ -251,31 +252,36 @@ _METADATA_JSON = json.dumps(
 )
 
 
-def _make_fake_acompletion():
-    async def fake_acompletion(**kwargs):
-        resp = MagicMock()
-        msg = MagicMock()
+def _make_fake_completion():
+    async def fake_completion(**kwargs):
         # Metadata calls set response_format; OCR calls do not.
-        if kwargs.get("response_format") is not None:
-            msg.content = _METADATA_JSON
-        else:
-            msg.content = _OCR_TEXT
-        resp.choices = [MagicMock(message=msg)]
-        return resp
+        content = (
+            _METADATA_JSON if kwargs.get("response_format") is not None else _OCR_TEXT
+        )
+        return CompletionResult(
+            content=content,
+            message={"role": "assistant", "content": content},
+            tool_calls=[],
+            reasoning=None,
+            usage=Usage(),
+            request_id=None,
+            raw={},
+        )
 
-    return fake_acompletion
+    return fake_completion
 
 
 @pytest.fixture(autouse=True)
 def mock_litellm():
     """
-    Intercept every litellm.acompletion call with a deterministic response.
-
-    Patches at the top-level litellm module so that any code doing
-    `import litellm; await litellm.acompletion(...)` is intercepted.
+    Intercept shared inference completion calls with deterministic responses.
     """
-    fake = _make_fake_acompletion()
-    with patch("litellm.acompletion", side_effect=fake):
+    fake = _make_fake_completion()
+    with (
+        patch("paperless_ai.agents.smart_graph_agent.complete", side_effect=fake),
+        patch("paperless_ai.core.hooks.complete", side_effect=fake),
+        patch("paperless_ai.inference.complete", side_effect=fake),
+    ):
         yield
 
 

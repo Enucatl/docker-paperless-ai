@@ -9,7 +9,6 @@ import os
 from importlib.resources import files as _pkg_files
 from typing import Any, Dict, List, Literal, Optional
 
-import litellm
 from paperless_common.secrets import read_secret
 from pydantic import AliasChoices, BaseModel, Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -40,19 +39,9 @@ class JuryMemberConfig(BaseModel):
     """Configuration for a single judge in the LLM-as-a-jury panel."""
 
     model: str
-    # Passed to LiteLLMModel.model_kwargs — covers api_base, reasoning_effort, etc.
     api_base: Optional[str] = None
     reasoning_effort: Optional[str] = None
     temperature: Optional[float] = None
-
-    def to_litellm_model_kwargs(self) -> dict:
-        """Extra kwargs forwarded to litellm.completion via LiteLLMModel.model_kwargs."""
-        kwargs = {}
-        if self.api_base:
-            kwargs["api_base"] = self.api_base
-        if self.reasoning_effort:
-            kwargs["reasoning_effort"] = self.reasoning_effort
-        return kwargs
 
 
 class AgentConfig(BaseSettings):
@@ -258,8 +247,8 @@ class AgentConfig(BaseSettings):
     situation_context_chars: int = 0
     situation_concurrency: int = 8
 
-    def get_ocr_litellm_kwargs(self) -> dict:
-        """Hyperparameter kwargs for the OCR (vision) LiteLLM call."""
+    def get_ocr_kwargs(self) -> dict:
+        """Hyperparameter kwargs for OCR (vision) requests."""
         kwargs: dict = {"max_tokens": self.ocr_max_tokens}
         if self.ocr_temperature is not None:
             kwargs["temperature"] = self.ocr_temperature
@@ -269,8 +258,8 @@ class AgentConfig(BaseSettings):
             kwargs.update(self.ocr_extra_kwargs)
         return kwargs
 
-    def get_metadata_litellm_kwargs(self) -> dict:
-        """Hyperparameter kwargs for the metadata extraction LiteLLM call."""
+    def get_metadata_kwargs(self) -> dict:
+        """Hyperparameter kwargs for metadata extraction requests."""
         kwargs: dict = {"max_tokens": self.metadata_max_tokens}
         if self.metadata_temperature is not None:
             kwargs["temperature"] = self.metadata_temperature
@@ -281,8 +270,8 @@ class AgentConfig(BaseSettings):
             kwargs.update(self.metadata_extra_kwargs)
         return kwargs
 
-    def get_chat_litellm_kwargs(self) -> dict:
-        """Hyperparameter kwargs for the chat LiteLLM call."""
+    def get_chat_kwargs(self) -> dict:
+        """Hyperparameter kwargs for chat requests."""
         kwargs: dict = {"max_tokens": self.chat_max_tokens}
         if self.chat_temperature is not None:
             kwargs["temperature"] = self.chat_temperature
@@ -293,8 +282,8 @@ class AgentConfig(BaseSettings):
             kwargs.update(self.chat_extra_kwargs)
         return kwargs
 
-    def get_situation_litellm_kwargs(self) -> dict:
-        """Hyperparameter kwargs for the chunk situation LiteLLM call."""
+    def get_situation_kwargs(self) -> dict:
+        """Hyperparameter kwargs for chunk-situation requests."""
         return {
             "max_tokens": self.situation_max_tokens,
             "temperature": self.situation_temperature,
@@ -304,5 +293,4 @@ class AgentConfig(BaseSettings):
     def from_env(cls) -> "AgentConfig":
         """Load configuration from environment variables and Docker secrets."""
         _inject_secrets()  # read *_FILE env vars and inject into os.environ
-        litellm.drop_params = True
         return cls()  # pydantic-settings reads all env vars automatically

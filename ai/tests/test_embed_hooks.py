@@ -9,9 +9,10 @@ The module-level hook cache is reset before every test via the
 import logging
 import asyncio
 import textwrap
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock
 
 import pytest
+from shared_inference import CompletionResult, Usage
 
 import paperless_ai.core.hooks as hooks_module
 from paperless_ai.core.hooks import situate_chunks
@@ -130,10 +131,18 @@ async def test_empty_chunks_returns_empty_list(meta, config):
 
 
 async def test_tier2_calls_llm_once_per_chunk(monkeypatch, meta, config_with_situation):
-    mock_response = MagicMock()
-    mock_response.choices[0].message.content = "Context sentence."
-    mock_acompletion = AsyncMock(return_value=mock_response)
-    monkeypatch.setattr("litellm.acompletion", mock_acompletion)
+    mock_acompletion = AsyncMock(
+        return_value=CompletionResult(
+            "Context sentence.",
+            {"content": "Context sentence."},
+            [],
+            None,
+            Usage(),
+            None,
+            {},
+        )
+    )
+    monkeypatch.setattr("paperless_ai.core.hooks.complete", mock_acompletion)
 
     chunks = ["chunk A", "chunk B", "chunk C"]
     results = await situate_chunks(chunks, "full document", meta, config_with_situation)
@@ -148,9 +157,20 @@ async def test_tier2_calls_llm_once_per_chunk(monkeypatch, meta, config_with_sit
 async def test_tier2_context_prepended_to_chunk(
     monkeypatch, meta, config_with_situation
 ):
-    mock_response = MagicMock()
-    mock_response.choices[0].message.content = "This is the context."
-    monkeypatch.setattr("litellm.acompletion", AsyncMock(return_value=mock_response))
+    monkeypatch.setattr(
+        "paperless_ai.core.hooks.complete",
+        AsyncMock(
+            return_value=CompletionResult(
+                "This is the context.",
+                {"content": "This is the context."},
+                [],
+                None,
+                Usage(),
+                None,
+                {},
+            )
+        ),
+    )
 
     results = await situate_chunks(["my chunk"], "doc", meta, config_with_situation)
     assert results[0] == "This is the context.\n\nmy chunk"
@@ -172,11 +192,9 @@ async def test_tier2_context_chars_truncates_full_text(monkeypatch, meta):
 
     async def capture_call(**kwargs):
         captured_prompts.append(kwargs["messages"][0]["content"])
-        resp = MagicMock()
-        resp.choices[0].message.content = "ctx"
-        return resp
+        return CompletionResult("ctx", {"content": "ctx"}, [], None, Usage(), None, {})
 
-    monkeypatch.setattr("litellm.acompletion", capture_call)
+    monkeypatch.setattr("paperless_ai.core.hooks.complete", capture_call)
 
     full_text = "A" * 100
     await situate_chunks(["chunk"], full_text, meta, cfg)
@@ -200,11 +218,9 @@ async def test_tier2_limits_llm_concurrency(monkeypatch, meta, config):
         max_active = max(max_active, active)
         await asyncio.sleep(0.01)
         active -= 1
-        resp = MagicMock()
-        resp.choices[0].message.content = "ctx"
-        return resp
+        return CompletionResult("ctx", {"content": "ctx"}, [], None, Usage(), None, {})
 
-    monkeypatch.setattr("litellm.acompletion", capture_call)
+    monkeypatch.setattr("paperless_ai.core.hooks.complete", capture_call)
 
     results = await situate_chunks(["a", "b", "c", "d"], "doc", meta, cfg)
 
@@ -262,7 +278,7 @@ async def test_custom_hook_takes_precedence_over_situation_model(
     )
     monkeypatch.setenv("EMBED_HOOK_FILE", str(hook_file))
     mock_llm = AsyncMock()
-    monkeypatch.setattr("litellm.acompletion", mock_llm)
+    monkeypatch.setattr("paperless_ai.core.hooks.complete", mock_llm)
 
     results = await situate_chunks(["chunk"], "doc", meta, config_with_situation)
 

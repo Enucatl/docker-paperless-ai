@@ -11,10 +11,7 @@ import logging
 import os
 import threading
 
-import litellm
-import niquests
-
-from paperless_common.telemetry import add_litellm_metadata
+from shared_inference import InferenceClient
 from paperless_ai.search.embedder_types import EmbeddingResult
 from paperless_ai.search.flag_reranker import FlagReranker
 
@@ -29,7 +26,12 @@ class EmbeddingAPIEmbedder:
     ):
         self._base_url = base_url.rstrip("/")
         self._model = model
-        self._client = niquests.AsyncSession(timeout=120)
+        self._client = InferenceClient(
+            base_url=f"{self._base_url}/v1",
+            api_key=os.environ.get("OPENAI_API_KEY", "dummy"),
+            provider="local",
+            domain="document_embedding",
+        )
 
     async def aclose(self) -> None:
         """Close the underlying HTTP client connection pool."""
@@ -43,26 +45,17 @@ class EmbeddingAPIEmbedder:
 
     async def embed(self, texts: list[str]) -> list[EmbeddingResult]:
         """Embed *texts* and return dense vectors plus optional sparse vectors."""
-        kwargs = {
-            "model": self._model,
-            "input": texts,
-            "api_base": f"{self._base_url}/v1",
-            "api_key": os.environ.get("OPENAI_API_KEY", "dummy"),
-            "custom_llm_provider": "openai",
-            "encoding_format": "float",
-        }
-        add_litellm_metadata(
-            kwargs,
-            stage="embedding",
-            operation="embed_document_chunks",
+        response = await self._client.embed(
+            model=self._model,
+            input=texts,
+            encoding_format="float",
         )
-        response = await litellm.aembedding(**kwargs)
 
         results = []
-        for item in response.data:
-            item_dict = item.model_dump() if hasattr(item, "model_dump") else dict(item)
-            dense = item_dict.get("embedding", [])
-            sparse = item_dict.get("sparse_embedding") or {}
+        for dense, sparse in zip(
+            response.embeddings, response.sparse_embeddings, strict=False
+        ):
+            sparse = sparse or {}
             results.append(
                 EmbeddingResult(
                     dense=dense,

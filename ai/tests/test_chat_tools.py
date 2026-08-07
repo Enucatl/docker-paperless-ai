@@ -18,6 +18,22 @@ from paperless_ai.search.tools import (
     parse_tool_arguments,
     search_documents,
 )
+from shared_inference import CompletionResult, Usage
+
+
+def _completion(content: str, tool_calls: list[dict] | None = None) -> CompletionResult:
+    message = {"role": "assistant", "content": content}
+    if tool_calls:
+        message["tool_calls"] = tool_calls
+    return CompletionResult(
+        content=content,
+        message=message,
+        tool_calls=tool_calls or [],
+        reasoning=None,
+        usage=Usage(),
+        request_id=None,
+        raw={},
+    )
 
 
 def test_route_tools_goes_to_tool_node_when_tool_calls_present():
@@ -195,12 +211,9 @@ async def test_precision_judge_fetches_batch_in_parallel_with_short_excerpts():
     config = MagicMock()
     config.chat_model = "openai/chat-model"
     config.chat_api_base = None
-    config.get_chat_litellm_kwargs.return_value = {}
+    config.get_chat_kwargs.return_value = {}
 
-    response = MagicMock()
-    response.choices = [
-        MagicMock(message=MagicMock(content='{"keep_doc_ids":[1,2,3,4,5]}'))
-    ]
+    response = _completion('{"keep_doc_ids":[1,2,3,4,5]}')
 
     captured_prompt = ""
 
@@ -209,7 +222,7 @@ async def test_precision_judge_fetches_batch_in_parallel_with_short_excerpts():
         captured_prompt = kwargs["messages"][1]["content"]
         return response
 
-    with patch("paperless_ai.search.tools.litellm.acompletion", judge_call):
+    with patch("paperless_ai.search.tools.complete", judge_call):
         kept = await _judge_precision_documents(
             query="query",
             doc_ids=[1, 2, 3, 4, 5],
@@ -282,7 +295,7 @@ def test_chat_completion_kwargs_respects_configured_chat_temperature():
     config = MagicMock()
     config.chat_model = "gemini/gemini-3.1-flash-lite"
     config.chat_api_base = "http://llm:4000"
-    config.get_chat_litellm_kwargs.return_value = {
+    config.get_chat_kwargs.return_value = {
         "max_tokens": 321,
         "temperature": 1.0,
         "reasoning_effort": "low",
@@ -381,7 +394,7 @@ async def test_chat_copilot_run_turn_emits_events_and_aggregates_usage():
     config.metadata_model = "openai/metadata-model"
     config.chat_api_base = None
     config.metadata_api_base = None
-    config.get_chat_litellm_kwargs.return_value = {}
+    config.get_chat_kwargs.return_value = {}
 
     copilot = ChatCopilot(
         config=config,
@@ -390,39 +403,23 @@ async def test_chat_copilot_run_turn_emits_events_and_aggregates_usage():
         qdrant_url="http://qdrant:6333",
     )
 
-    first_response = MagicMock()
-    first_response.choices = [
-        MagicMock(
-            message={
-                "role": "assistant",
-                "content": "",
-                "tool_calls": [
-                    {
-                        "id": "call_1",
-                        "function": {
-                            "name": "search_documents",
-                            "arguments": '{"query":"invoice"}',
-                        },
-                    }
-                ],
+    first_response = _completion(
+        "",
+        [
+            {
+                "id": "call_1",
+                "function": {
+                    "name": "search_documents",
+                    "arguments": '{"query":"invoice"}',
+                },
             }
-        )
-    ]
-    first_response.usage = {
-        "prompt_tokens": 10,
-        "completion_tokens": 2,
-        "total_tokens": 12,
-    }
-
-    second_response = MagicMock()
-    second_response.choices = [
-        MagicMock(message={"role": "assistant", "content": "Answer with Doc 42 cited."})
-    ]
-    second_response.usage = {
-        "prompt_tokens": 20,
-        "completion_tokens": 4,
-        "total_tokens": 24,
-    }
+        ],
+    )
+    first_response.usage = Usage(prompt_tokens=10, completion_tokens=2, total_tokens=12)
+    second_response = _completion("Answer with Doc 42 cited.")
+    second_response.usage = Usage(
+        prompt_tokens=20, completion_tokens=4, total_tokens=24
+    )
 
     events = []
 
@@ -431,7 +428,7 @@ async def test_chat_copilot_run_turn_emits_events_and_aggregates_usage():
 
     with (
         patch(
-            "paperless_ai.search.chat_agent.litellm.acompletion",
+            "paperless_ai.search.chat_agent.complete",
             side_effect=[first_response, second_response],
         ),
         patch(

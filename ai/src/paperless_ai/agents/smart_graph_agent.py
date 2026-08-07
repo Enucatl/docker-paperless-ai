@@ -25,14 +25,13 @@ from typing import Optional
 import datetime as _dt
 
 import fitz  # PyMuPDF
-import litellm
 from json_repair import repair_json
 from pydantic import BaseModel, Field
 
 from paperless_ai.agents.base import AgentResult, BaseDocumentAgent, DocumentMetadata
 from paperless_ai.agents.state import AgentState
 from paperless_ai.core.config import AgentConfig
-from paperless_common.telemetry import add_litellm_metadata
+from paperless_ai.inference import complete
 
 log = logging.getLogger(__name__)
 
@@ -59,8 +58,8 @@ def _get_completion_text(response) -> str:
        (DeepSeek-R1, Qwen-QwQ via Ollama, …) may prepend the thinking wrapped
        in ``<think>…</think>`` inside the content string.  We strip those.
     """
-    message = response.choices[0].message
-    content = message.content
+    message = response.message
+    content = message.get("content")
 
     # Case 1: content is a list of typed blocks (Anthropic extended thinking).
     # Keep only text blocks; discard thinking blocks.
@@ -75,7 +74,7 @@ def _get_completion_text(response) -> str:
 
     # If LiteLLM already separated thinking into reasoning_content the content
     # string is clean — return it directly.
-    if getattr(message, "reasoning_content", None):
+    if response.reasoning:
         return content
 
     # Case 2: strip inline thinking tags for providers not yet normalised.
@@ -178,8 +177,15 @@ def _build_metadata_context(
 def _metadata_response_format_tier(config: AgentConfig) -> tuple[str, object | None]:
     """Return the metadata prompt and the selected response format policy."""
     response_format_policy = config.metadata_response_format
-    if response_format_policy == "json_schema":
-        return config.metadata_prompt, _ExtractedMetadata
+    schema_format = {
+        "type": "json_schema",
+        "json_schema": {
+            "name": "extracted-metadata",
+            "schema": _ExtractedMetadata.model_json_schema(),
+        },
+    }
+    if response_format_policy in {"json_schema", "auto"}:
+        return config.metadata_prompt, schema_format
 
     system_prompt = config.metadata_prompt + "\n\n" + _field_instructions_from_schema()
     if response_format_policy == "json_object":
@@ -187,19 +193,6 @@ def _metadata_response_format_tier(config: AgentConfig) -> tuple[str, object | N
     if response_format_policy == "none":
         return system_prompt, None
 
-    if litellm.supports_response_schema(model=config.metadata_model):
-        return config.metadata_prompt, _ExtractedMetadata
-
-    if "response_format" in (
-        litellm.get_supported_openai_params(model=config.metadata_model) or []
-    ):
-        return system_prompt, {
-            "type": "json_schema",
-            "json_schema": {
-                "name": "extracted-metadata",
-                "schema": _ExtractedMetadata.model_json_schema(),
-            },
-        }
     return system_prompt, None
 
 
@@ -252,22 +245,20 @@ class StructuredOutputStrategy(BaseExtractionStrategy):
             "model": config.metadata_model,
             "messages": messages,
             "num_retries": config.llm_retries,
-            **config.get_metadata_litellm_kwargs(),
+            **config.get_metadata_kwargs(),
         }
         if "temperature" not in kwargs:
             kwargs["temperature"] = 0
         if response_format is not None:
             kwargs["response_format"] = response_format
 
-        if config.metadata_api_base:
-            kwargs["api_base"] = config.metadata_api_base
-        add_litellm_metadata(
-            kwargs,
-            stage="metadata",
-            operation="extract_metadata",
+        response = await complete(
+            model=kwargs.pop("model"),
+            messages=kwargs.pop("messages"),
+            api_base=config.metadata_api_base,
+            domain="metadata_extraction",
+            **kwargs,
         )
-
-        response = await litellm.acompletion(**kwargs)
         raw = _get_completion_text(response) or "{}"
         log.info("Smart agent: metadata raw response: %s", raw)
 
@@ -328,15 +319,6 @@ class NuExtractStrategy(BaseExtractionStrategy):
             "num_retries": config.llm_retries,
         }
 
-        if config.metadata_api_base:
-            base_kwargs["api_base"] = config.metadata_api_base
-        add_litellm_metadata(
-            base_kwargs,
-            stage="metadata",
-            operation="extract_metadata",
-            strategy="nuextract",
-        )
-
         from tenacity import AsyncRetrying, retry_if_exception_type, stop_after_attempt
 
         max_attempts = max(1, config.nuextract_json_retries)
@@ -357,7 +339,13 @@ class NuExtractStrategy(BaseExtractionStrategy):
                         **base_kwargs,
                         "temperature": 0 if attempt_num == 1 else 0.1,
                     }
-                    response = await litellm.acompletion(**kwargs)
+                    response = await complete(
+                        model=kwargs.pop("model"),
+                        messages=kwargs.pop("messages"),
+                        api_base=config.metadata_api_base,
+                        domain="metadata_extraction",
+                        **kwargs,
+                    )
                     raw = _get_completion_text(response) or "{}"
                     log.info(
                         "Smart agent: NuExtract raw (attempt %d/%d): %s",
@@ -526,17 +514,17 @@ async def _batched_vision_ocr(state: AgentState, config: AgentConfig) -> dict:
             "model": config.ocr_model,
             "messages": messages,
             "num_retries": config.llm_retries,
-            **config.get_ocr_litellm_kwargs(),
+            **config.get_ocr_kwargs(),
         }
-        if config.ocr_api_base:
-            kwargs["api_base"] = config.ocr_api_base
-        add_litellm_metadata(
-            kwargs,
-            stage="ocr",
-            operation="extract_text",
+        tasks.append(
+            complete(
+                model=kwargs.pop("model"),
+                messages=kwargs.pop("messages"),
+                api_base=config.ocr_api_base,
+                domain="vision_ocr",
+                **kwargs,
+            )
         )
-
-        tasks.append(litellm.acompletion(**kwargs))
     responses = await asyncio.gather(*tasks)
     chunks = [_get_completion_text(r) for r in responses]
 

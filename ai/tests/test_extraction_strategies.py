@@ -25,6 +25,19 @@ from paperless_ai.agents.smart_graph_agent import (
     _extract_metadata,
 )
 from paperless_ai.core.config import AgentConfig
+from shared_inference import CompletionResult, Usage
+
+
+def completion_result(content: str | None) -> CompletionResult:
+    return CompletionResult(
+        content=content,
+        message={"role": "assistant", "content": content},
+        tool_calls=[],
+        reasoning=None,
+        usage=Usage(),
+        request_id=None,
+        raw={},
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -42,7 +55,7 @@ def mock_config():
     config.metadata_response_format = "auto"
     config.llm_retries = 2
     config.nuextract_json_retries = 2
-    config.get_metadata_litellm_kwargs = lambda: {}
+    config.get_metadata_kwargs = lambda: {}
     return config
 
 
@@ -164,12 +177,12 @@ class TestStructuredOutputStrategy:
         return StructuredOutputStrategy()
 
     @pytest.mark.parametrize(
-        ("policy", "supports_schema", "expected_response_format", "has_instructions"),
+        ("policy", "expected_response_format", "has_instructions"),
         [
-            ("auto", True, _ExtractedMetadata, False),
-            ("json_schema", False, _ExtractedMetadata, False),
-            ("json_object", False, {"type": "json_object"}, True),
-            ("none", False, None, True),
+            ("auto", "schema", False),
+            ("json_schema", "schema", False),
+            ("json_object", {"type": "json_object"}, True),
+            ("none", None, True),
         ],
     )
     @pytest.mark.asyncio
@@ -178,21 +191,16 @@ class TestStructuredOutputStrategy:
         strategy,
         mock_config,
         policy,
-        supports_schema,
         expected_response_format,
         has_instructions,
     ):
-        """Each response format policy selects its prompt and LiteLLM kwargs."""
+        """Each response format policy selects its prompt and request format."""
         mock_config.metadata_response_format = policy
-        mock_message = MagicMock(content='{"title": "Test"}')
-        mock_response = MagicMock(choices=[MagicMock(message=mock_message)])
-
-        with (
-            patch("litellm.supports_response_schema", return_value=supports_schema),
-            patch("litellm.get_supported_openai_params", return_value=[]),
-            patch("litellm.acompletion", new_callable=AsyncMock) as mock_llm,
-        ):
-            mock_llm.return_value = mock_response
+        with patch(
+            "paperless_ai.agents.smart_graph_agent.complete",
+            new_callable=AsyncMock,
+        ) as mock_llm:
+            mock_llm.return_value = completion_result('{"title": "Test"}')
             await strategy.extract("Sample OCR text", mock_config)
 
         kwargs = mock_llm.await_args.kwargs
@@ -200,6 +208,11 @@ class TestStructuredOutputStrategy:
         assert ("Output JSON with these fields:" in system_prompt) is has_instructions
         if expected_response_format is None:
             assert "response_format" not in kwargs
+        elif expected_response_format == "schema":
+            assert kwargs["response_format"]["type"] == "json_schema"
+            assert kwargs["response_format"]["json_schema"]["schema"] == (
+                _ExtractedMetadata.model_json_schema()
+            )
         else:
             assert kwargs["response_format"] == expected_response_format
 
@@ -213,13 +226,10 @@ class TestStructuredOutputStrategy:
                 "correspondent": "Acme Corp",
             }
         )
-        mock_message = MagicMock()
-        mock_message.content = raw_response
-        mock_response = MagicMock()
-        mock_response.choices = [MagicMock(message=mock_message)]
-
-        with patch("litellm.acompletion", new_callable=AsyncMock) as mock_llm:
-            mock_llm.return_value = mock_response
+        with patch(
+            "paperless_ai.agents.smart_graph_agent.complete", new_callable=AsyncMock
+        ) as mock_llm:
+            mock_llm.return_value = completion_result(raw_response)
             result = await strategy.extract("Sample OCR text", mock_config)
 
         assert result.title == "Test Invoice"
@@ -231,13 +241,10 @@ class TestStructuredOutputStrategy:
         """LLM response with malformed JSON should fall back gracefully."""
         # Malformed but recoverable JSON
         raw_response = '{"title": "Test", "date": "2024-01-15",}'
-        mock_message = MagicMock()
-        mock_message.content = raw_response
-        mock_response = MagicMock()
-        mock_response.choices = [MagicMock(message=mock_message)]
-
-        with patch("litellm.acompletion", new_callable=AsyncMock) as mock_llm:
-            mock_llm.return_value = mock_response
+        with patch(
+            "paperless_ai.agents.smart_graph_agent.complete", new_callable=AsyncMock
+        ) as mock_llm:
+            mock_llm.return_value = completion_result(raw_response)
             result = await strategy.extract("Sample OCR text", mock_config)
 
         # Should create an _ExtractedMetadata object (may have empty fields if repair fails)
@@ -252,13 +259,10 @@ class TestStructuredOutputStrategy:
                 # date and correspondent missing
             }
         )
-        mock_message = MagicMock()
-        mock_message.content = raw_response
-        mock_response = MagicMock()
-        mock_response.choices = [MagicMock(message=mock_message)]
-
-        with patch("litellm.acompletion", new_callable=AsyncMock) as mock_llm:
-            mock_llm.return_value = mock_response
+        with patch(
+            "paperless_ai.agents.smart_graph_agent.complete", new_callable=AsyncMock
+        ) as mock_llm:
+            mock_llm.return_value = completion_result(raw_response)
             result = await strategy.extract("Sample OCR text", mock_config)
 
         assert result.title == "Invoice"
@@ -268,13 +272,10 @@ class TestStructuredOutputStrategy:
     @pytest.mark.asyncio
     async def test_extract_empty_response(self, strategy, mock_config):
         """Empty or null LLM response should default to empty metadata."""
-        mock_message = MagicMock()
-        mock_message.content = None
-        mock_response = MagicMock()
-        mock_response.choices = [MagicMock(message=mock_message)]
-
-        with patch("litellm.acompletion", new_callable=AsyncMock) as mock_llm:
-            mock_llm.return_value = mock_response
+        with patch(
+            "paperless_ai.agents.smart_graph_agent.complete", new_callable=AsyncMock
+        ) as mock_llm:
+            mock_llm.return_value = completion_result(None)
             result = await strategy.extract("Sample OCR text", mock_config)
 
         # Should default to empty metadata
@@ -306,13 +307,10 @@ class TestNuExtractStrategy:
                 "issuing_organization_or_sender": "Acme Corp",
             }
         )
-        mock_message = MagicMock()
-        mock_message.content = raw_response
-        mock_response = MagicMock()
-        mock_response.choices = [MagicMock(message=mock_message)]
-
-        with patch("litellm.acompletion", new_callable=AsyncMock) as mock_llm:
-            mock_llm.return_value = mock_response
+        with patch(
+            "paperless_ai.agents.smart_graph_agent.complete", new_callable=AsyncMock
+        ) as mock_llm:
+            mock_llm.return_value = completion_result(raw_response)
             result = await strategy.extract("Sample OCR text", mock_config)
 
         assert result.title == "Test Invoice"
@@ -328,13 +326,10 @@ class TestNuExtractStrategy:
                 # Missing date and correspondent
             }
         )
-        mock_message = MagicMock()
-        mock_message.content = raw_response
-        mock_response = MagicMock()
-        mock_response.choices = [MagicMock(message=mock_message)]
-
-        with patch("litellm.acompletion", new_callable=AsyncMock) as mock_llm:
-            mock_llm.return_value = mock_response
+        with patch(
+            "paperless_ai.agents.smart_graph_agent.complete", new_callable=AsyncMock
+        ) as mock_llm:
+            mock_llm.return_value = completion_result(raw_response)
             result = await strategy.extract("Sample OCR text", mock_config)
 
         assert result.title == "Test"
@@ -347,13 +342,10 @@ class TestNuExtractStrategy:
         # First response: invalid JSON that triggers retry
         # The strategy will retry and potentially get fixed JSON
         raw_response = '{"title": "Test"'  # Incomplete JSON
-        mock_message = MagicMock()
-        mock_message.content = raw_response
-        mock_response = MagicMock()
-        mock_response.choices = [MagicMock(message=mock_message)]
-
-        with patch("litellm.acompletion", new_callable=AsyncMock) as mock_llm:
-            mock_llm.return_value = mock_response
+        with patch(
+            "paperless_ai.agents.smart_graph_agent.complete", new_callable=AsyncMock
+        ) as mock_llm:
+            mock_llm.return_value = completion_result(raw_response)
             result = await strategy.extract("Sample OCR text", mock_config)
 
         # Should create metadata object (may be empty if unrepair able)

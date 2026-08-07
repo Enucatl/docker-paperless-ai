@@ -4,10 +4,10 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable
 
-import litellm
 from qdrant_client import AsyncQdrantClient
 
 from paperless_ai.core.config import AgentConfig
+from paperless_ai.inference import complete
 from paperless_common.paperless import PaperlessClient
 from paperless_common.telemetry import set_span_attributes, start_span
 from paperless_ai.search.chat_state import ChatState
@@ -93,7 +93,7 @@ EventCallback = Callable[[dict[str, Any]], Awaitable[None]]
 
 
 class ChatCopilot:
-    """A small ReAct loop backed by LangGraph and LiteLLM."""
+    """A small ReAct loop backed by the shared inference client."""
 
     def __init__(
         self,
@@ -122,7 +122,7 @@ class ChatCopilot:
             "messages": messages,
             "tools": TOOL_SCHEMAS,
             "tool_choice": "auto",
-            **self._config.get_chat_litellm_kwargs(),
+            **self._config.get_chat_kwargs(),
         }
         if "temperature" not in kwargs:
             kwargs["temperature"] = 0.0
@@ -179,7 +179,9 @@ class ChatCopilot:
                         "content": "Thinking about the next step.",
                     },
                 )
-                response = await litellm.acompletion(**self._model_kwargs(messages))
+                response = await complete(
+                    domain="browser_copilot", **self._model_kwargs(messages)
+                )
                 usage = _extract_usage(response)
                 model = self._config.chat_model
                 if usage is None:
@@ -206,7 +208,7 @@ class ChatCopilot:
                         },
                     )
 
-                assistant_message = _message_to_dict(response.choices[0].message)
+                assistant_message = _message_to_dict(response.message)
                 messages.append(assistant_message)
                 tool_calls = assistant_message.get("tool_calls") or []
                 set_span_attributes(

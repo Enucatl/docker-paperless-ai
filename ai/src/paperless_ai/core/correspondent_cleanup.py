@@ -17,11 +17,11 @@ from itertools import combinations
 from pathlib import Path
 from typing import Any
 
-import litellm
 import niquests
 from pydantic import BaseModel
 
 from paperless_ai.core.config import AgentConfig
+from paperless_ai.inference import complete
 from paperless_common.paperless import PaperlessClient
 
 log = logging.getLogger(__name__)
@@ -343,8 +343,8 @@ async def _judge_pair(
         "temperature": judge_temperature,
         "max_tokens": 120,
     }
-    response = await litellm.acompletion(**kwargs)
-    raw = response.choices[0].message.content or "{}"
+    response = await complete(domain="correspondent_cleanup", **kwargs)
+    raw = response.content or "{}"
     parsed = _JudgeDecision.model_validate_json(raw)
 
     if parsed.same_entity and parsed.confidence == "high":

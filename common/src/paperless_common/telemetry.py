@@ -14,16 +14,6 @@ log = logging.getLogger(__name__)
 _configured = False
 
 
-def add_litellm_metadata(kwargs: dict, **fields: str) -> dict:
-    """Merge Paperless-specific metadata into a LiteLLM call kwargs dict."""
-    metadata = dict(kwargs.get("metadata") or {})
-    paperless_ai = dict(metadata.get("paperless_ai") or {})
-    paperless_ai.update({k: v for k, v in fields.items() if v is not None})
-    metadata["paperless_ai"] = paperless_ai
-    kwargs["metadata"] = metadata
-    return kwargs
-
-
 @contextmanager
 def start_span(name: str, **attributes):
     """Start an OTEL span when telemetry is available, otherwise no-op."""
@@ -74,7 +64,6 @@ def setup_telemetry(
         from opentelemetry.sdk import trace as trace_sdk
         from opentelemetry.sdk.trace.export import SimpleSpanProcessor
         from openinference.instrumentation.langchain import LangChainInstrumentor
-        from openinference.instrumentation.litellm import LiteLLMInstrumentor
         from openinference.semconv.resource import ResourceAttributes
     except ImportError as exc:
         log.warning("Telemetry packages not available: %s — skipping", exc)
@@ -98,7 +87,6 @@ def setup_telemetry(
     tracer_provider.add_span_processor(SimpleSpanProcessor(exporter))
     trace.set_tracer_provider(tracer_provider)
 
-    LiteLLMInstrumentor().instrument(tracer_provider=tracer_provider)
     LangChainInstrumentor().instrument(tracer_provider=tracer_provider)
     _configured = True
     log.info(

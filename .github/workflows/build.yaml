@@ -32,7 +32,8 @@ jobs:
       push: ${{ github.event_name != 'pull_request' }}
       fail_on_fs_findings: false
       fail_on_image_findings: false
-    secrets: inherit
+    secrets:
+      registry_token: ${{ secrets.GITHUB_TOKEN }}
 
   ai:
     permissions:
@@ -49,4 +50,5 @@ jobs:
       push: ${{ github.event_name != 'pull_request' }}
       fail_on_fs_findings: false
       fail_on_image_findings: false
-    secrets: inherit
+    secrets:
+      registry_token: ${{ secrets.GITHUB_TOKEN }}

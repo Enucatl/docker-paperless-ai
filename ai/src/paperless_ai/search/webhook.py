@@ -10,12 +10,13 @@ import uuid
 from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING
 
+import niquests
 from fastapi import FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse, JSONResponse
 from paperless_common.secrets import read_secret
 
 from paperless_ai.core.config import AgentConfig
-from paperless_common.paperless import PaperlessClient
+from paperless_common.paperless import PaperlessClient, _raise_for_status
 from paperless_common.telemetry import setup_telemetry
 from paperless_common.queue import TaskQueues
 from paperless_ai.search.retriever import (
@@ -56,6 +57,77 @@ _search_request_timeout_seconds: float = 20.0
 K = 25  # max chunks from dense search
 N = 50  # min candidate pool size before local reranking
 RRF_K = 60  # RRF smoothing constant
+
+
+def _is_retryable_paperless_error(exc: Exception) -> bool:
+    """Return whether a Paperless startup error may be transient."""
+    response = getattr(exc, "response", None)
+    status_code = getattr(response, "status_code", None)
+    if status_code is not None:
+        return status_code in {408, 429} or status_code >= 500
+    return isinstance(exc, niquests.RequestException)
+
+
+async def _initialize_paperless(
+    client: PaperlessClient,
+    config: AgentConfig,
+    *,
+    retry_delay: float = 1.0,
+    max_retry_delay: float = 60.0,
+) -> tuple[int, int, int]:
+    """Wait for Paperless and ensure the AI-managed resources are ready."""
+    attempt = 0
+    while True:
+        attempt += 1
+        try:
+            response = await client._client.get("/api/")
+            _raise_for_status(response)
+            log.info(
+                "Paperless API reachable (version: %s)",
+                response.headers.get("x-version", "unknown"),
+            )
+
+            if config.manage_paperless_workflows:
+                added_wf_id, updated_wf_id = await client.ensure_ai_workflows(
+                    tag_ocr=config.tag_ocr,
+                    webhook_url=config.paperless_webhook_url,
+                    webhook_secret=config.webhook_secret,
+                )
+                log.info(
+                    "Paperless workflows ready: document_added=%d document_updated=%d",
+                    added_wf_id,
+                    updated_wf_id,
+                )
+            else:
+                added_wf_id = updated_wf_id = 0
+
+            custom_field_id = await client.get_or_create_custom_field(
+                "ai_processed", data_type="date"
+            )
+            ai_summary_field_id = await client.get_or_create_custom_field(
+                "ai_summary", data_type="longtext"
+            )
+            ai_result_field_id = await client.get_or_create_custom_field(
+                "ai_result", data_type="longtext"
+            )
+            log.info(
+                "Custom fields: ai_processed=%d ai_summary=%d ai_result=%d",
+                custom_field_id,
+                ai_summary_field_id,
+                ai_result_field_id,
+            )
+            return custom_field_id, ai_summary_field_id, ai_result_field_id
+        except Exception as exc:
+            if not _is_retryable_paperless_error(exc):
+                raise
+            delay = min(max_retry_delay, retry_delay * 2 ** min(attempt - 1, 6))
+            log.warning(
+                "Paperless startup attempt %d failed: %s; retrying in %.1fs",
+                attempt,
+                exc,
+                delay,
+            )
+            await asyncio.sleep(delay)
 
 
 @asynccontextmanager
@@ -119,7 +191,6 @@ async def lifespan(app: FastAPI):
     _queues = TaskQueues(redis_url)
     _lazy_embedder = None
 
-    from paperless_common.paperless import _raise_for_status
     from paperless_ai.core.runner import (
         clear_shutdown_request,
         close_model_probe_session,
@@ -138,41 +209,12 @@ async def lifespan(app: FastAPI):
     _worker_tasks = []
     clear_shutdown_request()
 
-    log.info("Checking Paperless API connectivity...")
-    response = await _paperless_client._client.get("/api/")
-    _raise_for_status(response)
-    log.info(
-        "Paperless API reachable (version: %s)",
-        response.headers.get("x-version", "unknown"),
-    )
-
-    if _config.manage_paperless_workflows:
-        added_wf_id, updated_wf_id = await _paperless_client.ensure_ai_workflows(
-            tag_ocr=_config.tag_ocr,
-            webhook_url=_config.paperless_webhook_url,
-            webhook_secret=_config.webhook_secret,
-        )
-        log.info(
-            "Paperless workflows ready: document_added=%d document_updated=%d",
-            added_wf_id,
-            updated_wf_id,
-        )
-
-    custom_field_id = await _paperless_client.get_or_create_custom_field(
-        "ai_processed", data_type="date"
-    )
-    ai_summary_field_id = await _paperless_client.get_or_create_custom_field(
-        "ai_summary", data_type="longtext"
-    )
-    ai_result_field_id = await _paperless_client.get_or_create_custom_field(
-        "ai_result", data_type="longtext"
-    )
-    log.info(
-        "Custom fields: ai_processed=%d ai_summary=%d ai_result=%d",
+    log.info("Checking Paperless API connectivity and managed resources...")
+    (
         custom_field_id,
         ai_summary_field_id,
         ai_result_field_id,
-    )
+    ) = await _initialize_paperless(_paperless_client, _config)
 
     store = QdrantDocumentStore(_config.qdrant_url)
     try:

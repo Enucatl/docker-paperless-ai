@@ -44,8 +44,8 @@ services:
       # (webhook-listener is on the same Docker network as webserver).
       - PAPERLESS_ALLOWED_HOSTS=*
       - PAPERLESS_CORS_ALLOWED_HOSTS=http://webserver:8000
-      # Clear the production CA cert path — the file doesn't exist in the test environment.
-      - PAPERLESS_EMAIL_CERTIFICATE_LOCATION=
+      # Use the image's CA bundle; empty now falls back to the source directory.
+      - PAPERLESS_EMAIL_CERTIFICATE_LOCATION=/etc/ssl/certs/ca-certificates.crt
 
   # Qdrant vector DB — anonymous volume so `down -v` leaves no residue.
   qdrant:

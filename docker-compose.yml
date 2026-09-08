@@ -84,7 +84,6 @@ services:
       - internal
       - traefik_proxy
     labels:
-      - "checkmk_monitor=true"
       - "traefik.enable=true"
       - "traefik.http.routers.paperless.rule=Host(`paperless.${DOCKER_DOMAIN}`)"
       - "traefik.http.routers.paperless.entrypoints=https"
@@ -108,7 +107,6 @@ services:
       - internal
       - traefik_proxy
     labels:
-      - "checkmk_monitor=true"
       - "traefik.enable=true"
       - "traefik.docker.network=traefik_proxy"
       - "traefik.http.routers.phoenix.rule=Host(`phoenix.${DOCKER_DOMAIN}`)"
@@ -321,7 +319,6 @@ services:
       - internal
       - traefik_proxy
     labels:
-      - "checkmk_monitor=true"
       - "traefik.enable=true"
       - "traefik.docker.network=traefik_proxy"
       - "traefik.http.routers.paperless-ai.rule=Host(`paperless.${DOCKER_DOMAIN}`) && PathPrefix(`/ai`)"
@@ -417,8 +414,6 @@ services:
     # memory cap from the hardening baseline.
     mem_limit: 0
     memswap_limit: 0
-    labels:
-      - "checkmk_monitor=false"
     tmpfs:
       - /tmp:rw,noexec,nosuid,size=32m,mode=1777
     extra_hosts:

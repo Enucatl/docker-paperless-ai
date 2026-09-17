@@ -367,7 +367,7 @@ services:
     build:
       context: .
       dockerfile: ./ai/Dockerfile
-      target: runtime
+      target: cleanup
     profiles: [cleanup]
     restart: no
     extra_hosts:
@@ -380,6 +380,7 @@ services:
       - google_api_key
       - openrouter_api_key
       - hf_token
+      - typesafe_api_key
     environment:
       - AGENT_NAME=paperless-ai-cleanup
       - PAPERLESS_URL=http://webserver:8000
@@ -396,11 +397,16 @@ services:
       - ANTHROPIC_API_KEY_FILE=/run/secrets/anthropic_api_key
       - OPENAI_API_KEY_FILE=/run/secrets/openai_api_key
       - HF_TOKEN_FILE=/run/secrets/hf_token
+      - TYPESAFE_API_KEY_FILE=/run/secrets/typesafe_api_key
       - LLM_RETRIES
       - INFERENCE_METADATA_REASONING_EFFORT
       - INFERENCE_METADATA_TEMPERATURE
       - INFERENCE_METADATA_MAX_TOKENS
       - INFERENCE_METADATA_EXTRA_KWARGS
+      - CORRESPONDENT_CLEANUP_DB_HOST=db
+      - CORRESPONDENT_CLEANUP_DB_NAME=paperless
+      - CORRESPONDENT_CLEANUP_DB_USER=paperless
+      - CORRESPONDENT_CLEANUP_DB_PASSWORD=${POSTGRES_PASSWORD}
       - OTEL_EXPORTER_OTLP_ENDPOINT=http://phoenix:6006/v1/traces
       - PHOENIX_CLIENT_HEADERS=api_key=local
     command: --help
@@ -411,6 +417,50 @@ services:
         condition: service_healthy
       phoenix:
         condition: service_healthy
+    volumes:
+      - cleanup_review_data:/review
+
+  cleanup-review:
+    build:
+      context: .
+      dockerfile: ./ai/Dockerfile
+      target: cleanup
+    profiles: [cleanup]
+    restart: "no"
+    entrypoint: ["uvicorn", "paperless_ai.core.cleanup_review:app", "--host", "0.0.0.0", "--port", "8000"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/', timeout=2)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    environment:
+      - PAPERLESS_URL=http://webserver:8000
+      - PAPERLESS_TOKEN_FILE=/run/secrets/paperless_token
+      - INFERENCE_METADATA_MODEL
+      - INFERENCE_CHAT_MODEL
+      - CORRESPONDENT_CLEANUP_DB_HOST=db
+      - CORRESPONDENT_CLEANUP_DB_NAME=paperless
+      - CORRESPONDENT_CLEANUP_DB_USER=paperless
+      - CORRESPONDENT_CLEANUP_DB_PASSWORD=${POSTGRES_PASSWORD}
+    volumes:
+      - cleanup_review_data:/review:ro
+    networks:
+      - internal
+      - traefik_proxy
+    secrets:
+      - paperless_token
+    depends_on:
+      webserver:
+        condition: service_healthy
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=traefik_proxy"
+      - "traefik.http.routers.cleanup-review.rule=Host(`correspondent-cleanup.${DOCKER_DOMAIN}`)"
+      - "traefik.http.routers.cleanup-review.entrypoints=https"
+      - "traefik.http.routers.cleanup-review.tls=true"
+      - "traefik.http.routers.cleanup-review.middlewares=secured@file"
+      - "traefik.http.services.cleanup-review.loadbalancer.server.port=8000"
 
   ai-eval:
     extends:
@@ -488,6 +538,8 @@ secrets:
     file: ./secrets/openrouter_api_key.txt
   hf_token:
     file: ./secrets/hf_token.txt
+  typesafe_api_key:
+    file: ./secrets/typesafe_api_token.txt
 
 networks:
   internal:
@@ -500,6 +552,7 @@ networks:
 
 volumes:
   broker-data:
+  cleanup_review_data:
   data:
     external: true
     name: paperless-ai_data

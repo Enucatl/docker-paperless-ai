@@ -97,6 +97,16 @@ class CorrespondentResolution:
         }
 
 
+@dataclass(frozen=True)
+class CorrespondentCandidate:
+    """A scored correspondent candidate produced without network access."""
+
+    correspondent_id: int
+    correspondent_name: str
+    score: float
+    components: SimilarityComponents
+
+
 def normalize_name(name: str) -> NameParts:
     """Normalize a name into generic comparison representations.
 
@@ -161,6 +171,125 @@ class CorrespondentResolver:
             containment_score=containment_score,
         )
 
+    def _score_candidates(
+        self, observed_name: str, correspondents: list[dict[str, Any]]
+    ) -> list[CorrespondentCandidate]:
+        """Score and deterministically order every valid correspondent.
+
+        Args:
+            observed_name: Name to compare with cached correspondents.
+            correspondents: Cached Paperless correspondent objects.
+
+        Returns:
+            Every valid candidate, sorted by score then stable tie breakers.
+        """
+        observed = normalize_name(observed_name)
+        if not observed.tokens:
+            return []
+        scored: list[CorrespondentCandidate] = []
+        for candidate in correspondents:
+            name = candidate.get("name")
+            candidate_id = candidate.get("id")
+            if not isinstance(name, str) or not name.strip() or candidate_id is None:
+                continue
+            candidate_parts = normalize_name(name)
+            if not candidate_parts.tokens:
+                continue
+            components = self.score_names(observed, candidate_parts)
+            scored.append(
+                CorrespondentCandidate(
+                    correspondent_id=int(candidate_id),
+                    correspondent_name=name.strip(),
+                    score=max(
+                        components.character,
+                        components.token_sort,
+                        components.containment_score,
+                    ),
+                    components=components,
+                )
+            )
+        return sorted(
+            scored,
+            key=lambda item: (
+                -item.score,
+                item.correspondent_id,
+                item.correspondent_name,
+            ),
+        )
+
+    def candidates(
+        self,
+        observed_name: str,
+        correspondents: list[dict[str, Any]],
+        *,
+        threshold: float | None = None,
+    ) -> list[CorrespondentCandidate]:
+        """Return every deterministically plausible candidate.
+
+        Args:
+            observed_name: Name to compare with cached correspondents.
+            correspondents: Cached Paperless correspondent objects.
+            threshold: Optional score floor, defaulting to this resolver's threshold.
+
+        Returns:
+            Candidates at or above the effective threshold in ranked order.
+        """
+        effective_threshold = self.threshold if threshold is None else threshold
+        return [
+            candidate
+            for candidate in self._score_candidates(observed_name, correspondents)
+            if candidate.score >= effective_threshold
+        ]
+
+    def score_pair(
+        self, left_name: str, right_name: str
+    ) -> tuple[float, SimilarityComponents]:
+        """Return the shared deterministic score for two correspondent names."""
+        left = normalize_name(left_name)
+        right = normalize_name(right_name)
+        if not left.tokens or not right.tokens:
+            return 0.0, SimilarityComponents(0.0, 0.0, 0.0, 0.0, 0.0)
+        components = self.score_names(left, right)
+        return (
+            max(
+                components.character,
+                components.token_sort,
+                components.containment_score,
+            ),
+            components,
+        )
+
+    def score_cluster_pair(self, left: Any, right: Any) -> Any:
+        """Score clusters by their most similar cross-cluster member-name pair."""
+        from paperless_ai.correspondent.clusters import ClusterCandidate
+
+        best: tuple[float, SimilarityComponents, str, str] | None = None
+        for left_name in left.member_names:
+            for right_name in right.member_names:
+                score, components = self.score_pair(left_name, right_name)
+                candidate = (score, components, left_name, right_name)
+                if best is None or (score, left_name, right_name) > (
+                    best[0],
+                    best[2],
+                    best[3],
+                ):
+                    best = candidate
+        if best is None:
+            best = (0.0, SimilarityComponents(0.0, 0.0, 0.0, 0.0, 0.0), "", "")
+        return ClusterCandidate(left.key, right.key, *best)
+
+    def cluster_candidates(self, clusters: list[Any], *, threshold: float) -> list[Any]:
+        """Return all unordered cluster pairs at or above a cleanup score floor."""
+        candidates = []
+        for index, left in enumerate(clusters):
+            for right in clusters[index + 1 :]:
+                candidate = self.score_cluster_pair(left, right)
+                if candidate.score >= threshold:
+                    candidates.append(candidate)
+        return sorted(
+            candidates, key=lambda item: (-item.score, item.left_key, item.right_key)
+        )
+
     def resolve(
         self, observed_name: str, correspondents: list[dict[str, Any]]
     ) -> CorrespondentResolution:
@@ -173,37 +302,7 @@ class CorrespondentResolver:
         Returns:
             The action, selected candidate, and all winning score diagnostics.
         """
-        observed = normalize_name(observed_name)
-        if not observed.tokens:
-            return CorrespondentResolution(
-                action="new",
-                observed_name=observed_name,
-                correspondent_id=None,
-                correspondent_name=None,
-                score=0.0,
-                second_best_score=None,
-                components=SimilarityComponents(0.0, 0.0, 0.0, 0.0, 0.0),
-            )
-        scored: list[tuple[float, int, str, dict[str, Any], SimilarityComponents]] = []
-        for candidate in correspondents:
-            name = candidate.get("name")
-            candidate_id = candidate.get("id")
-            if not isinstance(name, str) or not name.strip() or candidate_id is None:
-                continue
-            candidate_parts = normalize_name(name)
-            if not candidate_parts.tokens:
-                continue
-            components = self.score_names(observed, candidate_parts)
-            score = max(
-                components.character,
-                components.token_sort,
-                components.containment_score,
-            )
-            scored.append(
-                (score, int(candidate_id), name.strip(), candidate, components)
-            )
-
-        scored.sort(key=lambda item: (-item[0], item[1], item[2]))
+        scored = self._score_candidates(observed_name, correspondents)
         if not scored:
             return CorrespondentResolution(
                 action="new",
@@ -215,14 +314,18 @@ class CorrespondentResolver:
                 components=SimilarityComponents(0.0, 0.0, 0.0, 0.0, 0.0),
             )
 
-        score, candidate_id, name, _, components = scored[0]
-        second_best_score = scored[1][0] if len(scored) > 1 else None
+        best = scored[0]
+        second_best_score = scored[1].score if len(scored) > 1 else None
         return CorrespondentResolution(
-            action="existing" if score >= self.threshold else "new",
+            action="existing" if best.score >= self.threshold else "new",
             observed_name=observed_name,
-            correspondent_id=candidate_id if score >= self.threshold else None,
-            correspondent_name=name if score >= self.threshold else None,
-            score=score,
+            correspondent_id=best.correspondent_id
+            if best.score >= self.threshold
+            else None,
+            correspondent_name=best.correspondent_name
+            if best.score >= self.threshold
+            else None,
+            score=best.score,
             second_best_score=second_best_score,
-            components=components,
+            components=best.components,
         )

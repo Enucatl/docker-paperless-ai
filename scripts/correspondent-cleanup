@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+compose=(docker compose --profile cleanup)
+command_name="${1:-start}"
+
+generate() {
+  "${compose[@]}" run --rm ai-cleanup \
+    --cleanup-typesafe \
+    --cleanup-correspondents-plan /review/merge-plan.json \
+    --cleanup-analysis-dir /review
+}
+
+case "$command_name" in
+  generate)
+    generate
+    ;;
+  review)
+    "${compose[@]}" up -d cleanup-review
+    ;;
+  start)
+    generate
+    "${compose[@]}" up -d cleanup-review
+    ;;
+  stop)
+    "${compose[@]}" stop cleanup-review
+    ;;
+  status)
+    "${compose[@]}" ps cleanup-review
+    ;;
+  *)
+    echo "usage: $0 {start|generate|review|stop|status}" >&2
+    exit 2
+    ;;
+esac

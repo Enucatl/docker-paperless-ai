@@ -98,6 +98,35 @@ def test_best_candidate_selection_threshold_and_audit_trace():
     assert audit["components"]["token_sort"] == pytest.approx(1.0)
 
 
+def test_candidates_enumerate_all_ranked_matches_and_resolve_agrees():
+    """Candidate enumeration is reusable while resolve retains the same winner."""
+    resolver = CorrespondentResolver()
+    correspondents = [
+        {"id": 3, "name": "Matteo Abris"},
+        {"id": 2, "name": "Abis Matteo"},
+        {"id": 1, "name": "Dr. Matteo Abis"},
+    ]
+    candidates = resolver.candidates("Matteo Abis", correspondents, threshold=0.65)
+
+    assert [candidate.correspondent_id for candidate in candidates] == [1, 2, 3]
+    assert resolver.resolve("Matteo Abis", correspondents).correspondent_id == 1
+
+
+def test_lower_candidate_threshold_is_a_superset():
+    """Cleanup can increase recall without changing creation's threshold."""
+    resolver = CorrespondentResolver()
+    correspondents = [
+        {"id": 1, "name": "Zurich"},
+        {"id": 2, "name": "Zurich Insurance Group"},
+    ]
+    high = resolver.candidates("Zurich", correspondents, threshold=0.80)
+    low = resolver.candidates("Zurich", correspondents, threshold=0.65)
+
+    assert {candidate.correspondent_id for candidate in high} <= {
+        candidate.correspondent_id for candidate in low
+    }
+
+
 @pytest.mark.parametrize(
     "observed", ["Completely Unrelated Sender", "Northwind Traders"]
 )

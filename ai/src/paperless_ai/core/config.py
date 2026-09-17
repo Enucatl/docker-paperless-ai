@@ -24,6 +24,7 @@ def _inject_secrets() -> None:
         "HF_TOKEN",
         "PAPERLESS_TOKEN",
         "WEBHOOK_SECRET",
+        "TYPESAFE_API_KEY",
     ):
         val = read_secret(key)
         if val:
@@ -141,6 +142,37 @@ class AgentConfig(BaseSettings):
     correspondent_match_threshold: float = Field(
         default=0.80,
         validation_alias="CORRESPONDENT_MATCH_THRESHOLD",
+    )
+    correspondent_cleanup_candidate_threshold: float = Field(
+        default=0.65,
+        validation_alias="CORRESPONDENT_CLEANUP_CANDIDATE_THRESHOLD",
+        ge=0,
+        le=1,
+    )
+    correspondent_cleanup_max_rounds: int = Field(
+        default=6,
+        validation_alias="CORRESPONDENT_CLEANUP_MAX_ROUNDS",
+        ge=1,
+    )
+    correspondent_cleanup_db_host: str = Field(
+        default="db", validation_alias="CORRESPONDENT_CLEANUP_DB_HOST"
+    )
+    correspondent_cleanup_db_name: str = Field(
+        default="paperless", validation_alias="CORRESPONDENT_CLEANUP_DB_NAME"
+    )
+    correspondent_cleanup_db_user: str = Field(
+        default="paperless", validation_alias="CORRESPONDENT_CLEANUP_DB_USER"
+    )
+    correspondent_cleanup_db_password: str = Field(
+        default="",
+        validation_alias="CORRESPONDENT_CLEANUP_DB_PASSWORD"
+    )
+    typesafe_api_key: str | None = Field(
+        default=None, validation_alias="TYPESAFE_API_KEY"
+    )
+    typesafe_model: str = Field(default="jev-latest", validation_alias="TYPESAFE_MODEL")
+    typesafe_endpoint: str | None = Field(
+        default=None, validation_alias="TYPESAFE_ENDPOINT"
     )
     # TAG_PENDING is the legacy name — keep for backward compat
     tag_ocr: str = Field(

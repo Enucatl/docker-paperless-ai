@@ -51,10 +51,12 @@ def _write_heartbeat() -> None:
 async def main_async(args: argparse.Namespace) -> None:
     from paperless_ai.core.config import AgentConfig
     from paperless_ai.core.correspondent_cleanup import (
+        CleanupReviewStore,
         apply_correspondent_merge_plan,
         build_correspondent_merge_plan,
         load_merge_plan,
         summarize_merge_plan,
+        write_cleanup_analysis,
         write_merge_plan,
     )
     from paperless_common.paperless import PaperlessClient
@@ -156,6 +158,7 @@ async def main_async(args: argparse.Namespace) -> None:
             return
 
         if args.cleanup_correspondents_plan:
+            cleanup_review_store = await CleanupReviewStore.from_config(config)
             if args.cleanup_judge_borderline:
                 log.info(
                     "Correspondent cleanup: LLM judge enabled (%s)",
@@ -165,8 +168,18 @@ async def main_async(args: argparse.Namespace) -> None:
                 client,
                 config,
                 judge_borderline=args.cleanup_judge_borderline,
+                typesafe=args.cleanup_typesafe,
+                review_store=cleanup_review_store,
             )
             write_merge_plan(plan, args.cleanup_correspondents_plan)
+            if args.cleanup_typesafe:
+                analysis = write_cleanup_analysis(plan, args.cleanup_analysis_dir)
+                log.info(
+                    "Wrote read-only TypeSafe analysis: %s, %s, %s",
+                    analysis["paths"]["csv"],
+                    analysis["paths"]["json"],
+                    analysis["paths"]["html"],
+                )
             plan_summary = summarize_merge_plan(plan)
             log.info(
                 "Wrote correspondent cleanup plan to %s",
@@ -184,12 +197,42 @@ async def main_async(args: argparse.Namespace) -> None:
             )
             return
 
+        if args.cleanup_typesafe:
+            cleanup_review_store = await CleanupReviewStore.from_config(config)
+            plan = await build_correspondent_merge_plan(
+                client, config, typesafe=True, review_store=cleanup_review_store
+            )
+            analysis = write_cleanup_analysis(plan, args.cleanup_analysis_dir)
+            total = analysis["candidate_pairs"]
+            counts = analysis["counts"]
+            log.info(
+                "TypeSafe cleanup analysis: correspondents=%d candidate_pairs=%d threshold=%.2f reject=%d (%.1f%%) review=%d (%.1f%%) merge=%d (%.1f%%)",
+                plan.total_correspondents,
+                total,
+                config.correspondent_cleanup_candidate_threshold,
+                counts["reject"],
+                100 * counts["reject"] / total if total else 0,
+                counts["review"],
+                100 * counts["review"] / total if total else 0,
+                counts["merge"],
+                100 * counts["merge"] / total if total else 0,
+            )
+            log.info(
+                "Wrote read-only analysis: %s, %s, %s",
+                analysis["paths"]["csv"],
+                analysis["paths"]["json"],
+                analysis["paths"]["html"],
+            )
+            return
+
         if args.cleanup_correspondents_apply:
+            cleanup_review_store = await CleanupReviewStore.from_config(config)
             plan = load_merge_plan(args.cleanup_correspondents_apply)
             summary = await apply_correspondent_merge_plan(
                 client,
                 plan,
                 dry_run=config.dry_run,
+                review_store=cleanup_review_store,
             )
             log.info(
                 "Correspondent cleanup applied from %s",
@@ -383,6 +426,16 @@ def main() -> None:
         action="store_true",
         help="Process all pending documents once and exit",
     )
+    parser.add_argument(
+        "--cleanup-typesafe",
+        action="store_true",
+        help="Use TypeSafe for read-only correspondent analysis",
+    )
+    parser.add_argument(
+        "--cleanup-analysis-dir",
+        default="correspondent-cleanup-analysis",
+        help="Directory for read-only TypeSafe CSV, JSON, and HTML outputs",
+    )
     mode.add_argument(
         "--watch",
         action="store_true",
@@ -431,6 +484,7 @@ def main() -> None:
         or args.eval
         or args.cleanup_correspondents_plan
         or args.cleanup_correspondents_apply
+        or args.cleanup_typesafe
     ):
         args.once = False  # watch mode is the default
 

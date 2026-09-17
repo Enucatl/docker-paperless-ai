@@ -207,39 +207,67 @@ with the actual volume name reported by `docker volume ls`.
 ### Cleanup commands
 
 There is also a one-shot `ai-cleanup` service for metadata maintenance tasks.
-It writes plans to stdout and reads approved plans from stdin when passed `-`,
-so review artifacts only land where you explicitly redirect them.
+Cleanup review artifacts live in the persistent Docker volume
+`cleanup_review_data`, mounted at `/review` by both the generator and the
+review service. The review UI reads `/review/merge-plan.json` from that volume.
+Its persistent review table in the existing Paperless Postgres database records the highest correspondent ID from
+the last fully successful apply. Later plans only compare newer correspondents
+with those canonical records (and with one another); a failed or partial apply
+does not advance that watermark.
 
 Generate a correspondent cleanup plan:
 
 ```bash
 docker compose --profile cleanup run --rm \
-  ai-cleanup --cleanup-correspondents-plan - > correspondent-plan.json
+  ai-cleanup \
+  --cleanup-typesafe \
+  --cleanup-correspondents-plan /review/merge-plan.json \
+  --cleanup-analysis-dir /review
 ```
 
 Enable the LLM judge for borderline matches:
 
 ```bash
 docker compose --profile cleanup run --rm \
-  ai-cleanup --cleanup-correspondents-plan - \
-  --cleanup-judge-borderline > correspondent-plan.json
+  ai-cleanup \
+  --cleanup-typesafe \
+  --cleanup-correspondents-plan /review/merge-plan.json \
+  --cleanup-analysis-dir /review \
+  --cleanup-judge-borderline
 ```
 
 Apply an approved plan:
 
 ```bash
 docker compose --profile cleanup run --rm -T \
-  ai-cleanup --cleanup-correspondents-apply - < correspondent-plan.json
+  ai-cleanup --cleanup-correspondents-apply /review/merge-plan.json
 ```
 
 Dry-run the apply step:
 
 ```bash
 docker compose --profile cleanup run --rm -T \
-  ai-cleanup --cleanup-correspondents-apply - \
-  --dry-run \
-  < correspondent-plan.json
+  ai-cleanup --cleanup-correspondents-apply /review/merge-plan.json \
+  --dry-run
 ```
+
+For the normal review lifecycle, use the wrapper from the repository root:
+
+```bash
+./scripts/correspondent-cleanup start   # generate an incremental plan and start the review UI
+./scripts/correspondent-cleanup review  # start the UI for an existing plan
+./scripts/correspondent-cleanup status
+```
+
+After a successful typed Apply, the review container shuts itself down. The
+generator is a one-shot container, so it is also safe to schedule directly,
+for example with cron:
+
+```cron
+17 3 * * * /opt/docker/paperless-ai/scripts/correspondent-cleanup generate
+```
+
+Use `./scripts/correspondent-cleanup stop` to stop a review session manually.
 
 ### 4. Normal operation
 

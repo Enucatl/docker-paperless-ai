@@ -211,6 +211,22 @@ class PaperlessClient:
             self._correspondents_cache.append(new_corr)
         return new_corr
 
+    async def patch_correspondent(
+        self, correspondent_id: int, payload: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Update an existing correspondent and keep the local cache current."""
+        r = await self._client.patch(
+            f"/api/correspondents/{correspondent_id}/", json=payload
+        )
+        _raise_for_status(r)
+        updated = r.json()
+        if self._correspondents_cache is not None:
+            self._correspondents_cache = [
+                updated if int(item.get("id", -1)) == correspondent_id else item
+                for item in self._correspondents_cache
+            ]
+        return updated
+
     async def patch_document(self, doc_id: int, payload: dict) -> None:
         r = await self._client.patch(f"/api/documents/{doc_id}/", json=payload)
         _raise_for_status(r)

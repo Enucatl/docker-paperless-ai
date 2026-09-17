@@ -42,6 +42,10 @@ test = [
     "pytest>=8.0",
     "pytest-asyncio>=0.23",
 ]
+cleanup = [
+    "typesafe-sdk>=0.5.7",
+    "psycopg[binary]>=3.2",
+]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

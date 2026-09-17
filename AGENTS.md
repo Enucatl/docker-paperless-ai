@@ -1,124 +1,58 @@
-# Development with Claude Code Agents
+# Paperless AI
 
-## Dependency Management
+## Python workflow
 
-Uses `uv` for fast, reliable Python dependency management:
+This repository has Python projects in `ai/`, `common/`, and `listener/`.
+Run `uv` commands from the project being changed; the main test suite and its
+lockfile are in `ai/`.
 
-```bash
-uv sync              # Install dependencies in virtual environment
-uv run python ...    # Run Python with virtual environment activated
-uv run pytest ...    # Run pytest with virtual environment activated
-```
-
-This avoids managing `.venv` manually and ensures consistent builds.
-
-## Running Tests
-
-**Local unit tests** (no infrastructure):
 ```bash
 cd ai
 uv sync --extra test --extra eval
 uv run pytest tests/ -k "not test_webhook and not test_phase_b_pipeline and not test_search"
 ```
 
-Notes:
-- Run `uv` commands from the `ai/` directory. The Python project and lockfile live there.
-- Use local `uv run pytest` for fast feedback on pure unit tests and small targeted test files.
-- Tests that need Paperless, Redis, Qdrant, webhook delivery, or real container networking should be treated as Docker tests even if they look small.
+For Python code changes, run `uv run ruff format .` from the affected project
+and the relevant tests.
 
-**Full E2E tests** (requires Docker):
+## Integration tests
+
+Tests that require Paperless, Redis, Qdrant, webhook delivery, or container
+networking must use the Docker harness:
+
 ```bash
-./run_tests.sh                # Full E2E test suite
-./run_tests.sh --no-build     # Skip rebuild (faster re-runs)
+./run_tests.sh
+./run_tests.sh --no-build
 ```
 
-The test harness:
-1. Builds the Docker image for the AI service
-2. Spins up all infrastructure (Paperless, Qdrant, Redis, webhook-listener)
-3. Runs pytest inside the AI container
-4. Tears down all containers and anonymous volumes on exit
+The harness builds the AI image, starts its dependencies, and removes the test
+containers and anonymous volumes on exit. It sets
+`MANAGE_PAPERLESS_WORKFLOWS=false`; webhook tests create and remove their own
+workflows. Webhook tests must use the `webhook_session` fixture except when
+verifying missing or invalid authentication.
 
-Test-specific workflow note:
-- `docker-compose.test.yml` sets `MANAGE_PAPERLESS_WORKFLOWS=false`.
-- Production startup auto-manages the Paperless workflows, but webhook integration tests create and delete their own workflows and must remain authoritative.
+## Evaluation
 
-**Important:** Full E2E tests require Docker infrastructure. Use `uv run pytest` for unit-level testing without Docker. `run_tests.sh` is the authoritative check for integration failures.
-
-**API Compatibility Coverage:** Tests cover external library API usage (e.g., niquests AsyncSession methods, Redis async methods) to catch parameter incompatibilities early. This prevents runtime errors like `follow_redirects` (httpx) being used with niquests.
-
-**New API compatibility test suite:**
-- `test_paperless_client.py` — Tests PaperlessClient async context manager and correct niquests usage
-- `test_embedder_client.py` — Tests the embeddings API client async context manager and connectivity checks
-- `test_cli_connectivity.py` — Tests CLI Paperless API connectivity checks without invalid parameters
-- `test_niquests_api_compatibility.py` — Documents niquests vs httpx differences (close() vs aclose(), allow_redirects vs follow_redirects)
-
-These tests prevent regressions like:
-- Using `follow_redirects=True` (httpx parameter) with niquests (which uses `allow_redirects`)
-- Calling `session.aclose()` instead of `session.close()` on niquests.AsyncSession
-- Using `content=` (httpx parameter) instead of `data=` for raw bytes in niquests
-
-**HTTP client policy:** niquests is the sole HTTP client in this project — do not introduce httpx as a dependency or in test code. niquests is a fork of requests with async support (`AsyncSession`) and is API-compatible with requests, not httpx.
-
-**Webhook auth in tests:** `WEBHOOK_SECRET=test-secret-key-12345` is always set in `docker-compose.test.yml`. All tests that POST to `/webhook/document` must use the `webhook_session` fixture (which carries the auth header). Tests specifically verifying auth rejection (`test_webhook_rejects_missing_token`, `test_webhook_rejects_wrong_token`) use their own bare `niquests.AsyncSession()` without the token. Do not use in-process ASGI transport for auth tests — the container is the source of truth.
-
-## Running Evaluation Experiments
-
-Evaluate OCR and metadata extraction with different LLM configurations via Phoenix:
+Run OCR and metadata experiments with Phoenix:
 
 ```bash
 docker compose run --build --rm ai-eval --split code-test
 ```
 
-Notes:
-- `ai-eval` is a separate Docker service/image from `ai` so production and eval dependencies do not conflict.
-- Production tracing to Phoenix still comes from the regular `ai` service via OTLP; the separate eval image only carries the offline-evaluation stack.
+Experiment definitions are in `ai/src/paperless_ai/eval/experiments.yaml`.
+Use `code-test` for a quick check; `test`, `validation`, and `all` select the
+corresponding dataset splits. If rebuilt datasets retain stale paths, run
+`docker compose down -v phoenix` before retrying.
 
-Flags:
-- `--split code-test` — Quick pipeline verification using tagged examples (fastest)
-- `--split test` — Full test set evaluation
-- `--split validation` — Validation set evaluation  
-- `--split all` — All examples
+## Code map
 
-The evaluation framework:
-1. Loads experiment configs from `ai/src/paperless_ai/eval/experiments.yaml`
-2. Instantiates each configured agent (OCR model, metadata model, parameters)
-3. Runs the agent on golden dataset examples
-4. Evaluates outputs via Phoenix (metrics: date exact/partial, correspondent fuzzy, title jury vote)
-5. Publishes results to Phoenix dashboard at `http://phoenix:6006`
-
-**Configuring experiments:** Edit `experiments.yaml` to add/modify configurations. Supports:
-- Different OCR and metadata models
-- Custom API bases for local vLLM endpoints
-- Extra parameters (temperature, top_p, presence_penalty, reasoning_effort, etc.)
-- Jury-based title evaluation (multiple judges voting)
-
-Example: A-B testing thinking enabled vs disabled in Qwen 3.5 by adding two experiment blocks with different `extra_body` settings.
-
-**Troubleshooting Phoenix dataset cache:** If eval datasets have stale file paths after rebuilding, clear the Phoenix volume:
-```bash
-docker compose down -v phoenix
-```
-The next eval run will recreate it with fresh data.
-
-## Code Organization
-
-- `ai/src/paperless_ai/search/` — Indexing and retrieval
-  - `webhook.py` — Copilot/search app with `/search`, `/chat`, and embedded worker runtime
-  - `retriever.py` — Core retrieval functions (dense, keyword, RRF, LLM rerank)
-  - `embedder.py` — Embeddings API client and in-process local model wrapper used by the search worker
-  - `local_search_process.py` — Process-backed local search inference lifecycle
-  - `qdrant_store.py` — Qdrant vector store
-  - `queue.py` — Redis task queues
-- `listener/src/paperless_listener/` — Thin webhook ingress
-  - `app.py` — `/webhook/document` and `/health`, routes tag-driven events into Redis
-- `ai/src/paperless_ai/core/` — Core services
-  - `paperless.py` — Compatibility wrapper for the shared Paperless client package
-  - `config.py` — Configuration from environment
-- `common/src/paperless_common/` — Shared queue, Paperless client, secrets, telemetry
-- `ai/src/paperless_ai/agents/` — LLM pipelines
-  - `smart_graph_agent.py` — OCR + metadata extraction (via LangGraph)
-- `ai/src/paperless_ai/eval/` — Evaluation and metrics
-- `ai/tests/` — Test suite
-  - `conftest.py` — Session-scoped fixtures (Paperless token, clients, Redis state)
-  - `test_search.py` — Unit + integration tests for embedder, retriever, webhook
-  - `test_phase_b_pipeline.py` — Full OCR + metadata + embedding pipeline tests
+- `ai/src/paperless_ai/search/`: indexing, retrieval, embeddings, Qdrant, and
+  the search/webhook runtime.
+- `ai/src/paperless_ai/core/`: configuration, runner, and Paperless client
+  compatibility layer.
+- `ai/src/paperless_ai/agents/`: OCR and metadata LangGraph pipelines.
+- `ai/src/paperless_ai/eval/`: evaluation datasets, experiments, and metrics.
+- `common/src/paperless_common/`: shared Paperless, queue, secrets, and
+  telemetry helpers.
+- `listener/src/paperless_listener/`: webhook ingress.
+- `ai/tests/`: unit and Docker-backed integration tests.

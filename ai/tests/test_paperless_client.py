@@ -125,6 +125,32 @@ async def test_paperless_client_metadata_resolvers_use_cached_lists():
 
 
 @pytest.mark.asyncio
+async def test_create_correspondent_updates_loaded_cache():
+    """A created correspondent is immediately available from the local cache."""
+    with patch(
+        "paperless_common.paperless.niquests.AsyncSession"
+    ) as mock_session_class:
+        mock_session = AsyncMock()
+        mock_session_class.return_value = mock_session
+        mock_session.get = AsyncMock(return_value=_paged_response([]))
+        response = _paged_response([])
+        response.json = MagicMock(return_value={"id": 42, "name": "New Sender"})
+        mock_session.post = AsyncMock(return_value=response)
+
+        async with PaperlessClient("http://test:8000", "token123") as client:
+            assert await client.get_all_correspondents() == []
+            created = await client.create_correspondent("New Sender")
+
+            assert created == {"id": 42, "name": "New Sender"}
+            assert await client.get_all_correspondents() == [created]
+
+        mock_session.get.assert_awaited_once()
+        mock_session.post.assert_awaited_once_with(
+            "/api/correspondents/", json={"name": "New Sender"}
+        )
+
+
+@pytest.mark.asyncio
 async def test_ensure_ai_workflows_creates_added_and_updated_workflows():
     with patch(
         "paperless_common.paperless.niquests.AsyncSession"

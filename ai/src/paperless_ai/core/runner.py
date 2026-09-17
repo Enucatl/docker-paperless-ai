@@ -18,13 +18,14 @@ import asyncio
 import json
 import logging
 import tempfile
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date, datetime, timezone
 from pathlib import Path
 from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Optional
 
 from paperless_ai.core.config import AgentConfig
+from paperless_ai.correspondent import CorrespondentResolver
 from paperless_common.paperless import PaperlessClient
 
 if TYPE_CHECKING:
@@ -532,12 +533,35 @@ async def run_metadata_batch(
                     extracted.date,
                 )
 
-        if extracted.correspondent:
+        correspondent_resolution = None
+        if extracted.correspondent and str(extracted.correspondent).strip():
             try:
-                correspondent_id = await client.find_or_create_correspondent(
-                    str(extracted.correspondent).strip()
+                observed_name = str(extracted.correspondent).strip()
+                resolver = CorrespondentResolver(config.correspondent_match_threshold)
+                correspondent_resolution = resolver.resolve(
+                    observed_name, await client.get_all_correspondents()
                 )
-                payload["correspondent"] = correspondent_id
+                if correspondent_resolution.action == "new":
+                    created = await client.create_correspondent(observed_name)
+                    correspondent_resolution = replace(
+                        correspondent_resolution,
+                        action="created",
+                        correspondent_id=int(created["id"]),
+                        correspondent_name=str(created["name"]),
+                    )
+                payload["correspondent"] = correspondent_resolution.correspondent_id
+                log.info(
+                    "Document %d: correspondent resolution observed=%r action=%s "
+                    "candidate=%r id=%s score=%.3f second_best=%s components=%s",
+                    doc_id,
+                    observed_name,
+                    correspondent_resolution.action,
+                    correspondent_resolution.correspondent_name,
+                    correspondent_resolution.correspondent_id,
+                    correspondent_resolution.score,
+                    correspondent_resolution.second_best_score,
+                    correspondent_resolution.components.to_dict(),
+                )
             except Exception as e:
                 log.warning("Document %d: correspondent lookup failed: %s", doc_id, e)
 
@@ -555,6 +579,13 @@ async def run_metadata_batch(
                     "correspondent": extracted.correspondent,
                     "summary": extracted.summary,
                 },
+                **(
+                    {
+                        "correspondent_resolution": correspondent_resolution.to_audit_dict()
+                    }
+                    if correspondent_resolution is not None
+                    else {}
+                ),
             },
             ensure_ascii=False,
         )

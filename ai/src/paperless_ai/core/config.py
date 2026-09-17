@@ -138,6 +138,10 @@ class AgentConfig(BaseSettings):
     llm_retries: int = 3
     stage_max_attempts: int = 3
     ocr_concurrency: int = 4
+    correspondent_match_threshold: float = Field(
+        default=0.80,
+        validation_alias="CORRESPONDENT_MATCH_THRESHOLD",
+    )
     # TAG_PENDING is the legacy name — keep for backward compat
     tag_ocr: str = Field(
         default="ai:run-ocr",

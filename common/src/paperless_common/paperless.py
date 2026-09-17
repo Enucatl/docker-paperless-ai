@@ -5,7 +5,6 @@ Handles polling, downloading, and patching documents via the API.
 """
 
 import logging
-from difflib import SequenceMatcher
 from typing import Any
 
 import niquests
@@ -202,66 +201,15 @@ class PaperlessClient:
             force=force,
         )
 
-    async def find_or_create_correspondent(self, name: str) -> int:
-        """Match against correspondents (exact → fuzzy via API filter), or create a new one."""
-        log.info("Correspondent lookup: '%s'", name)
-
-        # Try exact match against cache first (fast path for repeated lookups in a batch)
-        if self._correspondents_cache is not None:
-            for c in self._correspondents_cache:
-                if c["name"].lower() == name.lower():
-                    log.info("Exact match '%s' → id=%d (from cache)", name, c["id"])
-                    return c["id"]
-
-        # Use API filter to fetch only candidates similar to the lookup name.
-        # This prevents O(n) memory load for accounts with thousands of correspondents.
-        # Fetch first 100 candidates with matching substring (case-insensitive icontains).
-        r = await self._client.get(
-            "/api/correspondents/",
-            params={"name__icontains": name, "page_size": 100},
-        )
-        _raise_for_status(r)
-        candidates = r.json()["results"]
-
-        # Exact match (case-insensitive) in filtered results
-        for c in candidates:
-            if c["name"].lower() == name.lower():
-                log.info("Exact match '%s' → id=%d", name, c["id"])
-                # Cache if we have a cache
-                if self._correspondents_cache is not None:
-                    self._correspondents_cache.append(c)
-                return c["id"]
-
-        # Fuzzy match in filtered results
-        best, best_ratio = None, 0.0
-        for c in candidates:
-            ratio = SequenceMatcher(None, name.lower(), c["name"].lower()).ratio()
-            if ratio > best_ratio:
-                best, best_ratio = c, ratio
-        if best_ratio >= 0.80:
-            log.info(
-                "Fuzzy match '%s' → '%s' id=%d (ratio=%.2f)",
-                name,
-                best["name"],
-                best["id"],
-                best_ratio,
-            )
-            # Cache if we have a cache
-            if self._correspondents_cache is not None:
-                self._correspondents_cache.append(best)
-            return best["id"]
-
-        # No match found — create a new correspondent
-        log.info("No match for '%s' (best ratio=%.2f) — creating", name, best_ratio)
+    async def create_correspondent(self, name: str) -> dict[str, Any]:
+        """Create a correspondent and add it to an already-loaded cache."""
         r = await self._client.post("/api/correspondents/", json={"name": name})
         _raise_for_status(r)
         new_corr = r.json()
-        new_id = new_corr["id"]
-        log.info("Created correspondent '%s' (id=%d)", name, new_id)
-        # Add to cache so subsequent lookups in this batch find it immediately
+        log.info("Created correspondent '%s' (id=%d)", name, new_corr["id"])
         if self._correspondents_cache is not None:
             self._correspondents_cache.append(new_corr)
-        return new_id
+        return new_corr
 
     async def patch_document(self, doc_id: int, payload: dict) -> None:
         r = await self._client.patch(f"/api/documents/{doc_id}/", json=payload)

@@ -31,6 +31,9 @@ services:
       - internal
     volumes:
       - pgdata:/var/lib/postgresql
+      - ./db/init/phoenix-user-db.sh:/docker-entrypoint-initdb.d/20-phoenix-user-db.sh:ro
+    secrets:
+      - phoenix_postgres_password
 
   webserver:
     extends:
@@ -101,6 +104,7 @@ services:
       service: hardened-large
     image: arizephoenix/phoenix:latest
     cpu_shares: 256
+    command: ["/opt/phoenix/serve.py"]
     tmpfs:
       - /tmp:rw,noexec,nosuid,size=64m,mode=1777
     networks:
@@ -123,8 +127,18 @@ services:
       - "traefik.http.services.phoenix.loadbalancer.server.port=6006"
     environment:
       - PHOENIX_DEFAULT_RETENTION_POLICY_DAYS=90
+      - PHOENIX_POSTGRES_HOST=db
+      - PHOENIX_POSTGRES_PORT=5432
+      - PHOENIX_POSTGRES_USER=phoenix
+      - PHOENIX_POSTGRES_DB=phoenix
     volumes:
       - phoenixdata:/root/.phoenix
+      - ./scripts/phoenix-serve.py:/opt/phoenix/serve.py:ro
+    secrets:
+      - phoenix_postgres_password
+    depends_on:
+      db:
+        condition: service_healthy
     # Image is rootless Python with no shell/curl; probe /healthz via urllib.
     healthcheck:
       test:
@@ -545,6 +559,8 @@ secrets:
     file: ./secrets/hf_token.txt
   typesafe_api_key:
     file: ./secrets/typesafe_api_token.txt
+  phoenix_postgres_password:
+    file: ./secrets/phoenix_postgres_password.txt
 
 networks:
   internal:

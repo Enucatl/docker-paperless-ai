@@ -178,6 +178,28 @@ both the copilot HTTP API and the long-running worker loop.
 PostgreSQL 18 uses the versioned data directory under `/var/lib/postgresql/18/docker`,
 so the database volume now mounts at `/var/lib/postgresql`.
 
+### Phoenix PostgreSQL backend
+
+Phoenix stores its traces and evaluation data in the separate `phoenix` database
+within the existing PostgreSQL service. The Phoenix role password is kept in
+`secrets/phoenix_postgres_password.txt`; its host ACL is managed by
+`puppet-control-repo/data/nodes/docker.yaml`.
+
+The `db/init/phoenix-user-db.sh` script runs automatically when PostgreSQL is
+initialized from an empty volume. Because the current PostgreSQL volume already
+exists, run it once manually after Puppet has provisioned the secret:
+
+```bash
+docker compose up -d db
+docker compose exec -T db /docker-entrypoint-initdb.d/20-phoenix-user-db.sh
+docker compose up -d phoenix
+```
+
+The script is idempotent. It creates or updates the `phoenix` role and creates
+the `phoenix` database if needed. Phoenix then applies its own schema migrations
+on startup. The old SQLite database remains in the `phoenixdata` volume and is
+not migrated by this setup.
+
 ### Weekly correspondent consolidation
 
 The Docker-node timer runs every Tuesday at 01:10 UTC. It waits until OCR and

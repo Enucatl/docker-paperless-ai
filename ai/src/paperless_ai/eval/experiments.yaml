@@ -5,10 +5,10 @@
 experiments:
   - name: "gemini-3.5-flash-lite"
     agent_class: "paperless_ai.agents.smart_graph_agent.SmartDocumentAgent"
-    ocr_model: "gemini/gemini-3.5-flash-lite"
+    ocr_model: "google/gemini-3.5-flash-lite"
     ocr_temperature: 1.0
     ocr_reasoning_effort: "minimal"
-    metadata_model: "gemini/gemini-3.5-flash-lite"
+    metadata_model: "google/gemini-3.5-flash-lite"
     metadata_temperature: 1.0
     metadata_reasoning_effort: "minimal"
-    chat_model: "gemini/gemini-3.5-flash-lite"
+    chat_model: "google/gemini-3.5-flash-lite"

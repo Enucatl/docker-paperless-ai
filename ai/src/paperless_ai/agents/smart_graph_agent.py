@@ -20,6 +20,7 @@ import logging
 import re
 import time
 from abc import ABC, abstractmethod
+from pathlib import Path
 from typing import Optional
 
 import datetime as _dt
@@ -34,6 +35,66 @@ from paperless_ai.core.config import AgentConfig
 from paperless_ai.inference import complete
 
 log = logging.getLogger(__name__)
+
+
+class VisionOcrCache:
+    """In-memory cache for deterministic evaluation OCR requests."""
+
+    def __init__(self) -> None:
+        """Initialize an empty OCR cache."""
+        self._texts: dict[str, str] = {}
+        self.hits = 0
+        self.misses = 0
+
+    def key(
+        self,
+        file_path: str,
+        page_index: int,
+        config: AgentConfig,
+        language: str | None,
+    ) -> str:
+        """Build a cache key from the PDF and all OCR request parameters.
+
+        Args:
+            file_path: PDF path used for the OCR request.
+            page_index: Zero-based PDF page index.
+            config: Agent configuration supplying OCR parameters.
+            language: Optional document language hint.
+
+        Returns:
+            A stable key that changes when the file or OCR request changes.
+        """
+        stat = Path(file_path).stat()
+        return json.dumps(
+            {
+                "file": str(Path(file_path).resolve()),
+                "size": stat.st_size,
+                "mtime_ns": stat.st_mtime_ns,
+                "page": page_index,
+                "model": config.ocr_model,
+                "endpoint": config.ocr_endpoint,
+                "prompt": config.ocr_prompt,
+                "language": language,
+                "max_image_dimension": config.ocr_max_image_dimension,
+                "kwargs": config.get_ocr_kwargs(),
+            },
+            sort_keys=True,
+            default=str,
+        )
+
+    def get(self, key: str) -> str | None:
+        """Return cached OCR text for a key, if available."""
+        text = self._texts.get(key)
+        if text is None:
+            self.misses += 1
+        else:
+            self.hits += 1
+        return text
+
+    def put(self, key: str, text: str) -> None:
+        """Store OCR text under a request key."""
+        self._texts[key] = text
+
 
 # Regex patterns for thinking tags emitted by some reasoning models
 # (DeepSeek-R1, Qwen-QwQ, etc.) when thinking is not separated into
@@ -217,14 +278,16 @@ class BaseExtractionStrategy(ABC):
         If json-repair fails, returns an empty dict rather than raising.
         """
         try:
-            return json.loads(raw)
+            parsed = json.loads(raw)
+            return parsed if isinstance(parsed, dict) else {}
         except Exception:
             pass
 
         # Use json-repair to salvage malformed JSON
         try:
             repaired = repair_json(raw)
-            return json.loads(repaired)
+            parsed = json.loads(repaired)
+            return parsed if isinstance(parsed, dict) else {}
         except Exception:
             log.debug("Could not repair JSON output: %s", raw[:200])
             return {}
@@ -465,7 +528,11 @@ async def _analyze_pdf(state: AgentState, config: AgentConfig) -> dict:
     }
 
 
-async def _batched_vision_ocr(state: AgentState, config: AgentConfig) -> dict:
+async def _batched_vision_ocr(
+    state: AgentState,
+    config: AgentConfig,
+    ocr_cache: VisionOcrCache | None = None,
+) -> dict:
     """Node 3: Render a batch of selected pages to base64 images and run vision OCR.
 
     current_page is an index into ocr_page_indices, not a raw page number.
@@ -489,9 +556,18 @@ async def _batched_vision_ocr(state: AgentState, config: AgentConfig) -> dict:
         total_pages,
     )
 
-    tasks = []
+    async def ocr_page(page_idx: int) -> str:
+        cache_key = (
+            ocr_cache.key(file_path, page_idx, config, language)
+            if ocr_cache is not None
+            else None
+        )
+        if cache_key is not None:
+            cached_text = ocr_cache.get(cache_key)
+            if cached_text is not None:
+                log.info("Smart agent: OCR cache hit for page %d", page_idx + 1)
+                return cached_text
 
-    for page_idx in batch:
         b64 = await asyncio.to_thread(
             _render_page_to_base64,
             file_path,
@@ -521,17 +597,19 @@ async def _batched_vision_ocr(state: AgentState, config: AgentConfig) -> dict:
             "num_retries": config.llm_retries,
             **config.get_ocr_kwargs(),
         }
-        tasks.append(
-            complete(
-                model=kwargs.pop("model"),
-                messages=kwargs.pop("messages"),
-                endpoint=config.ocr_endpoint,
-                domain="vision_ocr",
-                **kwargs,
-            )
+        response = await complete(
+            model=kwargs.pop("model"),
+            messages=kwargs.pop("messages"),
+            endpoint=config.ocr_endpoint,
+            domain="vision_ocr",
+            **kwargs,
         )
-    responses = await asyncio.gather(*tasks)
-    chunks = [_get_completion_text(r) for r in responses]
+        text = _get_completion_text(response)
+        if cache_key is not None:
+            ocr_cache.put(cache_key, text)
+        return text
+
+    chunks = await asyncio.gather(*(ocr_page(page_idx) for page_idx in batch))
 
     return {
         "extracted_text_chunks": chunks,
@@ -619,9 +697,11 @@ class SmartDocumentAgent(BaseDocumentAgent):
         self,
         config: AgentConfig,
         extraction_strategy: Optional[BaseExtractionStrategy] = None,
+        ocr_cache: VisionOcrCache | None = None,
     ):
         self._config = config
         self._strategy = extraction_strategy or StructuredOutputStrategy()
+        self._ocr_cache = ocr_cache
         self._graph = self._build_graph()
 
     def _build_graph(self):
@@ -640,7 +720,7 @@ class SmartDocumentAgent(BaseDocumentAgent):
             return await _analyze_pdf(state, config)
 
         async def batched_vision_ocr(state: AgentState) -> dict:
-            return await _batched_vision_ocr(state, config)
+            return await _batched_vision_ocr(state, config, self._ocr_cache)
 
         async def extract_metadata(state: AgentState) -> dict:
             return await _extract_metadata(state, config, strategy)

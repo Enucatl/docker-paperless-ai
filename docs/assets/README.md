@@ -44,8 +44,8 @@ good second observability example after the simpler demo trace.
 
 ### `eval-comparison.png`
 
-Phoenix experiment comparison for the OCR and metadata extraction evaluation.
-The useful story is that the model was evaluated against a fixed document corpus
+Phoenix experiment comparison for the fixed-OCR metadata model matrix. The
+useful story is that the models were evaluated against a fixed document corpus
 instead of picked by intuition.
 
 ### `full-metadata-trace.png`

@@ -74,7 +74,7 @@ def jev_metadata_confidence(output: Any) -> dict[str, float]:
     return _phoenix_score(output, "metadata_confidence")
 
 
-def _build_agent(exp_config: AgentConfig):
+def _build_agent(exp_config: AgentConfig, ocr_cache: Any = None):
     """Instantiate the configured extraction agent."""
     module_path, class_name = exp_config.agent_class.rsplit(".", 1)
     module = importlib.import_module(module_path)
@@ -89,7 +89,11 @@ def _build_agent(exp_config: AgentConfig):
             exp_config.name,
             strategy.__class__.__name__,
         )
-        return agent_class(exp_config, extraction_strategy=strategy)
+        return agent_class(
+            exp_config,
+            extraction_strategy=strategy,
+            ocr_cache=ocr_cache,
+        )
 
     return agent_class(exp_config)
 
@@ -235,6 +239,9 @@ async def run_scientific_evaluation(config: AgentConfig, split: str = "test") ->
         config.typesafe_model,
     )
 
+    from paperless_ai.agents.smart_graph_agent import VisionOcrCache
+
+    ocr_cache = VisionOcrCache()
     for experiment_config in experiments:
         jev_client = None
         try:
@@ -249,7 +256,7 @@ async def run_scientific_evaluation(config: AgentConfig, split: str = "test") ->
                 base_url=config.typesafe_endpoint,
             )
             jev_evaluator = JevMetadataEvaluator(jev_client, config.typesafe_model)
-            agent = _build_agent(experiment_config)
+            agent = _build_agent(experiment_config, ocr_cache=ocr_cache)
 
             async def task(
                 example,
@@ -348,6 +355,11 @@ async def run_scientific_evaluation(config: AgentConfig, split: str = "test") ->
                 jev_client.close()
 
     log.info("All experiments complete! View results at %s", phoenix_endpoint)
+    log.info(
+        "OCR cache: %d hits, %d misses",
+        ocr_cache.hits,
+        ocr_cache.misses,
+    )
 
 
 async def run_evals(config: AgentConfig, split: str = "test") -> None:

@@ -20,7 +20,9 @@ from paperless_ai.agents.smart_graph_agent import (
     BaseExtractionStrategy,
     NuExtractStrategy,
     StructuredOutputStrategy,
+    VisionOcrCache,
     _ExtractedMetadata,
+    _batched_vision_ocr,
     build_metadata_document_context,
     _extract_metadata,
 )
@@ -425,3 +427,54 @@ async def test_metadata_context_is_the_strategy_input(mock_config) -> None:
     result = await _extract_metadata(state, mock_config, CapturingStrategy())
 
     assert seen == [result["_metadata_context"]]
+
+
+@pytest.mark.asyncio
+async def test_vision_ocr_cache_reuses_same_page_request(tmp_path) -> None:
+    """Repeated evaluation requests reuse OCR text without another call."""
+    pdf_path = tmp_path / "document.pdf"
+    pdf_path.write_bytes(b"%PDF-1.4 test")
+
+    config = MagicMock(spec=AgentConfig)
+    config.ocr_model = "google/gemini-3.5-flash-lite"
+    config.ocr_endpoint = None
+    config.ocr_prompt = "Read this page."
+    config.ocr_max_image_dimension = 1920
+    config.ocr_max_tokens = 4096
+    config.ocr_temperature = 1.0
+    config.ocr_reasoning_effort = "minimal"
+    config.ocr_extra_kwargs = None
+    config.llm_retries = 2
+    config.get_ocr_kwargs = lambda: {
+        "max_tokens": 4096,
+        "temperature": 1.0,
+        "reasoning_effort": "minimal",
+    }
+    state = {
+        "file_path": str(pdf_path),
+        "current_page": 0,
+        "batch_size": 1,
+        "total_pages": 1,
+        "ocr_page_indices": [0],
+        "extracted_text_chunks": [],
+        "language": None,
+    }
+    cache = VisionOcrCache()
+
+    with patch(
+        "paperless_ai.agents.smart_graph_agent._render_page_to_base64",
+        return_value="image",
+    ) as render:
+        with patch(
+            "paperless_ai.agents.smart_graph_agent.complete",
+            new=AsyncMock(return_value=completion_result("OCR text")),
+        ) as complete:
+            first = await _batched_vision_ocr(state, config, cache)
+            second = await _batched_vision_ocr(state, config, cache)
+
+    assert first["extracted_text_chunks"] == ["OCR text"]
+    assert second["extracted_text_chunks"] == ["OCR text"]
+    assert complete.await_count == 1
+    assert render.call_count == 1
+    assert cache.hits == 1
+    assert cache.misses == 1

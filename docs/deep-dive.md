@@ -126,10 +126,11 @@ The evaluation uses 50 PDFs downloaded from the
 The corpus contains document inputs without metadata annotations; Jev judges
 the extracted metadata directly from each document's evidence.
 
-Experiments are configured in `ai/src/paperless_ai/eval/experiments.yaml`. The
-active smoke-test configuration uses Gemini 3.5 flash-lite for OCR, metadata,
-and chat extraction. Keeping the default evaluation to one hosted model makes
-the `code-test` run reproducible without requiring local model services.
+Experiments are configured in `ai/src/paperless_ai/eval/experiments.yaml`.
+Gemini 3.5 flash-lite remains fixed for OCR and chat while the metadata matrix
+compares DeepSeek 4.1 Flash, Inception Mercury 2.5, IBM Granite 4.2 8B, GLM
+Flash Latest, Qwen 3.8 Flash, Qwen 3.7 Flash, GPT 5.6 Luna, and Gemma 4 26B
+A4B.
 
 ![Phoenix experiment comparison for OCR and metadata extraction models](assets/eval-comparison.png)
 
@@ -143,9 +144,9 @@ The evaluation presents four metrics:
 This supports semantic evaluation without requiring a brittle, hand-labelled
 reference value for every field.
 
-The evaluation is intended to validate the end-to-end extraction and judging
-path quickly before adding a broader model matrix. OCR is roughly 10x more
-expensive in tokens than plain text metadata extraction.
+The evaluation validates the end-to-end extraction and judging path while
+holding OCR constant. OCR is roughly 10x more expensive in tokens than plain
+text metadata extraction.
 
 ![Phoenix trace for the selected Gemini extraction setup](assets/full-metadata-trace.png)
 

@@ -513,6 +513,7 @@ services:
       - INFERENCE_EMBEDDING_MODEL
       - CHUNK_SIZE=${CHUNK_SIZE:-512}
       - CHUNK_OVERLAP=${CHUNK_OVERLAP:-50}
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://phoenix:6006/v1/traces
       - PHOENIX_CLIENT_HEADERS=api_key=local
     volumes: []
     networks:

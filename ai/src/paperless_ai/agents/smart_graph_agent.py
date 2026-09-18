@@ -191,18 +191,18 @@ def _field_instructions_from_schema() -> str:
 def build_metadata_document_context(
     text: str,
     *,
-    max_chars: int = 6000,
+    max_chars: int | None = None,
     start_chars: int = 2500,
     end_chars: int = 2000,
     middle_windows: int = 3,
 ) -> str:
-    """Build the exact bounded context used by metadata extraction.
+    """Build the context used by metadata extraction.
 
-    The returned value is also the only document evidence supplied to Jev by
-    the evaluation runner. Keep this helper's clipping and sampling semantics
-    aligned with production metadata extraction.
+    By default, preserve the complete OCR transcript. A character limit can be
+    supplied by callers that explicitly need bounded context; the evaluation
+    path deliberately does not use one.
     """
-    if len(text) <= max_chars:
+    if max_chars is None or len(text) <= max_chars:
         return text
 
     middle_budget = max(0, max_chars - start_chars - end_chars)
@@ -243,6 +243,7 @@ def build_metadata_document_context(
 def _metadata_response_format_tier(config: AgentConfig) -> tuple[str, object | None]:
     """Return the metadata prompt and the selected response format policy."""
     response_format_policy = config.metadata_response_format
+    system_prompt = config.metadata_prompt + "\n\n" + _field_instructions_from_schema()
     metadata_schema = _ExtractedMetadata.model_json_schema()
     # OpenAI-compatible strict JSON Schema requires every property to be
     # required. Nullable fields preserve the distinction between "unknown" and
@@ -261,9 +262,8 @@ def _metadata_response_format_tier(config: AgentConfig) -> tuple[str, object | N
         },
     }
     if response_format_policy in {"json_schema", "auto"}:
-        return config.metadata_prompt, schema_format
+        return system_prompt, schema_format
 
-    system_prompt = config.metadata_prompt + "\n\n" + _field_instructions_from_schema()
     if response_format_policy == "json_object":
         return system_prompt, {"type": "json_object"}
     if response_format_policy == "none":

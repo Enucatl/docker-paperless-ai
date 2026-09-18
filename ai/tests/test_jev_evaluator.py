@@ -1,7 +1,7 @@
 """Unit tests for the single-request Jev metadata evaluator."""
 
 from types import SimpleNamespace
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -22,12 +22,15 @@ async def test_evaluate_uses_one_request_for_all_fields():
     )
     evaluator = JevMetadataEvaluator(client, "jev-test")
 
-    result = await evaluator.evaluate(
-        document_context="exact metadata context",
-        title="Invoice",
-        date="2024-01-15",
-        correspondent="Acme",
-    )
+    span = MagicMock()
+    with patch("paperless_ai.eval.jev_evaluator.start_span") as start_span:
+        start_span.return_value.__enter__.return_value = span
+        result = await evaluator.evaluate(
+            document_context="exact metadata context",
+            title="Invoice",
+            date="2024-01-15",
+            correspondent="Acme",
+        )
 
     assert client.system_one.call_count == 1
     request = client.system_one.call_args.kwargs
@@ -49,6 +52,10 @@ async def test_evaluate_uses_one_request_for_all_fields():
     assert result.title_confidence == 0.92
     assert result.aggregate_score == pytest.approx((0.97 + 0.84 + 0.91) / 3)
     assert result.model == "jev-test"
+    start_span.assert_called_once()
+    span_attributes = start_span.call_args.kwargs
+    assert "exact metadata context" in span_attributes["input.value"]
+    assert span_attributes["llm.model_name"] == "jev-test"
 
 
 @pytest.mark.asyncio

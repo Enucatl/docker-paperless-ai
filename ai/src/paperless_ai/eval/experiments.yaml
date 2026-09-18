@@ -1,6 +1,10 @@
 # Extraction experiments. The Jev evaluator is fixed for every experiment and
 # uses TYPESAFE_API_KEY, TYPESAFE_MODEL, and TYPESAFE_ENDPOINT from config.
 # OCR and chat stay fixed so this matrix compares metadata models only.
+# Metadata temperatures follow each model's documented/default sampling:
+# DeepSeek extraction 1.0, Mercury 2.5's API example 0.75, Granite 4.2 1.0,
+# GLM Flash 1.0, Qwen3.8 thinking 0.6, Qwen3.7 provider default, GPT-5.6
+# Luna omitted (temperature is unsupported), and Gemma 4 1.0.
 experiments:
   - name: "deepseek-v4.1-flash"
     agent_class: "paperless_ai.agents.smart_graph_agent.SmartDocumentAgent"
@@ -12,25 +16,25 @@ experiments:
     metadata_reasoning_effort: "minimal"
     chat_model: "google/gemini-3.5-flash-lite"
 
-  - name: "inception-mercury-2.5"
-    agent_class: "paperless_ai.agents.smart_graph_agent.SmartDocumentAgent"
-    ocr_model: "google/gemini-3.5-flash-lite"
-    ocr_temperature: 1.0
-    ocr_reasoning_effort: "minimal"
-    metadata_model: "inception/mercury-2.5"
-    metadata_temperature: 1.0
-    metadata_reasoning_effort: "minimal"
-    chat_model: "google/gemini-3.5-flash-lite"
+#  - name: "inception-mercury-2.5"
+#    agent_class: "paperless_ai.agents.smart_graph_agent.SmartDocumentAgent"
+#    ocr_model: "google/gemini-3.5-flash-lite"
+#    ocr_temperature: 1.0
+#    ocr_reasoning_effort: "minimal"
+#    metadata_model: "inception/mercury-2.5"
+#    metadata_temperature: 0.75
+#    metadata_reasoning_effort: "minimal"
+#    chat_model: "google/gemini-3.5-flash-lite"
 
-  - name: "ibm-granite-4.2-8b"
-    agent_class: "paperless_ai.agents.smart_graph_agent.SmartDocumentAgent"
-    ocr_model: "google/gemini-3.5-flash-lite"
-    ocr_temperature: 1.0
-    ocr_reasoning_effort: "minimal"
-    metadata_model: "ibm-granite/granite-4.2-8b"
-    metadata_temperature: 1.0
-    metadata_reasoning_effort: "minimal"
-    chat_model: "google/gemini-3.5-flash-lite"
+#  - name: "ibm-granite-4.2-8b"
+#    agent_class: "paperless_ai.agents.smart_graph_agent.SmartDocumentAgent"
+#    ocr_model: "google/gemini-3.5-flash-lite"
+#    ocr_temperature: 1.0
+#    ocr_reasoning_effort: "minimal"
+#    metadata_model: "ibm-granite/granite-4.2-8b"
+#    metadata_temperature: 1.0
+#    metadata_reasoning_effort: "minimal"
+#    chat_model: "google/gemini-3.5-flash-lite"
 
   - name: "glm-flash-latest"
     agent_class: "paperless_ai.agents.smart_graph_agent.SmartDocumentAgent"
@@ -42,25 +46,25 @@ experiments:
     metadata_reasoning_effort: "minimal"
     chat_model: "google/gemini-3.5-flash-lite"
 
-  - name: "qwen-3.8-flash"
-    agent_class: "paperless_ai.agents.smart_graph_agent.SmartDocumentAgent"
-    ocr_model: "google/gemini-3.5-flash-lite"
-    ocr_temperature: 1.0
-    ocr_reasoning_effort: "minimal"
-    metadata_model: "qwen/qwen3.8-flash"
-    metadata_temperature: 1.0
-    metadata_reasoning_effort: "minimal"
-    chat_model: "google/gemini-3.5-flash-lite"
+#  - name: "qwen-3.8-flash"
+#    agent_class: "paperless_ai.agents.smart_graph_agent.SmartDocumentAgent"
+#    ocr_model: "google/gemini-3.5-flash-lite"
+#    ocr_temperature: 1.0
+#    ocr_reasoning_effort: "minimal"
+#    metadata_model: "qwen/qwen3.8-flash"
+#    metadata_temperature: 0.6
+#    metadata_reasoning_effort: "minimal"
+#    chat_model: "google/gemini-3.5-flash-lite"
 
-  - name: "qwen-3.7-flash"
-    agent_class: "paperless_ai.agents.smart_graph_agent.SmartDocumentAgent"
-    ocr_model: "google/gemini-3.5-flash-lite"
-    ocr_temperature: 1.0
-    ocr_reasoning_effort: "minimal"
-    metadata_model: "qwen/qwen3.7-flash"
-    metadata_temperature: 1.0
-    metadata_reasoning_effort: "minimal"
-    chat_model: "google/gemini-3.5-flash-lite"
+#  - name: "qwen-3.7-flash"
+#    agent_class: "paperless_ai.agents.smart_graph_agent.SmartDocumentAgent"
+#    ocr_model: "google/gemini-3.5-flash-lite"
+#    ocr_temperature: 1.0
+#    ocr_reasoning_effort: "minimal"
+#    metadata_model: "qwen/qwen3.7-flash"
+#    metadata_temperature: null
+#    metadata_reasoning_effort: "minimal"
+#    chat_model: "google/gemini-3.5-flash-lite"
 
   - name: "gpt-5.6-luna"
     agent_class: "paperless_ai.agents.smart_graph_agent.SmartDocumentAgent"
@@ -68,16 +72,16 @@ experiments:
     ocr_temperature: 1.0
     ocr_reasoning_effort: "minimal"
     metadata_model: "openai/gpt-5.6-luna"
-    metadata_temperature: 1.0
+    metadata_temperature: null
     metadata_reasoning_effort: "minimal"
     chat_model: "google/gemini-3.5-flash-lite"
 
-  - name: "gemma-4-26b-a4b"
-    agent_class: "paperless_ai.agents.smart_graph_agent.SmartDocumentAgent"
-    ocr_model: "google/gemini-3.5-flash-lite"
-    ocr_temperature: 1.0
-    ocr_reasoning_effort: "minimal"
-    metadata_model: "google/gemma-4-26b-a4b-it"
-    metadata_temperature: 1.0
-    metadata_reasoning_effort: "minimal"
-    chat_model: "google/gemini-3.5-flash-lite"
+#  - name: "gemma-4-26b-a4b"
+#    agent_class: "paperless_ai.agents.smart_graph_agent.SmartDocumentAgent"
+#    ocr_model: "google/gemini-3.5-flash-lite"
+#    ocr_temperature: 1.0
+#    ocr_reasoning_effort: "minimal"
+#    metadata_model: "google/gemma-4-26b-a4b-it"
+#    metadata_temperature: 1.0
+#    metadata_reasoning_effort: "minimal"
+#    chat_model: "google/gemini-3.5-flash-lite"

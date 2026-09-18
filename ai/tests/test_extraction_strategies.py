@@ -181,8 +181,8 @@ class TestStructuredOutputStrategy:
     @pytest.mark.parametrize(
         ("policy", "expected_response_format", "has_instructions"),
         [
-            ("auto", "schema", False),
-            ("json_schema", "schema", False),
+            ("auto", "schema", True),
+            ("json_schema", "schema", True),
             ("json_object", {"type": "json_object"}, True),
             ("none", None, True),
         ],
@@ -433,6 +433,24 @@ async def test_metadata_context_is_the_strategy_input(mock_config) -> None:
     result = await _extract_metadata(state, mock_config, CapturingStrategy())
 
     assert seen == [result["_metadata_context"]]
+
+
+@pytest.mark.asyncio
+async def test_metadata_context_preserves_the_complete_ocr_transcript(
+    mock_config,
+) -> None:
+    """Metadata extraction receives all OCR text unless explicitly bounded."""
+    text = "A" * 7000
+
+    class CapturingStrategy(BaseExtractionStrategy):
+        async def extract(self, text: str, config: AgentConfig) -> _ExtractedMetadata:
+            return _ExtractedMetadata()
+
+    result = await _extract_metadata(
+        {"extracted_text_chunks": [text]}, mock_config, CapturingStrategy()
+    )
+
+    assert result["_metadata_context"] == text
 
 
 @pytest.mark.asyncio

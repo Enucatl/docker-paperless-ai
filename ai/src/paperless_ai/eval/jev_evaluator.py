@@ -1,9 +1,11 @@
 """TypeSafe Jev evaluation for extracted Paperless metadata."""
 
 import asyncio
+import json
 from dataclasses import dataclass
 from typing import Any
 
+from paperless_common.telemetry import set_span_attributes, start_span
 from typesafe_sdk import Noul
 
 
@@ -128,23 +130,52 @@ class JevMetadataEvaluator:
             "title": _question(TITLE_QUESTION),
         }
 
-        response = await asyncio.to_thread(
-            self.client.system_one,
-            state=state,
-            questions=questions,
-            model=self.model,
-        )
+        trace_input = json.dumps(state, ensure_ascii=False, default=str)
+        with start_span(
+            "paperless_ai.eval.jev_metadata",
+            **{
+                "openinference.span.kind": "LLM",
+                "llm.provider": "typesafe",
+                "llm.model_name": self.model,
+                "input.value": trace_input,
+                "input.mime_type": "application/json",
+            },
+        ) as span:
+            response = await asyncio.to_thread(
+                self.client.system_one,
+                state=state,
+                questions=questions,
+                model=self.model,
+            )
 
-        answers = response.nouls
-        return JevMetadataEvaluation(
-            date_score=float(answers["date"].noul),
-            correspondent_score=float(answers["correspondent"].noul),
-            title_score=float(answers["title"].noul),
-            date_confidence=_confidence(answers["date"]),
-            correspondent_confidence=_confidence(answers["correspondent"]),
-            title_confidence=_confidence(answers["title"]),
-            model=getattr(response, "model", self.model),
-        )
+            answers = response.nouls
+            evaluation = JevMetadataEvaluation(
+                date_score=float(answers["date"].noul),
+                correspondent_score=float(answers["correspondent"].noul),
+                title_score=float(answers["title"].noul),
+                date_confidence=_confidence(answers["date"]),
+                correspondent_confidence=_confidence(answers["correspondent"]),
+                title_confidence=_confidence(answers["title"]),
+                model=getattr(response, "model", self.model),
+            )
+            set_span_attributes(
+                span,
+                **{
+                    "output.value": json.dumps(
+                        {
+                            "date": evaluation.date_score,
+                            "correspondent": evaluation.correspondent_score,
+                            "title": evaluation.title_score,
+                            "date_confidence": evaluation.date_confidence,
+                            "correspondent_confidence": evaluation.correspondent_confidence,
+                            "title_confidence": evaluation.title_confidence,
+                        },
+                        ensure_ascii=False,
+                    ),
+                    "output.mime_type": "application/json",
+                },
+            )
+            return evaluation
 
 
 def _confidence(answer: Any) -> float:

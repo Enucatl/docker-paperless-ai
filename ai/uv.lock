@@ -2076,7 +2076,7 @@ wheels = [
 [[package]]
 name = "shared-inference"
 version = "0.1.0"
-source = { git = "https://github.com/Enucatl/shared-inference.git?branch=main#04c2eddcdf75e7893dc7648134ef02ebbf9dda9a" }
+source = { git = "https://github.com/Enucatl/shared-inference.git?branch=main#8fe5f2e1ba8eb2dc65166d60d141b8fb28f77049" }
 dependencies = [
     { name = "niquests" },
     { name = "opentelemetry-api" },

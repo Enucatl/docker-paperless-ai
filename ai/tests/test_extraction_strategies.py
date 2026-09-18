@@ -212,8 +212,14 @@ class TestStructuredOutputStrategy:
             assert "response_format" not in kwargs
         elif expected_response_format == "schema":
             assert kwargs["response_format"]["type"] == "json_schema"
-            assert kwargs["response_format"]["json_schema"]["schema"] == (
-                _ExtractedMetadata.model_json_schema()
+            json_schema = kwargs["response_format"]["json_schema"]
+            assert json_schema["strict"] is True
+            schema = json_schema["schema"]
+            assert schema["required"] == list(schema["properties"])
+            assert schema["additionalProperties"] is False
+            assert all(
+                "default" not in property_schema
+                for property_schema in schema["properties"].values()
             )
         else:
             assert kwargs["response_format"] == expected_response_format

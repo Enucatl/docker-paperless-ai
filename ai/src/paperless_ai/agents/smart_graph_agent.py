@@ -243,11 +243,21 @@ def build_metadata_document_context(
 def _metadata_response_format_tier(config: AgentConfig) -> tuple[str, object | None]:
     """Return the metadata prompt and the selected response format policy."""
     response_format_policy = config.metadata_response_format
+    metadata_schema = _ExtractedMetadata.model_json_schema()
+    # OpenAI-compatible strict JSON Schema requires every property to be
+    # required. Nullable fields preserve the distinction between "unknown" and
+    # an omitted field in the model output.
+    metadata_schema["required"] = list(metadata_schema.get("properties", {}))
+    metadata_schema["additionalProperties"] = False
+    for property_schema in metadata_schema.get("properties", {}).values():
+        if isinstance(property_schema, dict):
+            property_schema.pop("default", None)
     schema_format = {
         "type": "json_schema",
         "json_schema": {
             "name": "extracted-metadata",
-            "schema": _ExtractedMetadata.model_json_schema(),
+            "strict": True,
+            "schema": metadata_schema,
         },
     }
     if response_format_policy in {"json_schema", "auto"}:

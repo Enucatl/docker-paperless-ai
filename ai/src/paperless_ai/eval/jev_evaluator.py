@@ -16,15 +16,27 @@ class JevMetadataEvaluation:
     date_score: float
     correspondent_score: float
     title_score: float
+    summary_score: float
     date_confidence: float
     correspondent_confidence: float
     title_confidence: float
+    summary_confidence: float
     model: str | None = None
 
     @property
     def aggregate_score(self) -> float:
         """Return the arithmetic mean of the three field scores."""
         return (self.date_score + self.correspondent_score + self.title_score) / 3
+
+    @property
+    def document_understanding_score(self) -> float:
+        """Return the arithmetic mean of all four evaluated fields."""
+        return (
+            self.date_score
+            + self.correspondent_score
+            + self.title_score
+            + self.summary_score
+        ) / 4
 
 
 DATE_QUESTION = (
@@ -63,6 +75,19 @@ TITLE_QUESTION = (
     "supported from the document."
 )
 
+SUMMARY_QUESTION = (
+    "Is the predicted summary an accurate and useful semantic summary of this "
+    "document? Judge only from the document evidence. The summary should "
+    "capture the document's main subject and purpose and the most important "
+    "distinguishing information while remaining concise and factual. It should "
+    "be useful as context for semantic retrieval. Reject summaries containing "
+    "unsupported claims, important misunderstandings, excessive generic "
+    "wording, irrelevant details, or meta framing such as 'This document is'. "
+    "Minor omissions are acceptable when the core subject and purpose remain "
+    "clear. If the prediction is null or empty, answer yes only when the "
+    "document genuinely contains no meaningful content that can be summarized."
+)
+
 
 def _question(instructions: str) -> Noul:
     """Build a yes/no Jev question with explicit outcome semantics."""
@@ -76,7 +101,7 @@ def _question(instructions: str) -> Noul:
 
 
 class JevMetadataEvaluator:
-    """Evaluate all three extracted metadata fields in one Jev request.
+    """Evaluate extracted metadata fields in one Jev request.
 
     Attributes:
         client: Reused synchronous TypeSafe client.
@@ -100,17 +125,19 @@ class JevMetadataEvaluator:
         title: str | None,
         date: str | None,
         correspondent: str | None,
+        summary: str | None,
     ) -> JevMetadataEvaluation:
-        """Judge date, correspondent, and title with one System One call.
+        """Judge metadata and summary with one System One call.
 
         Args:
             document_context: Exact context supplied to metadata extraction.
             title: Predicted Paperless title, including ``None`` when absent.
             date: Predicted ISO document date, including ``None`` when absent.
             correspondent: Predicted Paperless correspondent, including ``None``.
+            summary: Predicted retrieval-oriented document summary, including ``None``.
 
         Returns:
-            Continuous positive-answer probabilities for all three fields.
+            Continuous positive-answer probabilities for all four fields.
 
         Raises:
             KeyError: If TypeSafe omits one of the requested answers.
@@ -122,12 +149,14 @@ class JevMetadataEvaluator:
                 "title": title,
                 "date": date,
                 "correspondent": correspondent,
+                "summary": summary,
             },
         }
         questions = {
             "date": _question(DATE_QUESTION),
             "correspondent": _question(CORRESPONDENT_QUESTION),
             "title": _question(TITLE_QUESTION),
+            "summary": _question(SUMMARY_QUESTION),
         }
 
         trace_input = json.dumps(state, ensure_ascii=False, default=str)
@@ -153,9 +182,11 @@ class JevMetadataEvaluator:
                 date_score=float(answers["date"].noul),
                 correspondent_score=float(answers["correspondent"].noul),
                 title_score=float(answers["title"].noul),
+                summary_score=float(answers["summary"].noul),
                 date_confidence=_confidence(answers["date"]),
                 correspondent_confidence=_confidence(answers["correspondent"]),
                 title_confidence=_confidence(answers["title"]),
+                summary_confidence=_confidence(answers["summary"]),
                 model=getattr(response, "model", self.model),
             )
             set_span_attributes(
@@ -166,9 +197,11 @@ class JevMetadataEvaluator:
                             "date": evaluation.date_score,
                             "correspondent": evaluation.correspondent_score,
                             "title": evaluation.title_score,
+                            "summary": evaluation.summary_score,
                             "date_confidence": evaluation.date_confidence,
                             "correspondent_confidence": evaluation.correspondent_confidence,
                             "title_confidence": evaluation.title_confidence,
+                            "summary_confidence": evaluation.summary_confidence,
                         },
                         ensure_ascii=False,
                     ),

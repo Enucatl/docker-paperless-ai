@@ -15,8 +15,12 @@ from paperless_ai.eval.run_evals import (
     jev_correspondent_confidence,
     jev_date,
     jev_date_confidence,
+    jev_document_understanding_confidence,
     jev_metadata,
     jev_metadata_confidence,
+    jev_document_understanding,
+    jev_summary,
+    jev_summary_confidence,
     jev_title,
     jev_title_confidence,
     run_evals,
@@ -133,6 +137,7 @@ async def test_corpus_is_uploaded_as_input_only(tmp_path):
                 title="Invoice",
                 document_date="2024-01-15",
                 correspondent="Acme",
+                summary="Invoice for January services from Acme.",
                 full_ocr_transcript="OCR",
             ),
             metadata_context="OCR",
@@ -145,6 +150,7 @@ async def test_corpus_is_uploaded_as_input_only(tmp_path):
             "date": SimpleNamespace(noul=0.97, confidence=0.86),
             "correspondent": SimpleNamespace(noul=0.84, confidence=0.75),
             "title": SimpleNamespace(noul=0.91, confidence=0.92),
+            "summary": SimpleNamespace(noul=0.88, confidence=0.89),
         },
     )
 
@@ -173,21 +179,32 @@ async def test_corpus_is_uploaded_as_input_only(tmp_path):
         "date": 0.97,
         "correspondent": 0.84,
         "title": 0.91,
+        "summary": 0.88,
         "metadata": pytest.approx((0.97 + 0.84 + 0.91) / 3),
+        "document_understanding": pytest.approx((0.97 + 0.84 + 0.91 + 0.88) / 4),
         "date_confidence": 0.86,
         "correspondent_confidence": 0.75,
         "title_confidence": 0.92,
+        "summary_confidence": 0.89,
         "metadata_confidence": pytest.approx((0.86 + 0.75 + 0.92) / 3),
+        "document_understanding_confidence": pytest.approx(
+            (0.86 + 0.75 + 0.92 + 0.89) / 4
+        ),
         "model": "jev-test",
     }
+    assert output["summary"] == "Invoice for January services from Acme."
     assert [e.__name__ for e in phoenix.evaluators[0]] == [
         "jev_date",
         "jev_correspondent",
         "jev_title",
+        "jev_summary",
         "jev_metadata",
+        "jev_document_understanding",
         "jev_date_confidence",
         "jev_correspondent_confidence",
         "jev_title_confidence",
+        "jev_summary_confidence",
+        "jev_document_understanding_confidence",
         "jev_metadata_confidence",
     ]
     assert agent.process.await_args.kwargs == {"existing_hints": {}}
@@ -199,9 +216,10 @@ async def test_corpus_is_uploaded_as_input_only(tmp_path):
             "title": "Invoice",
             "date": "2024-01-15",
             "correspondent": "Acme",
+            "summary": "Invoice for January services from Acme.",
         },
     }
-    assert set(request["questions"]) == {"date", "correspondent", "title"}
+    assert set(request["questions"]) == {"date", "correspondent", "title", "summary"}
 
 
 @pytest.mark.asyncio
@@ -230,6 +248,7 @@ async def test_each_experiment_has_its_own_client(tmp_path):
                 "date": SimpleNamespace(noul=0.1),
                 "correspondent": SimpleNamespace(noul=0.2),
                 "title": SimpleNamespace(noul=0.3),
+                "summary": SimpleNamespace(noul=0.4),
             },
         )
 
@@ -301,6 +320,10 @@ def test_jev_projection_scores_are_continuous():
     assert jev_date(output) == {"score": 0.97}
     assert jev_correspondent(output) == {"score": 0.84}
     assert jev_title(output) == {"score": 0.91}
+    assert jev_summary({"_jev": {"summary": 0.88}}) == {"score": 0.88}
+    assert jev_document_understanding({"_jev": {"document_understanding": 0.9}}) == {
+        "score": 0.9
+    }
     assert jev_metadata({"_jev": {"metadata": 0.9066666667}}) == {
         "score": pytest.approx(0.9066666667)
     }
@@ -315,6 +338,12 @@ def test_jev_projection_scores_are_continuous():
     assert jev_date_confidence(confidence_output) == {"score": 0.86}
     assert jev_correspondent_confidence(confidence_output) == {"score": 0.75}
     assert jev_title_confidence(confidence_output) == {"score": 0.92}
+    assert jev_summary_confidence({"_jev": {"summary_confidence": 0.89}}) == {
+        "score": 0.89
+    }
+    assert jev_document_understanding_confidence(
+        {"_jev": {"document_understanding_confidence": 0.9}}
+    ) == {"score": 0.9}
     assert jev_metadata_confidence(confidence_output) == {
         "score": pytest.approx(0.8433333333)
     }

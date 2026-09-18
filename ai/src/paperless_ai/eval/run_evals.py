@@ -49,9 +49,19 @@ def jev_title(output: Any) -> dict[str, float]:
     return _phoenix_score(output, "title")
 
 
+def jev_summary(output: Any) -> dict[str, float]:
+    """Project the Jev summary probability as a Phoenix score."""
+    return _phoenix_score(output, "summary")
+
+
 def jev_metadata(output: Any) -> dict[str, float]:
     """Project the derived Jev arithmetic mean as a Phoenix score."""
     return _phoenix_score(output, "metadata")
+
+
+def jev_document_understanding(output: Any) -> dict[str, float]:
+    """Project the derived four-field Jev mean as a Phoenix score."""
+    return _phoenix_score(output, "document_understanding")
 
 
 def jev_date_confidence(output: Any) -> dict[str, float]:
@@ -67,6 +77,16 @@ def jev_correspondent_confidence(output: Any) -> dict[str, float]:
 def jev_title_confidence(output: Any) -> dict[str, float]:
     """Project Jev's title confidence as a Phoenix score."""
     return _phoenix_score(output, "title_confidence")
+
+
+def jev_summary_confidence(output: Any) -> dict[str, float]:
+    """Project Jev's summary confidence as a Phoenix score."""
+    return _phoenix_score(output, "summary_confidence")
+
+
+def jev_document_understanding_confidence(output: Any) -> dict[str, float]:
+    """Project mean Jev confidence across all four fields."""
+    return _phoenix_score(output, "document_understanding_confidence")
 
 
 def jev_metadata_confidence(output: Any) -> dict[str, float]:
@@ -283,15 +303,19 @@ async def run_scientific_evaluation(config: AgentConfig, split: str = "test") ->
                     title=metadata.title,
                     date=metadata.document_date,
                     correspondent=metadata.correspondent,
+                    summary=metadata.summary,
                 )
                 scores = {
                     "date": evaluation.date_score,
                     "correspondent": evaluation.correspondent_score,
                     "title": evaluation.title_score,
+                    "summary": evaluation.summary_score,
                     "metadata": evaluation.aggregate_score,
+                    "document_understanding": evaluation.document_understanding_score,
                     "date_confidence": evaluation.date_confidence,
                     "correspondent_confidence": evaluation.correspondent_confidence,
                     "title_confidence": evaluation.title_confidence,
+                    "summary_confidence": evaluation.summary_confidence,
                 }
                 scores["metadata_confidence"] = (
                     sum(
@@ -303,6 +327,17 @@ async def run_scientific_evaluation(config: AgentConfig, split: str = "test") ->
                     )
                     / 3
                 )
+                scores["document_understanding_confidence"] = (
+                    sum(
+                        (
+                            evaluation.date_confidence,
+                            evaluation.correspondent_confidence,
+                            evaluation.title_confidence,
+                            evaluation.summary_confidence,
+                        )
+                    )
+                    / 4
+                )
 
                 jev_output = {
                     **scores,
@@ -313,6 +348,7 @@ async def run_scientific_evaluation(config: AgentConfig, split: str = "test") ->
                     "correspondent": metadata.correspondent,
                     "date": metadata.document_date,
                     "title": metadata.title,
+                    "summary": metadata.summary,
                     "_jev": jev_output,
                 }
 
@@ -323,10 +359,14 @@ async def run_scientific_evaluation(config: AgentConfig, split: str = "test") ->
                     jev_date,
                     jev_correspondent,
                     jev_title,
+                    jev_summary,
                     jev_metadata,
+                    jev_document_understanding,
                     jev_date_confidence,
                     jev_correspondent_confidence,
                     jev_title_confidence,
+                    jev_summary_confidence,
+                    jev_document_understanding_confidence,
                     jev_metadata_confidence,
                 ],
                 experiment_name=experiment_config.name,

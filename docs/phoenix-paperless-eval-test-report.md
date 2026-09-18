@@ -19,16 +19,20 @@ documents), while Mercury 2.5 offered the strongest quality/cost compromise.
 Scores are means over the 40 documents. The field scores are continuous Jev
 positive-answer probabilities, not binary labels.
 
-| Rank | Model | `jev_metadata` | Date | Correspondent | Title |
-|---:|---|---:|---:|---:|---:|
-| 1 | GLM Flash | 0.8474 | 0.8555 | 0.7923 | 0.8945 |
-| 2 | Mercury 2.5 | 0.8428 | 0.8553 | 0.7858 | 0.8875 |
-| 3 | GPT-5.6 Luna | 0.8400 | 0.8598 | 0.7860 | 0.8743 |
-| 4 | Granite 4.2 8B | 0.8079 | 0.8008 | 0.7705 | 0.8525 |
-| 5 | Gemma 4 26B A4B | 0.6830 | 0.7348 | 0.6083 | 0.7060 |
-| 6 | DeepSeek V4.1 Flash | 0.6248 | 0.6223 | 0.6243 | 0.6278 |
-| 7 | Qwen 3.8 Flash | 0.6052 | 0.6195 | 0.6160 | 0.5800 |
-| 8 | Qwen 3.7 Flash | 0.1393 | 0.1620 | 0.1780 | 0.0780 |
+| Rank | Model | `jev_metadata` | Date | Correspondent | Title | Summary |
+|---:|---|---:|---:|---:|---:|---:|
+| 1 | GLM Flash | 0.8474 | 0.8555 | 0.7923 | 0.8945 | — |
+| 2 | Mercury 2.5 | 0.8428 | 0.8553 | 0.7858 | 0.8875 | — |
+| 3 | GPT-5.6 Luna | 0.8400 | 0.8598 | 0.7860 | 0.8743 | — |
+| 4 | Granite 4.2 8B | 0.8079 | 0.8008 | 0.7705 | 0.8525 | — |
+| 5 | Gemma 4 26B A4B | 0.6830 | 0.7348 | 0.6083 | 0.7060 | — |
+| 6 | DeepSeek V4.1 Flash | 0.6248 | 0.6223 | 0.6243 | 0.6278 | — |
+| 7 | Qwen 3.8 Flash | 0.6052 | 0.6195 | 0.6160 | 0.5800 | — |
+| 8 | Qwen 3.7 Flash | 0.1393 | 0.1620 | 0.1780 | 0.0780 | — |
+
+Summary scores were added after this historical run and will be populated by
+the next Phoenix evaluation; the existing ranking remains based on
+`jev_metadata`.
 
 ## Latency ranking
 
@@ -50,21 +54,18 @@ p95 show typical and tail latency.
 
 ### Metric interpretation
 
-`jev_metadata` is already calculated by the evaluation runner as:
+`jev_metadata` is calculated by the evaluation runner as:
 
 ```text
 (jev_date + jev_correspondent + jev_title) / 3
 ```
 
-Consequently, averaging the four displayed metrics does not change the result:
-
-```text
-(date + correspondent + title + metadata) / 4
-= (date + correspondent + title) / 3
-```
-
-Use `jev_metadata` directly, or equivalently average the three field metrics.
-Do not treat `jev_metadata` as a fourth independent field.
+The new `jev_summary` metric evaluates concise, factual, retrieval-oriented
+semantic usefulness and is not included in `jev_metadata`. Use
+`jev_metadata` directly, or equivalently average the three metadata field
+metrics. A separate `jev_document_understanding` score, when present, is the
+mean of Date, Correspondent, Title, and Summary and must not replace the
+canonical metadata ranking.
 
 ## Token-cost ranking
 

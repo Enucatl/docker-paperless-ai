@@ -123,48 +123,36 @@ tokens, cost about $0.01, and returned the correct comprehensive answer.
 
 The evaluation uses 50 PDFs downloaded from the
 [pixparse/idl-wds OCR testing dataset](https://huggingface.co/datasets/pixparse/idl-wds).
-The useful detail is that the dataset is already annotated for correspondent
-and date, which makes it a good fit for the metadata this pipeline extracts.
+The corpus contains document inputs without metadata annotations; Jev judges
+the extracted metadata directly from each document's evidence.
 
 Experiments are configured in `ai/src/paperless_ai/eval/experiments.yaml`. The
-active comparison covers:
-
-- Gemini 3.1 flash-lite for both OCR and metadata extraction.
-- Nanonets-OCR2-3B for OCR, with Gemini 2.5 flash-lite or Gemini 3.1 flash-lite
-  for metadata extraction.
-- Nanonets-OCR2-3B for OCR, with local NuExtract 8B for metadata extraction.
+active smoke-test configuration uses Gemini 3.5 flash-lite for OCR, metadata,
+and chat extraction. Keeping the default evaluation to one hosted model makes
+the `code-test` run reproducible without requiring local model services.
 
 ![Phoenix experiment comparison for OCR and metadata extraction models](assets/eval-comparison.png)
 
 The evaluation presents four metrics:
 
-- exact date match,
-- fuzzy date match,
-- fuzzy correspondent match,
-- LLM-as-a-judge scoring for the generated title.
+- Jev probability that the date is appropriate,
+- Jev probability that the correspondent is appropriate,
+- Jev probability that the title is appropriate,
+- derived metadata probability and calibrated confidence metrics.
 
-The point is to separate strict metadata correctness from useful near misses.
-Dates can be exactly right or close; correspondents often differ by suffixes or
-word order; titles are better judged semantically than by string equality.
+This supports semantic evaluation without requiring a brittle, hand-labelled
+reference value for every field.
 
-The result was clear enough for an engineering decision. The dedicated OCR
-model kept extraction quality stable, and local OCR moved the expensive part of
-the pipeline off a hosted model. OCR is roughly 10x more expensive in token
-terms than plain text metadata extraction, and the local small OCR model was
-about 40% faster in this setup.
+The evaluation is intended to validate the end-to-end extraction and judging
+path quickly before adding a broader model matrix. OCR is roughly 10x more
+expensive in tokens than plain text metadata extraction.
 
-Local NuExtract was not adopted. It dropped metadata quality enough that the
-privacy and cost benefit did not justify maintaining another local model. The
-chosen compromise is local Nanonets OCR plus Gemini 3.1 flash-lite for metadata.
+![Phoenix trace for the selected Gemini extraction setup](assets/full-metadata-trace.png)
 
-![Phoenix trace for the selected local OCR and Gemini metadata setup](assets/full-metadata-trace.png)
-
-The deployed mix keeps the high-volume work local: OCR runs on Nanonets-OCR2-3B,
-and embeddings run locally with the small BAAI/bge-m3 model. Gemini 3.1
-flash-lite is used only for metadata extraction over plain text. In a backfill
-of about 2,000 documents and roughly 7,000 pages, that kept the Google API cost
-below one dollar because page-image OCR and embeddings did not hit the hosted
-model API.
+The deployed extraction path uses Gemini 3.5 flash-lite for OCR and metadata;
+embeddings remain local with the small BAAI/bge-m3 model. The evaluation's
+input-only corpus and Jev scores keep model comparisons separate from production
+metadata annotations.
 
 Qwen 3.5 9B fit the RTX 5090 hardware and showed promise, but it had a stubborn problem:
 when prompted to reason, the model would keep "thinking" — emitting text between

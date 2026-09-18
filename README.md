@@ -642,8 +642,9 @@ Each evaluation run reports per-experiment:
 | `jev_correspondent` | Jev probability that the predicted correspondent is appropriate |
 | `jev_title` | Jev probability that the predicted title is appropriate |
 | `jev_metadata` | Arithmetic mean of the three Jev field scores; derived, not another judgment |
+| `jev_*_confidence` | Jev confidence for each field, plus the derived metadata mean |
 
-A comparison table is printed at the end of each run:
+A comparison is available in Phoenix after each run:
 
 ```
 === Experiment Comparison ===

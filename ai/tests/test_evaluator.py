@@ -12,9 +12,13 @@ import paperless_ai.eval.run_evals as module
 from paperless_ai.agents.base import AgentResult, DocumentMetadata
 from paperless_ai.eval.run_evals import (
     jev_correspondent,
+    jev_correspondent_confidence,
     jev_date,
+    jev_date_confidence,
     jev_metadata,
+    jev_metadata_confidence,
     jev_title,
+    jev_title_confidence,
     run_evals,
     run_scientific_evaluation,
 )
@@ -138,9 +142,9 @@ async def test_corpus_is_uploaded_as_input_only(tmp_path):
     typesafe_client.system_one.return_value = SimpleNamespace(
         model="jev-test",
         nouls={
-            "date": SimpleNamespace(noul=0.97),
-            "correspondent": SimpleNamespace(noul=0.84),
-            "title": SimpleNamespace(noul=0.91),
+            "date": SimpleNamespace(noul=0.97, confidence=0.86),
+            "correspondent": SimpleNamespace(noul=0.84, confidence=0.75),
+            "title": SimpleNamespace(noul=0.91, confidence=0.92),
         },
     )
 
@@ -170,6 +174,10 @@ async def test_corpus_is_uploaded_as_input_only(tmp_path):
         "correspondent": 0.84,
         "title": 0.91,
         "metadata": pytest.approx((0.97 + 0.84 + 0.91) / 3),
+        "date_confidence": 0.86,
+        "correspondent_confidence": 0.75,
+        "title_confidence": 0.92,
+        "metadata_confidence": pytest.approx((0.86 + 0.75 + 0.92) / 3),
         "model": "jev-test",
     }
     assert [e.__name__ for e in phoenix.evaluators[0]] == [
@@ -177,6 +185,10 @@ async def test_corpus_is_uploaded_as_input_only(tmp_path):
         "jev_correspondent",
         "jev_title",
         "jev_metadata",
+        "jev_date_confidence",
+        "jev_correspondent_confidence",
+        "jev_title_confidence",
+        "jev_metadata_confidence",
     ]
     assert agent.process.await_args.kwargs == {"existing_hints": {}}
 
@@ -239,8 +251,8 @@ async def test_each_experiment_has_its_own_client(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_jev_failure_is_logged_once_and_scores_zero(tmp_path, caplog):
-    """A failed request is projected conservatively without evaluator retries."""
+async def test_jev_failure_fails_the_experiment_without_zero_scores(tmp_path, caplog):
+    """A failed Jev request cannot be misreported as extraction quality."""
     path = _existing_pdf(tmp_path)
     corpus = tmp_path / "eval.json"
     experiments = tmp_path / "experiments.yaml"
@@ -272,11 +284,13 @@ async def test_jev_failure_is_logged_once_and_scores_zero(tmp_path, caplog):
                             item.stop()
 
     assert typesafe_client.system_one.call_count == 1
-    assert phoenix.outputs[0]["_jev"]["date"] == 0.0
-    assert phoenix.outputs[0]["_jev"]["correspondent"] == 0.0
-    assert phoenix.outputs[0]["_jev"]["title"] == 0.0
+    assert phoenix.outputs == []
     assert (
-        sum("Jev evaluation failed" in record.message for record in caplog.records) == 1
+        sum(
+            "Experiment 'experiment-0' failed" in record.message
+            for record in caplog.records
+        )
+        == 1
     )
 
 
@@ -290,6 +304,20 @@ def test_jev_projection_scores_are_continuous():
     assert jev_metadata({"_jev": {"metadata": 0.9066666667}}) == {
         "score": pytest.approx(0.9066666667)
     }
+    confidence_output = {
+        "_jev": {
+            "date_confidence": 0.86,
+            "correspondent_confidence": 0.75,
+            "title_confidence": 0.92,
+            "metadata_confidence": 0.8433333333,
+        }
+    }
+    assert jev_date_confidence(confidence_output) == {"score": 0.86}
+    assert jev_correspondent_confidence(confidence_output) == {"score": 0.75}
+    assert jev_title_confidence(confidence_output) == {"score": 0.92}
+    assert jev_metadata_confidence(confidence_output) == {
+        "score": pytest.approx(0.8433333333)
+    }
     assert jev_date({"_jev": {"date": "not-a-score"}}) == {"score": 0.0}
 
 
@@ -301,6 +329,22 @@ def test_phoenix_evaluator_wrapper_keeps_jev_probability_as_score():
     evaluator = create_evaluator()(jev_date)
 
     assert evaluator.evaluate(output=output) == {"score": 0.97}
+
+
+@pytest.mark.asyncio
+async def test_missing_typesafe_key_exits_before_starting_an_experiment(tmp_path):
+    """Evaluation fails fast instead of recording failed Jev calls as scores."""
+    corpus = tmp_path / "eval.json"
+    experiments = tmp_path / "experiments.yaml"
+    _write_corpus(corpus, [])
+    _write_experiments(experiments)
+
+    with patch.object(module, "EVAL_DATASET_PATH", corpus):
+        with patch.object(module, "EXPERIMENTS_YAML_PATH", experiments):
+            with pytest.raises(SystemExit):
+                await run_scientific_evaluation(
+                    _config().model_copy(update={"typesafe_api_key": None})
+                )
 
 
 @pytest.mark.asyncio

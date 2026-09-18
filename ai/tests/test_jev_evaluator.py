@@ -15,9 +15,9 @@ async def test_evaluate_uses_one_request_for_all_fields():
     client.system_one.return_value = SimpleNamespace(
         model="jev-test",
         nouls={
-            "date": SimpleNamespace(noul=0.97),
-            "correspondent": SimpleNamespace(noul=0.84),
-            "title": SimpleNamespace(noul=0.91),
+            "date": SimpleNamespace(noul=0.97, confidence=0.86),
+            "correspondent": SimpleNamespace(noul=0.84, confidence=0.75),
+            "title": SimpleNamespace(noul=0.91, confidence=0.92),
         },
     )
     evaluator = JevMetadataEvaluator(client, "jev-test")
@@ -44,8 +44,37 @@ async def test_evaluate_uses_one_request_for_all_fields():
     assert result.date_score == 0.97
     assert result.correspondent_score == 0.84
     assert result.title_score == 0.91
+    assert result.date_confidence == 0.86
+    assert result.correspondent_confidence == 0.75
+    assert result.title_confidence == 0.92
     assert result.aggregate_score == pytest.approx((0.97 + 0.84 + 0.91) / 3)
     assert result.model == "jev-test"
+
+
+@pytest.mark.asyncio
+async def test_noul_confidence_falls_back_to_its_most_likely_outcome():
+    """Noul probabilities remain useful with SDKs that omit confidence."""
+    client = MagicMock()
+    client.system_one.return_value = SimpleNamespace(
+        model="jev-test",
+        nouls={
+            "date": SimpleNamespace(noul=0.97),
+            "correspondent": SimpleNamespace(noul=0.40),
+            "title": SimpleNamespace(noul=0.50),
+        },
+    )
+    evaluator = JevMetadataEvaluator(client, "jev-test")
+
+    result = await evaluator.evaluate(
+        document_context="context",
+        title="Title",
+        date="2024-01-01",
+        correspondent="Correspondent",
+    )
+
+    assert result.date_confidence == 0.97
+    assert result.correspondent_confidence == 0.60
+    assert result.title_confidence == 0.50
 
 
 @pytest.mark.asyncio

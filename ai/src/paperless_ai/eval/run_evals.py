@@ -54,6 +54,26 @@ def jev_metadata(output: Any) -> dict[str, float]:
     return _phoenix_score(output, "metadata")
 
 
+def jev_date_confidence(output: Any) -> dict[str, float]:
+    """Project Jev's date confidence as a Phoenix score."""
+    return _phoenix_score(output, "date_confidence")
+
+
+def jev_correspondent_confidence(output: Any) -> dict[str, float]:
+    """Project Jev's correspondent confidence as a Phoenix score."""
+    return _phoenix_score(output, "correspondent_confidence")
+
+
+def jev_title_confidence(output: Any) -> dict[str, float]:
+    """Project Jev's title confidence as a Phoenix score."""
+    return _phoenix_score(output, "title_confidence")
+
+
+def jev_metadata_confidence(output: Any) -> dict[str, float]:
+    """Project mean Jev confidence as a Phoenix score."""
+    return _phoenix_score(output, "metadata_confidence")
+
+
 def _build_agent(exp_config: AgentConfig):
     """Instantiate the configured extraction agent."""
     module_path, class_name = exp_config.agent_class.rsplit(".", 1)
@@ -106,6 +126,11 @@ async def run_scientific_evaluation(config: AgentConfig, split: str = "test") ->
         sys.exit(1)
     if not EXPERIMENTS_YAML_PATH.exists():
         log.error("Experiments YAML not found: %s", EXPERIMENTS_YAML_PATH)
+        sys.exit(1)
+    if not config.typesafe_api_key:
+        log.error(
+            "TYPESAFE_API_KEY (or TYPESAFE_API_KEY_FILE) is required for evaluation"
+        )
         sys.exit(1)
 
     try:
@@ -246,41 +271,36 @@ async def run_scientific_evaluation(config: AgentConfig, split: str = "test") ->
                         getattr(metadata, "full_ocr_transcript", "")
                     )
 
-                try:
-                    evaluation = await _jev_evaluator.evaluate(
-                        document_context=document_context,
-                        title=metadata.title,
-                        date=metadata.document_date,
-                        correspondent=metadata.correspondent,
+                evaluation = await _jev_evaluator.evaluate(
+                    document_context=document_context,
+                    title=metadata.title,
+                    date=metadata.document_date,
+                    correspondent=metadata.correspondent,
+                )
+                scores = {
+                    "date": evaluation.date_score,
+                    "correspondent": evaluation.correspondent_score,
+                    "title": evaluation.title_score,
+                    "metadata": evaluation.aggregate_score,
+                    "date_confidence": evaluation.date_confidence,
+                    "correspondent_confidence": evaluation.correspondent_confidence,
+                    "title_confidence": evaluation.title_confidence,
+                }
+                scores["metadata_confidence"] = (
+                    sum(
+                        (
+                            evaluation.date_confidence,
+                            evaluation.correspondent_confidence,
+                            evaluation.title_confidence,
+                        )
                     )
-                    scores = {
-                        "date": evaluation.date_score,
-                        "correspondent": evaluation.correspondent_score,
-                        "title": evaluation.title_score,
-                    }
-                    scores["metadata"] = evaluation.aggregate_score
-                    jev_error = None
-                except Exception as error:
-                    log.exception(
-                        "Jev evaluation failed for document %s using model %s: %s",
-                        file_path,
-                        _experiment_config.typesafe_model,
-                        error,
-                    )
-                    scores = {
-                        "date": 0.0,
-                        "correspondent": 0.0,
-                        "title": 0.0,
-                        "metadata": 0.0,
-                    }
-                    jev_error = str(error)
+                    / 3
+                )
 
                 jev_output = {
                     **scores,
                     "model": _experiment_config.typesafe_model,
                 }
-                if jev_error is not None:
-                    jev_output["error"] = jev_error
 
                 return {
                     "correspondent": metadata.correspondent,
@@ -292,7 +312,16 @@ async def run_scientific_evaluation(config: AgentConfig, split: str = "test") ->
             await phoenix_client.experiments.run_experiment(
                 dataset=phoenix_dataset,
                 task=task,
-                evaluators=[jev_date, jev_correspondent, jev_title, jev_metadata],
+                evaluators=[
+                    jev_date,
+                    jev_correspondent,
+                    jev_title,
+                    jev_metadata,
+                    jev_date_confidence,
+                    jev_correspondent_confidence,
+                    jev_title_confidence,
+                    jev_metadata_confidence,
+                ],
                 experiment_name=experiment_config.name,
                 experiment_description=(
                     f"{experiment_config.agent_class.split('.')[-1]} | "

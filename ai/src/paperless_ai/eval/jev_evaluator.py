@@ -14,9 +14,9 @@ class JevMetadataEvaluation:
     date_score: float
     correspondent_score: float
     title_score: float
-    date_confidence: float | None = None
-    correspondent_confidence: float | None = None
-    title_confidence: float | None = None
+    date_confidence: float
+    correspondent_confidence: float
+    title_confidence: float
     model: str | None = None
 
     @property
@@ -81,17 +81,15 @@ class JevMetadataEvaluator:
         model: Fixed Jev model used for this experiment.
     """
 
-    def __init__(self, client: Any, model: str, max_concurrency: int = 5) -> None:
+    def __init__(self, client: Any, model: str) -> None:
         """Initialize a Jev evaluator.
 
         Args:
             client: A configured synchronous ``TypeSafeClient``.
             model: TypeSafe model name.
-            max_concurrency: Maximum number of synchronous calls in flight.
         """
         self.client = client
         self.model = model
-        self._semaphore = asyncio.Semaphore(max_concurrency)
 
     async def evaluate(
         self,
@@ -130,18 +128,36 @@ class JevMetadataEvaluator:
             "title": _question(TITLE_QUESTION),
         }
 
-        async with self._semaphore:
-            response = await asyncio.to_thread(
-                self.client.system_one,
-                state=state,
-                questions=questions,
-                model=self.model,
-            )
+        response = await asyncio.to_thread(
+            self.client.system_one,
+            state=state,
+            questions=questions,
+            model=self.model,
+        )
 
         answers = response.nouls
         return JevMetadataEvaluation(
             date_score=float(answers["date"].noul),
             correspondent_score=float(answers["correspondent"].noul),
             title_score=float(answers["title"].noul),
+            date_confidence=_confidence(answers["date"]),
+            correspondent_confidence=_confidence(answers["correspondent"]),
+            title_confidence=_confidence(answers["title"]),
             model=getattr(response, "model", self.model),
         )
+
+
+def _confidence(answer: Any) -> float:
+    """Return Jev's confidence, deriving it from a binary probability if needed.
+
+    Args:
+        answer: A TypeSafe yes/no answer.
+
+    Returns:
+        The confidence associated with the answer's most likely outcome.
+    """
+    if (confidence := getattr(answer, "confidence", None)) is not None:
+        return float(confidence)
+
+    probability = float(answer.noul)
+    return max(probability, 1 - probability)

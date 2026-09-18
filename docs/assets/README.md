@@ -44,13 +44,13 @@ good second observability example after the simpler demo trace.
 
 ### `eval-comparison.png`
 
-Phoenix experiment comparison for the OCR and metadata model matrix. The useful
-story is that OCR and metadata model choices were evaluated against a fixed
-document corpus instead of picked by intuition.
+Phoenix experiment comparison for the OCR and metadata extraction evaluation.
+The useful story is that the model was evaluated against a fixed document corpus
+instead of picked by intuition.
 
 ### `full-metadata-trace.png`
 
-Phoenix trace/cost view for the chosen setup: local OCR, local BAAI/bge-m3
-embeddings, and Gemini 3.1 flash-lite for metadata extraction. This supports the
+Phoenix trace/cost view for the chosen setup: Gemini 3.5 flash-lite extraction
+and local BAAI/bge-m3 embeddings. This supports the
 cost claim from the real backfill: about 2,000 documents, roughly 7,000 pages,
 and less than one dollar in Google API credits.

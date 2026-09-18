@@ -74,6 +74,19 @@ class TaskQueues:
         await self.release_due(stage)
         return int(await self._redis.scard(stage))
 
+    async def stage_work_count(self, stage: str) -> int:
+        """Return ready and delayed work for a processing stage.
+
+        Delayed retries are work still owned by the stage, even before their
+        retry deadline.  Callers that need a drain signal must use this rather
+        than ``stage_size``.
+        """
+        async with self._redis.pipeline() as pipe:
+            pipe.scard(stage)
+            pipe.zcard(_delayed_key(stage))
+            ready, delayed = await pipe.execute()
+        return int(ready) + int(delayed)
+
     async def remove(self, doc_id: int, stage: str) -> None:
         async with self._redis.pipeline(transaction=True) as pipe:
             pipe.srem(stage, doc_id)

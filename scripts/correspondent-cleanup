@@ -11,15 +11,22 @@ generate() {
     --cleanup-analysis-dir /review
 }
 
+weekly() {
+  "${compose[@]}" run --rm ai-cleanup \
+    --cleanup-correspondents-weekly /review/merge-plan.json
+}
+
 case "$command_name" in
   generate)
     generate
+    ;;
+  weekly)
+    weekly
     ;;
   review)
     "${compose[@]}" up -d cleanup-review
     ;;
   start)
-    generate
     "${compose[@]}" up -d cleanup-review
     ;;
   stop)
@@ -29,7 +36,7 @@ case "$command_name" in
     "${compose[@]}" ps cleanup-review
     ;;
   *)
-    echo "usage: $0 {start|generate|review|stop|status}" >&2
+    echo "usage: $0 {start|generate|weekly|review|stop|status}" >&2
     exit 2
     ;;
 esac

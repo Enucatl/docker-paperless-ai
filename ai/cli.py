@@ -29,6 +29,7 @@ import logging
 import signal
 import sys
 import time
+from dataclasses import replace
 from pathlib import Path
 
 logging.basicConfig(
@@ -58,6 +59,8 @@ async def main_async(args: argparse.Namespace) -> None:
         summarize_merge_plan,
         write_cleanup_analysis,
         write_merge_plan,
+        write_merge_plan_atomically,
+        wait_for_cleanup_queues,
     )
     from paperless_common.paperless import PaperlessClient
     from paperless_ai.core.runner import (
@@ -108,6 +111,45 @@ async def main_async(args: argparse.Namespace) -> None:
     )
     if config.dry_run:
         log.info("DRY RUN mode — no documents will be modified")
+
+    if args.cleanup_correspondents_weekly:
+        queues = TaskQueues(config.redis_url)
+        try:
+            log.info(
+                "Waiting for OCR and metadata queues to remain empty for 10 minutes"
+            )
+            await wait_for_cleanup_queues(queues)
+            cleanup_review_store = await CleanupReviewStore.from_config(config)
+            async with PaperlessClient(
+                config.paperless_url, config.paperless_token
+            ) as client:
+                plan = await build_correspondent_merge_plan(
+                    client, config, typesafe=True, review_store=cleanup_review_store
+                )
+                summary = await apply_correspondent_merge_plan(
+                    client,
+                    plan,
+                    review_store=cleanup_review_store,
+                    advance_manual_boundary=False,
+                )
+            if (
+                summary["skipped_nonempty_deletes"]
+                or summary["skipped_stale_documents"]
+            ):
+                raise RuntimeError("automatic cleanup became stale during apply")
+            write_merge_plan_atomically(
+                replace(
+                    plan,
+                    approved_clusters=[],
+                    orphan_correspondents=[],
+                    automatic_applied_clusters=plan.approved_clusters,
+                ),
+                args.cleanup_correspondents_weekly,
+            )
+            log.info("Weekly correspondent cleanup completed: %s", summary)
+        finally:
+            await queues.close()
+        return
 
     async with PaperlessClient(config.paperless_url, config.paperless_token) as client:
         log.info("Checking Paperless API connectivity...")
@@ -456,6 +498,11 @@ def main() -> None:
         metavar="PATH",
         help="Apply a previously generated correspondent cleanup plan JSON and exit",
     )
+    mode.add_argument(
+        "--cleanup-correspondents-weekly",
+        metavar="PATH",
+        help="Wait for queues, apply TypeSafe automatic cleanup, and publish review plan",
+    )
     parser.add_argument(
         "--split",
         choices=["test", "validation", "all", "code-test"],
@@ -484,6 +531,7 @@ def main() -> None:
         or args.eval
         or args.cleanup_correspondents_plan
         or args.cleanup_correspondents_apply
+        or args.cleanup_correspondents_weekly
         or args.cleanup_typesafe
     ):
         args.once = False  # watch mode is the default

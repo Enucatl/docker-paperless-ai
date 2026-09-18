@@ -178,6 +178,26 @@ both the copilot HTTP API and the long-running worker loop.
 PostgreSQL 18 uses the versioned data directory under `/var/lib/postgresql/18/docker`,
 so the database volume now mounts at `/var/lib/postgresql`.
 
+### Weekly correspondent consolidation
+
+The Docker-node timer runs every Tuesday at 01:10 UTC. It waits until OCR and
+metadata work, including delayed retries, has been empty for ten minutes, then
+uses TypeSafe to apply clear merges and delete empty correspondents. It times
+out after 70 minutes without replacing the existing review plan.
+
+Check its status and logs with:
+
+```bash
+systemctl status paperless-correspondent-cleanup.timer
+journalctl -u paperless-correspondent-cleanup.service -n 100
+```
+
+Run it manually with `scripts/correspondent-cleanup weekly`. Start the browser
+review of the latest weekly artifact with `scripts/correspondent-cleanup start`
+(or `review`); neither command regenerates it. Resolve every displayed pair,
+then type `APPLY` in the review UI. A newer weekly artifact replaces the old
+one, and decisions for the older plan are ignored.
+
 If you already have data in the old PostgreSQL 17 volume, migrate it with a dump
 and restore before starting the upgraded stack:
 

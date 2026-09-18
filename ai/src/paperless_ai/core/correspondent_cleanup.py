@@ -6,6 +6,8 @@ import json
 import logging
 import re
 import sys
+import tempfile
+import time
 import unicodedata
 from collections import defaultdict
 from dataclasses import asdict, dataclass, field
@@ -134,8 +136,11 @@ class CorrespondentMergePlan:
     rounds_used: int = 0
     max_rounds_reached: bool = False
     scanned_max_correspondent_id: int = 0
-    last_processed_correspondent_id: int | None = None
+    last_manually_reviewed_correspondent_id: int | None = None
     cleanup_mode: str = "full"
+    automatic_applied_clusters: list[PlannedCorrespondentCluster] = field(
+        default_factory=list
+    )
 
     def to_dict(self) -> dict[str, Any]:
         """Return JSON-compatible plan data."""
@@ -199,24 +204,39 @@ class CleanupReviewStore:
                 )"""
             )
 
-    async def get_last_processed_correspondent_id(self) -> int | None:
-        """Return the last fully applied correspondent snapshot boundary."""
+    async def get_last_manually_reviewed_correspondent_id(self) -> int | None:
+        """Return the last snapshot fully settled by manual review."""
         async with await self._connect() as connection:
             cursor = await connection.execute(
                 "SELECT value FROM paperless_ai_cleanup_state WHERE key = %s",
-                ("last_processed_correspondent_id",),
+                ("last_manually_reviewed_correspondent_id",),
             )
             row = await cursor.fetchone()
+            if row is None:
+                cursor = await connection.execute(
+                    "SELECT value FROM paperless_ai_cleanup_state WHERE key = %s",
+                    ("last_processed_correspondent_id",),
+                )
+                row = await cursor.fetchone()
         return int(row["value"]) if row else None
 
-    async def advance_watermark(self, correspondent_id: int) -> None:
-        """Record a successfully applied correspondent snapshot boundary."""
+    async def advance_manual_review_boundary(self, correspondent_id: int) -> None:
+        """Record a successfully settled manual-review snapshot boundary."""
         async with await self._connect() as connection:
             await connection.execute(
                 """INSERT INTO paperless_ai_cleanup_state(key, value) VALUES (%s, %s)
                 ON CONFLICT(key) DO UPDATE SET value = excluded.value""",
-                ("last_processed_correspondent_id", str(correspondent_id)),
+                ("last_manually_reviewed_correspondent_id", str(correspondent_id)),
             )
+
+    # Compatibility for integrations using the former state terminology.
+    async def get_last_processed_correspondent_id(self) -> int | None:
+        """Return the manually reviewed boundary using the legacy method name."""
+        return await self.get_last_manually_reviewed_correspondent_id()
+
+    async def advance_watermark(self, correspondent_id: int) -> None:
+        """Advance the manually reviewed boundary using the legacy method name."""
+        await self.advance_manual_review_boundary(correspondent_id)
 
     async def record_decision(
         self, plan_id: str, pair_key: str, decision: str, evidence: dict[str, Any]
@@ -443,11 +463,15 @@ async def build_correspondent_merge_plan(
         for x in correspondents
         if str(x.get("name") or "").strip()
     }
-    last_processed_id = (
-        await review_store.get_last_processed_correspondent_id()
-        if review_store
-        else None
-    )
+    if review_store:
+        boundary_reader = getattr(
+            review_store, "get_last_manually_reviewed_correspondent_id", None
+        )
+        if boundary_reader is None:
+            boundary_reader = review_store.get_last_processed_correspondent_id
+        last_processed_id = await boundary_reader()
+    else:
+        last_processed_id = None
     # This is the analysis snapshot boundary, including blank-name records. A
     # record created while applying must remain outside this boundary.
     scanned_max_id = max((int(x["id"]) for x in correspondents), default=0)
@@ -652,7 +676,7 @@ async def build_correspondent_merge_plan(
         and (last_processed_id is None or x.id > last_processed_id)
     ]
     return CorrespondentMergePlan(
-        3,
+        4,
         datetime.now(timezone.utc).isoformat(),
         config.paperless_url,
         len(records),
@@ -697,7 +721,7 @@ def actionable_review_pairs(
     """
     automatic_clusters = [
         {cluster.canonical_id, *cluster.merged_ids}
-        for cluster in plan.approved_clusters
+        for cluster in [*plan.approved_clusters, *plan.automatic_applied_clusters]
     ]
 
     def stale(side: list[int]) -> bool:
@@ -731,6 +755,50 @@ def write_merge_plan(plan: CorrespondentMergePlan, path: str) -> None:
         output = Path(path)
         output.parent.mkdir(parents=True, exist_ok=True)
         output.write_text(text, encoding="utf-8")
+
+
+def write_merge_plan_atomically(plan: CorrespondentMergePlan, path: str) -> None:
+    """Atomically replace a persisted review plan after successful processing."""
+    if path == "-":
+        write_merge_plan(plan, path)
+        return
+    output = Path(path)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.NamedTemporaryFile(
+        mode="w", encoding="utf-8", dir=output.parent, delete=False
+    ) as handle:
+        handle.write(json.dumps(plan.to_dict(), indent=2) + "\n")
+        temporary = Path(handle.name)
+    temporary.replace(output)
+
+
+async def wait_for_cleanup_queues(
+    queues: Any,
+    *,
+    empty_seconds: float = 600,
+    timeout_seconds: float = 4200,
+    poll_seconds: float = 10,
+    clock: Any = time.monotonic,
+    sleep: Any = asyncio.sleep,
+) -> None:
+    """Wait until OCR and metadata work has stayed empty for the full interval."""
+    started = clock()
+    empty_since: float | None = None
+    while True:
+        now = clock()
+        if now - started >= timeout_seconds:
+            raise TimeoutError("OCR and metadata queues did not settle before timeout")
+        work = await asyncio.gather(
+            queues.stage_work_count(queues.KEY_OCR),
+            queues.stage_work_count(queues.KEY_METADATA),
+        )
+        if any(work):
+            empty_since = None
+        elif empty_since is None:
+            empty_since = now
+        elif now - empty_since >= empty_seconds:
+            return
+        await sleep(min(poll_seconds, max(0, timeout_seconds - (clock() - started))))
 
 
 def write_cleanup_analysis(
@@ -817,7 +885,7 @@ def load_merge_plan(path: str) -> CorrespondentMergePlan:
         for x in data.get("approved_clusters", [])
     ]
     return CorrespondentMergePlan(
-        int(data["version"]),
+        max(4, int(data["version"])),
         str(data["generated_at"]),
         str(data["paperless_url"]),
         int(data["total_correspondents"]),
@@ -831,11 +899,39 @@ def load_merge_plan(path: str) -> CorrespondentMergePlan:
         bool(data.get("max_rounds_reached", False)),
         int(data.get("scanned_max_correspondent_id", 0)),
         (
-            int(data["last_processed_correspondent_id"])
-            if data.get("last_processed_correspondent_id") is not None
+            int(
+                data.get(
+                    "last_manually_reviewed_correspondent_id",
+                    data.get("last_processed_correspondent_id"),
+                )
+            )
+            if data.get(
+                "last_manually_reviewed_correspondent_id",
+                data.get("last_processed_correspondent_id"),
+            )
+            is not None
             else None
         ),
         str(data.get("cleanup_mode", "full")),
+        [
+            PlannedCorrespondentCluster(
+                **{
+                    **x,
+                    "members": x.get("members", []),
+                    "merge_history": [
+                        MergeHistory(**item) for item in x.get("merge_history", [])
+                    ],
+                    "rounds_used": x.get("rounds_used", 0),
+                    "planned_document_correspondents": {
+                        int(document_id): int(correspondent_id)
+                        for document_id, correspondent_id in x.get(
+                            "planned_document_correspondents", {}
+                        ).items()
+                    },
+                }
+            )
+            for x in data.get("automatic_applied_clusters", [])
+        ],
     )
 
 
@@ -845,6 +941,7 @@ async def apply_correspondent_merge_plan(
     *,
     dry_run: bool = False,
     review_store: CleanupReviewStore | None = None,
+    advance_manual_boundary: bool = True,
 ) -> dict[str, int]:
     """Apply approved plan operations; analysis itself never calls this."""
     moved = deleted = skipped_clusters = skipped_orphans = skipped_nonempty = (
@@ -940,7 +1037,12 @@ async def apply_correspondent_merge_plan(
             await delete_if_present(orphan.id)
         deleted += 1
     successful = not dry_run and not skipped_nonempty and not skipped_stale_documents
-    if successful and review_store and plan.scanned_max_correspondent_id:
+    if (
+        successful
+        and advance_manual_boundary
+        and review_store
+        and plan.scanned_max_correspondent_id
+    ):
         # Update only after every requested Paperless operation has completed.
         # Exceptions propagate before this point, preserving the old watermark.
         await review_store.advance_watermark(plan.scanned_max_correspondent_id)

@@ -175,7 +175,7 @@ async def index() -> str:
 let current; const status=document.querySelector('#status'), pairs=document.querySelector('#pairs'), output=document.querySelector('#plan');
 const refresh=async()=>{const r=await fetch('/api/plan');if(!r.ok){status.textContent=await r.text();return}current=await r.json();const recorded=new Map(current.review_decisions.map(x=>[x.pair_key,x.decision]));const count=recorded.size;status.textContent=`${current.cleanup_mode} cleanup · snapshot max ID ${current.scanned_max_correspondent_id} · ${current.review_candidates.length} actionable review pair(s) · ${count} decision(s) recorded`;pairs.replaceChildren();for(const p of current.review_candidates){const c=document.createElement('section');c.className='card';const key=[...p.left_members].sort().join(':')+'|'+[...p.right_members].sort().join(':');const selected=recorded.get(key);c.innerHTML=`<strong>${p.left_name}</strong> (${p.left_members.join(', ')}) ↔ <strong>${p.right_name}</strong> (${p.right_members.join(', ')})<p class=muted>${p.reason||''} · candidate score ${p.candidate_score??'—'}</p>`;for(const choice of ['approve','reject']){const b=document.createElement('button');b.textContent=selected===choice?(choice==='approve'?'Approved':'Rejected'):choice;b.className=selected===choice?(choice==='approve'?'approved':'rejected'):'';b.onclick=async()=>{const response=await fetch('/api/decisions',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({pair_key:key,decision:choice})});if(!response.ok){alert((await response.json()).detail||'Unable to record decision');return}status.textContent=`Decision recorded: ${choice}`;await showPlan();await refresh()};c.append(b)}pairs.append(c)};await showPlan()};
 const showPlan=async()=>{const r=await fetch('/api/reviewed-plan');output.textContent=r.ok?JSON.stringify(await r.json(),null,2):await r.text()};
-document.querySelector('#apply').onclick=async()=>{const r=await fetch('/api/apply',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({confirmation:document.querySelector('#confirmation').value})});const text=await r.text();let body;try{body=JSON.parse(text)}catch{body={detail:text}}if(!r.ok){status.textContent=body.detail||'Apply failed';alert(body.detail||text);return}status.textContent=`Apply completed: ${body.reassigned_documents} documents reassigned, ${body.deleted_correspondents} correspondents deleted · watermark ${body.watermark_id}`;output.textContent=JSON.stringify(body,null,2);document.querySelector('#apply').disabled=true};refresh();
+document.querySelector('#apply').onclick=async()=>{const r=await fetch('/api/apply',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({confirmation:document.querySelector('#confirmation').value})});const text=await r.text();let body;try{body=JSON.parse(text)}catch{body={detail:text}}if(!r.ok){status.textContent=body.detail||'Apply failed';alert(body.detail||text);return}status.textContent=`Apply completed: ${body.reassigned_documents} documents reassigned, ${body.deleted_correspondents} correspondents deleted · manual boundary ${body.manual_review_boundary_id}`;output.textContent=JSON.stringify(body,null,2);document.querySelector('#apply').disabled=true};refresh();
 </script>"""
 
 
@@ -187,12 +187,13 @@ async def plan() -> dict[str, Any]:
     data["plan_id"] = _plan_id(item)
     data["review_decisions"] = await store.decisions_for_plan(_plan_id(item))
     data[
-        "last_processed_correspondent_id"
-    ] = await store.get_last_processed_correspondent_id()
+        "last_manually_reviewed_correspondent_id"
+    ] = await store.get_last_manually_reviewed_correspondent_id()
     data["apply_complete"] = bool(
         item.scanned_max_correspondent_id
-        and data["last_processed_correspondent_id"] is not None
-        and data["last_processed_correspondent_id"] >= item.scanned_max_correspondent_id
+        and data["last_manually_reviewed_correspondent_id"] is not None
+        and data["last_manually_reviewed_correspondent_id"]
+        >= item.scanned_max_correspondent_id
     )
     data["review_candidates"] = [
         asdict(candidate) for candidate in actionable_review_pairs(item)
@@ -235,7 +236,7 @@ async def decide(request: DecisionRequest) -> dict[str, Any]:
 async def reviewed_plan() -> dict[str, Any]:
     plan = _load_plan()
     store = await CleanupReviewStore.from_config(AgentConfig.from_env())
-    watermark = await store.get_last_processed_correspondent_id()
+    watermark = await store.get_last_manually_reviewed_correspondent_id()
     if (
         plan.scanned_max_correspondent_id
         and watermark is not None
@@ -243,7 +244,7 @@ async def reviewed_plan() -> dict[str, Any]:
     ):
         data = plan.to_dict()
         data["apply_complete"] = True
-        data["last_processed_correspondent_id"] = watermark
+        data["last_manually_reviewed_correspondent_id"] = watermark
         return data
     return (await _reviewed_plan(plan, store)).to_dict()
 
@@ -257,7 +258,7 @@ async def apply(
     plan = _load_plan()
     config = AgentConfig.from_env()
     store = await CleanupReviewStore.from_config(config)
-    watermark = await store.get_last_processed_correspondent_id()
+    watermark = await store.get_last_manually_reviewed_correspondent_id()
     if (
         plan.scanned_max_correspondent_id
         and watermark is not None
@@ -283,6 +284,8 @@ async def apply(
         result = await apply_correspondent_merge_plan(
             client, reviewed, review_store=store
         )
-    result["watermark_id"] = await store.get_last_processed_correspondent_id() or 0
+    result["manual_review_boundary_id"] = (
+        await store.get_last_manually_reviewed_correspondent_id() or 0
+    )
     background_tasks.add_task(_shutdown_after_apply)
     return result

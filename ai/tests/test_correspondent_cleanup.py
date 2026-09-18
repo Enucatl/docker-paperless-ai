@@ -19,6 +19,7 @@ from paperless_ai.core.correspondent_cleanup import (
     load_merge_plan,
     propose_canonical_name,
     select_disjoint_merges,
+    wait_for_cleanup_queues,
     write_merge_plan,
 )
 from paperless_ai.correspondent import CorrespondentCluster, CorrespondentResolver
@@ -289,6 +290,9 @@ def test_merge_plan_round_trips_json(tmp_path: Path):
     reloaded = json.loads(path.read_text(encoding="utf-8"))
 
     assert reloaded["approved_clusters"][0]["canonical_name"] == "ACME Corporation"
+    assert reloaded["version"] == 4
+    assert "last_manually_reviewed_correspondent_id" in reloaded
+    assert "automatic_applied_clusters" in reloaded
 
 
 def test_merge_plan_uses_stdio_for_dash(
@@ -582,6 +586,104 @@ async def test_failed_or_partial_apply_does_not_advance_watermark(tmp_path: Path
     await apply_correspondent_merge_plan(client, plan, review_store=store)
 
     assert await store.get_last_processed_correspondent_id() == 100
+
+
+@pytest.mark.asyncio
+async def test_automatic_apply_does_not_advance_manual_boundary(tmp_path: Path):
+    store = _MemoryReviewStore()
+    client = _FakeClient(correspondents=[], documents=[], counts={1: 0})
+    plan = load_merge_plan(
+        str(
+            _write_plan(
+                tmp_path,
+                {
+                    "orphan_correspondents": [
+                        {
+                            "id": 1,
+                            "name": "Automatic orphan",
+                            "document_count": 0,
+                            "status": "approved",
+                            "reason": "no_documents_assigned",
+                        }
+                    ],
+                    "scanned_max_correspondent_id": 887,
+                },
+            )
+        )
+    )
+
+    await apply_correspondent_merge_plan(
+        client, plan, review_store=store, advance_manual_boundary=False
+    )
+
+    assert client.deleted == [1]
+    assert await store.get_last_processed_correspondent_id() is None
+
+
+@pytest.mark.asyncio
+async def test_queue_wait_resets_empty_period_when_work_reappears():
+    class Clock:
+        now = 0
+
+        def __call__(self):
+            return self.now
+
+        async def sleep(self, _seconds):
+            self.now += 1
+
+    class Queues:
+        KEY_OCR = "ocr"
+        KEY_METADATA = "metadata"
+
+        def __init__(self):
+            self.samples = iter([0, 1, 0, 0, 0])
+            self.current = 0
+
+        async def stage_work_count(self, stage):
+            if stage == self.KEY_OCR:
+                self.current = next(self.samples)
+            return self.current if stage == self.KEY_OCR else 0
+
+    clock = Clock()
+    await wait_for_cleanup_queues(
+        Queues(),
+        empty_seconds=2,
+        timeout_seconds=10,
+        poll_seconds=1,
+        clock=clock,
+        sleep=clock.sleep,
+    )
+    assert clock.now == 4
+
+
+@pytest.mark.asyncio
+async def test_queue_wait_timeout_does_not_settle():
+    class Clock:
+        now = 0
+
+        def __call__(self):
+            return self.now
+
+        async def sleep(self, _seconds):
+            self.now += 1
+
+    class Queues:
+        KEY_OCR = "ocr"
+        KEY_METADATA = "metadata"
+
+        async def stage_work_count(self, _stage):
+            return 1
+
+    clock = Clock()
+    with pytest.raises(TimeoutError):
+        await wait_for_cleanup_queues(
+            Queues(),
+            empty_seconds=2,
+            timeout_seconds=3,
+            poll_seconds=1,
+            clock=clock,
+            sleep=clock.sleep,
+        )
 
 
 @pytest.mark.asyncio

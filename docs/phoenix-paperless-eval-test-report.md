@@ -178,9 +178,11 @@ Sources: [DeepSeek's V4.1 Flash announcement](https://www.deepseek.com/en/news/d
 and [DeepSeek V4.1 Flash on
 OpenRouter](https://openrouter.ai/deepseek/deepseek-v4.1-flash-20260910/).
 
-These are hypotheses, not conclusions about the models in general. The most
-useful follow-up is a small controlled ablation: sweep DeepSeek reasoning
-effort, pin providers, remove the unscored `summary` field, record the exact
-request and returned usage, and repeat each model several times with paired
-bootstrap intervals. A small manually labeled subset would also distinguish
-model behavior from possible bias in the Jev evaluator.
+These are hypotheses, not conclusions about the models in general.
+
+## Production decision
+
+For this specific production workload, we will move metadata extraction to
+Mercury 2.5. It combines near-top quality with the lowest latency and a low
+estimated metadata cost, while appearing particularly well matched to compact,
+schema-constrained document extraction.

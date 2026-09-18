@@ -127,7 +127,7 @@ def _field_instructions_from_schema() -> str:
     return "\n".join(lines)
 
 
-def _build_metadata_context(
+def build_metadata_document_context(
     text: str,
     *,
     max_chars: int = 6000,
@@ -135,7 +135,12 @@ def _build_metadata_context(
     end_chars: int = 2000,
     middle_windows: int = 3,
 ) -> str:
-    """Build a bounded metadata context with start, middle, and end coverage."""
+    """Build the exact bounded context used by metadata extraction.
+
+    The returned value is also the only document evidence supplied to Jev by
+    the evaluation runner. Keep this helper's clipping and sampling semantics
+    aligned with production metadata extraction.
+    """
     if len(text) <= max_chars:
         return text
 
@@ -542,12 +547,14 @@ async def _extract_metadata(
     full_text = "\n\n".join(chunks)
 
     # Use the strategy to extract metadata
-    extracted = await strategy.extract(_build_metadata_context(full_text), config)
+    metadata_context = build_metadata_document_context(full_text)
+    extracted = await strategy.extract(metadata_context, config)
 
     # Store final metadata back into state for the agent to read after graph completion
     return {
         "_extracted_metadata": extracted.model_dump(mode="json"),
         "_full_text": full_text,
+        "_metadata_context": metadata_context,
     }
 
 
@@ -686,6 +693,9 @@ class SmartDocumentAgent(BaseDocumentAgent):
         full_text = final_state.get(
             "_full_text", "\n\n".join(final_state.get("extracted_text_chunks", []))
         )
+        metadata_context = final_state.get(
+            "_metadata_context", build_metadata_document_context(full_text)
+        )
 
         log.info(
             "Smart agent: done — title=%r date=%r correspondent=%r",
@@ -704,6 +714,7 @@ class SmartDocumentAgent(BaseDocumentAgent):
 
         return AgentResult(
             metadata=metadata,
+            metadata_context=metadata_context,
             elapsed_s=round(time.time() - t_start, 1),
             pages=final_state.get("total_pages", 0),
             chars=len(full_text),

@@ -21,7 +21,7 @@ from paperless_ai.agents.smart_graph_agent import (
     NuExtractStrategy,
     StructuredOutputStrategy,
     _ExtractedMetadata,
-    _build_metadata_context,
+    build_metadata_document_context,
     _extract_metadata,
 )
 from paperless_ai.core.config import AgentConfig
@@ -67,7 +67,7 @@ def mock_config():
 def test_build_metadata_context_keeps_start_middle_and_end() -> None:
     text = "A" * 3000 + "B" * 3000 + "C" * 3000 + "D" * 3000 + "E" * 3000
 
-    result = _build_metadata_context(
+    result = build_metadata_document_context(
         text,
         max_chars=1000,
         start_chars=200,
@@ -408,3 +408,20 @@ async def test_extract_metadata_state_serializes_date_as_string(mock_config) -> 
     result = await _extract_metadata(state, mock_config, FixedMetadataStrategy())
 
     assert result["_extracted_metadata"]["date"] == "2024-01-15"
+    assert result["_metadata_context"] == "Sample OCR text"
+
+
+@pytest.mark.asyncio
+async def test_metadata_context_is_the_strategy_input(mock_config) -> None:
+    """The context returned for Jev is exactly the extraction strategy input."""
+    seen: list[str] = []
+
+    class CapturingStrategy(BaseExtractionStrategy):
+        async def extract(self, text: str, config: AgentConfig) -> _ExtractedMetadata:
+            seen.append(text)
+            return _ExtractedMetadata()
+
+    state = {"extracted_text_chunks": ["A" * 7000]}
+    result = await _extract_metadata(state, mock_config, CapturingStrategy())
+
+    assert seen == [result["_metadata_context"]]

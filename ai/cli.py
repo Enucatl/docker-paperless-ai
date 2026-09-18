@@ -5,7 +5,7 @@ CLI entrypoint for the AI post-processing service.
 Modes:
     --once       Process all pending documents once (all three stages) and exit
     --watch      Poll continuously with three concurrent workers (default via Docker)
-    --eval       Run offline evaluation against eval/golden_dataset.json
+    --eval       Run offline evaluation against the input-only eval corpus
     --dry-run    Log what would happen without modifying any documents
     --purge-notes  Delete all AI-generated notes from previous runs
     --cleanup-correspondents-plan PATH   Write a reviewable correspondent merge plan
@@ -201,15 +201,9 @@ async def main_async(args: argparse.Namespace) -> None:
 
         if args.cleanup_correspondents_plan:
             cleanup_review_store = await CleanupReviewStore.from_config(config)
-            if args.cleanup_judge_borderline:
-                log.info(
-                    "Correspondent cleanup: LLM judge enabled (%s)",
-                    config.llm_judge_model,
-                )
             plan = await build_correspondent_merge_plan(
                 client,
                 config,
-                judge_borderline=args.cleanup_judge_borderline,
                 typesafe=args.cleanup_typesafe,
                 review_store=cleanup_review_store,
             )
@@ -486,7 +480,7 @@ def main() -> None:
     mode.add_argument(
         "--eval",
         action="store_true",
-        help="Run offline evaluation against eval/golden_dataset.json",
+        help="Run offline evaluation against the input-only eval corpus",
     )
     mode.add_argument(
         "--cleanup-correspondents-plan",
@@ -518,11 +512,6 @@ def main() -> None:
         "--purge-notes",
         action="store_true",
         help="Delete all AI-generated notes from previous runs and exit",
-    )
-    parser.add_argument(
-        "--cleanup-judge-borderline",
-        action="store_true",
-        help="Use the configured LLM judge for borderline correspondent merge candidates",
     )
     args = parser.parse_args()
 

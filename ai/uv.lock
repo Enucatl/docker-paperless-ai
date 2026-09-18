@@ -1347,6 +1347,7 @@ eval = [
     { name = "datasets" },
     { name = "nest-asyncio" },
     { name = "pandas" },
+    { name = "typesafe-sdk" },
 ]
 test = [
     { name = "paperless-listener" },
@@ -1393,6 +1394,7 @@ requires-dist = [
     { name = "tenacity", specifier = ">=8.0" },
     { name = "torch", index = "https://download.pytorch.org/whl/cpu" },
     { name = "typesafe-sdk", marker = "extra == 'cleanup'", specifier = ">=0.5.7" },
+    { name = "typesafe-sdk", marker = "extra == 'eval'", specifier = ">=0.5.7" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.30" },
 ]
 provides-extras = ["eval", "test", "cleanup"]

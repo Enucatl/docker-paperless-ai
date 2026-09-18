@@ -35,3 +35,4 @@ class AgentState(TypedDict):
     # Written by extract_metadata node; read back in SmartDocumentAgent.process()
     _extracted_metadata: dict
     _full_text: str
+    _metadata_context: str

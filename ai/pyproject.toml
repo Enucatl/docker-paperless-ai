@@ -36,6 +36,7 @@ eval = [
     "datasets",
     "nest_asyncio",
     "pandas",
+    "typesafe-sdk>=0.5.7",
 ]
 test = [
     "paperless-listener",

@@ -470,11 +470,11 @@ async def run_metadata_batch(
         async with sem:
             try:
                 from paperless_ai.agents.smart_graph_agent import (
-                    _build_metadata_context,
+                    build_metadata_document_context,
                 )
 
                 extracted = await strategy.extract(
-                    _build_metadata_context(content), config
+                    build_metadata_document_context(content), config
                 )
             except Exception as e:
                 log.error("Document %d: metadata extraction failed: %s", doc_id, e)

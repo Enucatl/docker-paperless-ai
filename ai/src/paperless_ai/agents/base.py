@@ -25,6 +25,7 @@ class AgentResult(BaseModel):
     """Result returned by any document agent."""
 
     metadata: DocumentMetadata
+    metadata_context: str = ""
     elapsed_s: float = 0.0
     pages: int = 0
     chars: int = 0

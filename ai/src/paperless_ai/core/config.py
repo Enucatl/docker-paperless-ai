@@ -7,10 +7,10 @@ and exposes a validated AgentConfig Pydantic model.
 
 import os
 from importlib.resources import files as _pkg_files
-from typing import Any, Dict, List, Literal, Optional
+from typing import Any, Dict, Literal, Optional
 
 from paperless_common.secrets import read_secret
-from pydantic import AliasChoices, BaseModel, Field, field_validator
+from pydantic import AliasChoices, Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -34,18 +34,6 @@ def _inject_secrets() -> None:
 def _load_prompt(name: str) -> str:
     """Load a prompt file bundled as package data."""
     return _pkg_files("paperless_ai").joinpath(name).read_text(encoding="utf-8").strip()
-
-
-class JuryMemberConfig(BaseModel):
-    """Configuration for a single judge in the LLM-as-a-jury panel."""
-
-    model: str
-    endpoint: Optional[str] = Field(
-        default=None,
-        validation_alias="INFERENCE_EVALUATION_ENDPOINT",
-    )
-    reasoning_effort: Optional[str] = None
-    temperature: Optional[float] = None
 
 
 class AgentConfig(BaseSettings):
@@ -164,8 +152,7 @@ class AgentConfig(BaseSettings):
         default="paperless", validation_alias="CORRESPONDENT_CLEANUP_DB_USER"
     )
     correspondent_cleanup_db_password: str = Field(
-        default="",
-        validation_alias="CORRESPONDENT_CLEANUP_DB_PASSWORD"
+        default="", validation_alias="CORRESPONDENT_CLEANUP_DB_PASSWORD"
     )
     typesafe_api_key: str | None = Field(
         default=None, validation_alias="TYPESAFE_API_KEY"
@@ -296,37 +283,6 @@ class AgentConfig(BaseSettings):
     # Dotted import path to the agent class to use in eval experiments.
     agent_class: str = "paperless_ai.agents.smart_graph_agent.SmartDocumentAgent"
 
-    # Model used as LLM judge for title quality evaluation.
-    # Should be a strong, fixed model independent of the experiment being
-    # evaluated to avoid self-grading bias.
-    llm_judge_model: str = Field(
-        default="gemini-2.5-flash",
-        validation_alias=AliasChoices("INFERENCE_EVALUATION_MODEL"),
-    )
-    evaluation_endpoint: Optional[str] = Field(
-        default=None,
-        validation_alias=AliasChoices("INFERENCE_EVALUATION_ENDPOINT"),
-    )
-    evaluation_temperature: Optional[float] = Field(
-        default=None, alias="INFERENCE_EVALUATION_TEMPERATURE"
-    )
-    evaluation_reasoning_effort: Optional[str] = Field(
-        default=None, alias="INFERENCE_EVALUATION_REASONING_EFFORT"
-    )
-    evaluation_max_tokens: Optional[int] = Field(
-        default=None, alias="INFERENCE_EVALUATION_MAX_TOKENS"
-    )
-    evaluation_extra_kwargs: Optional[Dict[str, Any]] = Field(
-        default=None, alias="INFERENCE_EVALUATION_EXTRA_KWARGS"
-    )
-
-    # Optional jury of LLM judges for title quality evaluation.
-    # When set, each member votes independently and the final score is
-    # determined by majority vote, which improves alignment with human
-    # judgment compared to a single judge.
-    # If None, falls back to a single judge using llm_judge_model.
-    jury: Optional[List[JuryMemberConfig]] = None
-
     # Extra kwargs to forward to OpenAI-compatible inference for OCR calls.
     # Supports any parameter the downstream API accepts (e.g., top_p, top_k,
     # presence_penalty, or vLLM-specific fields via extra_body).
@@ -411,7 +367,6 @@ class AgentConfig(BaseSettings):
         "chat_model",
         "embedding_model",
         "situation_model",
-        "llm_judge_model",
         mode="before",
     )
     @classmethod

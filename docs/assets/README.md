@@ -45,8 +45,8 @@ good second observability example after the simpler demo trace.
 ### `eval-comparison.png`
 
 Phoenix experiment comparison for the OCR and metadata model matrix. The useful
-story is that OCR and metadata model choices were evaluated against a golden
-dataset instead of picked by intuition.
+story is that OCR and metadata model choices were evaluated against a fixed
+document corpus instead of picked by intuition.
 
 ### `full-metadata-trace.png`
 

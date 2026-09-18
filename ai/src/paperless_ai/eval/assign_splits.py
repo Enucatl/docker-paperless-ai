@@ -1,16 +1,12 @@
 """
-Assign deterministic train/validation split to golden dataset entries.
+Assign deterministic validation/test splits to evaluation corpus entries.
 
-This script runs once after ground truth review is complete. It assigns
+This script assigns
 a "split" field to each entry:
   - "validation": held out for hyperparameter research (10 entries)
   - "test": used for final evaluation (remaining entries)
 
-The validation set is chosen for representativeness:
-  - At least 1 manual entry (non-IDL)
-  - At least 2 entries with both-null fields
-  - At least 2 entries with null-date-only
-  - Remaining slots filled with diverse complete entries
+The validation keys are chosen to cover varied document types.
 
 Usage:
     python assign_splits.py
@@ -19,29 +15,29 @@ Usage:
 import json
 from pathlib import Path
 
-GOLDEN_DATASET_PATH = Path(__file__).parent / "golden_dataset.json"
+EVAL_DATASET_PATH = Path(__file__).parent / "eval_dataset.json"
 
 # Validation set: 10 entries chosen for diversity
 VALIDATION_KEYS = {
     "fkff0016",
-    "fklm0254",  # Both-null (tests null handling)
-    "gqhb0141",  # Both-null, second example
-    "hlhj0239",  # Null-date-only (pharma, opioid)
-    "fkhg0105",  # Null-date-only (Lorillard)
-    "grmj0172",  # Complete, non-tobacco (GMR Marketing)
-    "hgcb0104",  # Complete, media/newspaper (USA TODAY)
-    "jmyg0244",  # Complete, recent date, pharma (Covidien)
-    "frvb0205",  # Complete, old date (1976), UK company (BAT)
-    "jjcj0064",  # Complete, individual person (Margaret Yates)
+    "fklm0254",
+    "gqhb0141",
+    "hlhj0239",
+    "fkhg0105",
+    "grmj0172",
+    "hgcb0104",
+    "jmyg0244",
+    "frvb0205",
+    "jjcj0064",
 }
 
 
 def main():
-    if not GOLDEN_DATASET_PATH.exists():
-        print(f"Error: Golden dataset not found at {GOLDEN_DATASET_PATH}")
+    if not EVAL_DATASET_PATH.exists():
+        print(f"Error: Evaluation corpus not found at {EVAL_DATASET_PATH}")
         return 1
 
-    with open(GOLDEN_DATASET_PATH, "r") as f:
+    with open(EVAL_DATASET_PATH, "r") as f:
         data = json.load(f)
 
     entries = data.get("entries", [])
@@ -62,7 +58,7 @@ def main():
 
     data["entries"] = entries
 
-    with open(GOLDEN_DATASET_PATH, "w") as f:
+    with open(EVAL_DATASET_PATH, "w") as f:
         json.dump(data, f, indent=2)
 
     # Summary
@@ -72,7 +68,7 @@ def main():
     print(f"\nAssigned splits to {len(entries)} entries:")
     print(f"  Validation: {validation_count}")
     print(f"  Test: {test_count}")
-    print(f"\nSaved to {GOLDEN_DATASET_PATH}")
+    print(f"\nSaved to {EVAL_DATASET_PATH}")
 
     # Verify the expected keys were found
     found_keys = {

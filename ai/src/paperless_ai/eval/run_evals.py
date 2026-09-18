@@ -1,126 +1,152 @@
-"""
-Offline evaluation runner for document intelligence agents.
-
-Uses the Phoenix datasets & experiments API:
-  1. Uploads the filtered golden dataset to Phoenix once per eval run.
-  2. For each experiment defined in experiments.yaml, instantiates the
-     configured agent and calls run_experiment() — Phoenix records
-     per-example outputs and evaluator scores for side-by-side comparison.
-
-Usage:
-    python cli.py --eval [--split test|validation|all]
-"""
+"""Run metadata extraction experiments and Jev semantic evaluation."""
 
 import importlib
-import asyncio
 import json
 import logging
 import sys
-import yaml
-from collections import Counter
-from concurrent.futures import ThreadPoolExecutor
-from types import SimpleNamespace
 from pathlib import Path
+from typing import Any
+
+import yaml
+import pandas as pd
+
 from paperless_ai.core.config import AgentConfig
 from paperless_common.telemetry import setup_telemetry
-from paperless_ai.inference import complete
 
 log = logging.getLogger(__name__)
 
-GOLDEN_DATASET_PATH = Path(__file__).parent / "golden_dataset.json"
+EVAL_DATASET_PATH = Path(__file__).parent / "eval_dataset.json"
 EXPERIMENTS_YAML_PATH = Path(__file__).parent / "experiments.yaml"
-PHOENIX_DATASET_BASE_NAME = "paperless-golden"
+PHOENIX_DATASET_BASE_NAME = "paperless-eval"
+
+
+def _jev_score(output: Any, field: str) -> float:
+    """Project one already-computed Jev score for Phoenix."""
+    try:
+        value = float((output or {}).get("_jev", {}).get(field, 0.0))
+    except AttributeError, TypeError, ValueError:
+        return 0.0
+    return max(0.0, min(1.0, value))
+
+
+def _phoenix_score(output: Any, field: str) -> dict[str, float]:
+    """Return an explicit Phoenix numeric score payload."""
+    return {"score": _jev_score(output, field)}
+
+
+def jev_date(output: Any) -> dict[str, float]:
+    """Project the Jev date probability as a Phoenix score."""
+    return _phoenix_score(output, "date")
+
+
+def jev_correspondent(output: Any) -> dict[str, float]:
+    """Project the Jev correspondent probability as a Phoenix score."""
+    return _phoenix_score(output, "correspondent")
+
+
+def jev_title(output: Any) -> dict[str, float]:
+    """Project the Jev title probability as a Phoenix score."""
+    return _phoenix_score(output, "title")
+
+
+def jev_metadata(output: Any) -> dict[str, float]:
+    """Project the derived Jev arithmetic mean as a Phoenix score."""
+    return _phoenix_score(output, "metadata")
+
+
+def _build_agent(exp_config: AgentConfig):
+    """Instantiate the configured extraction agent."""
+    module_path, class_name = exp_config.agent_class.rsplit(".", 1)
+    module = importlib.import_module(module_path)
+    agent_class = getattr(module, class_name)
+
+    if class_name == "SmartDocumentAgent":
+        from paperless_ai.agents.smart_graph_agent import _select_extraction_strategy
+
+        strategy = _select_extraction_strategy(exp_config)
+        log.info(
+            "Experiment %s: using %s",
+            exp_config.name,
+            strategy.__class__.__name__,
+        )
+        return agent_class(exp_config, extraction_strategy=strategy)
+
+    return agent_class(exp_config)
+
+
+def _load_entries(path: Path, split: str) -> list[dict[str, Any]]:
+    """Load input-only corpus entries for one requested split."""
+    data = json.loads(path.read_text(encoding="utf-8"))
+    entries = data.get("entries", [])
+    if split == "code-test":
+        entries = [entry for entry in entries if "code-test" in entry.get("tags", [])]
+    elif split != "all":
+        entries = [entry for entry in entries if entry.get("split", "test") == split]
+    return [{"file_path": entry["file_path"]} for entry in entries]
 
 
 async def run_scientific_evaluation(config: AgentConfig, split: str = "test") -> None:
-    """
-    Run a parameter sweep across configurations defined in experiments.yaml.
+    """Run all configured extraction experiments against the eval corpus.
 
     Args:
-        config: Base agent configuration (env defaults, overlaid by YAML).
-        split: Dataset split to evaluate ("test", "validation", or "all").
+        config: Base configuration, including the fixed TypeSafe settings.
+        split: Corpus split to evaluate (``test``, ``validation``, ``all``, or
+            ``code-test``).
     """
     try:
-        import pandas as pd
         from phoenix.client import AsyncClient
-        from phoenix.evals.metrics import exact_match
-    except ImportError as e:
-        log.error("Missing dependencies for evaluation: %s", e)
+        from typesafe_sdk import TypeSafeClient
+        from paperless_ai.eval.jev_evaluator import JevMetadataEvaluator
+    except ImportError as error:
+        log.error("Missing dependencies for evaluation: %s", error)
         sys.exit(1)
 
-    if not GOLDEN_DATASET_PATH.exists():
-        log.error("Golden dataset not found: %s", GOLDEN_DATASET_PATH)
+    if not EVAL_DATASET_PATH.exists():
+        log.error("Evaluation corpus not found: %s", EVAL_DATASET_PATH)
         sys.exit(1)
-
     if not EXPERIMENTS_YAML_PATH.exists():
         log.error("Experiments YAML not found: %s", EXPERIMENTS_YAML_PATH)
         sys.exit(1)
 
-    # Load and filter golden dataset entries by split or tag.
-    # "code-test" selects entries tagged ["code-test"] regardless of their split,
-    # for quick single-file pipeline verification without running the full dataset.
-    dataset_json = json.loads(GOLDEN_DATASET_PATH.read_text(encoding="utf-8"))
-    entries = dataset_json.get("entries", [])
-    if split == "code-test":
-        entries = [e for e in entries if "code-test" in e.get("tags", [])]
-    elif split != "all":
-        entries = [e for e in entries if e.get("split", "test") == split]
+    try:
+        entries = _load_entries(EVAL_DATASET_PATH, split)
+    except Exception as error:
+        log.error("Failed to load evaluation corpus: %s", error)
+        sys.exit(1)
 
-    # Verify files exist
-    log.info("Checking %d entries for local files...", len(entries))
     existing_entries = []
-    for e in entries:
-        if Path(e["file_path"]).exists():
-            existing_entries.append(e)
+    for entry in entries:
+        if Path(entry["file_path"]).exists():
+            existing_entries.append(entry)
         else:
-            log.debug("File not found: %s", e["file_path"])
+            log.debug("File not found: %s", entry.get("file_path"))
 
-    entries = existing_entries
-    if not entries:
+    if not existing_entries:
         log.warning("No local files found for split '%s'", split)
         return
 
+    phoenix_endpoint = "http://phoenix:6006"
     phoenix_dataset_name = f"{PHOENIX_DATASET_BASE_NAME}-{split}"
-
-    # Upload golden dataset to Phoenix. Phoenix stores it as a versioned
-    # dataset; experiments reference it so results stay linked to the exact
-    # ground truth used.
-    df = pd.DataFrame(
-        [
-            {
-                "file_path": e["file_path"],
-                "expected_correspondent": e.get("expected_correspondent"),
-                "expected_date": e.get("expected_date"),
-                "expected_title_contains": e.get("expected_title_contains"),
-                "_verified_null_correspondent": e.get(
-                    "_verified_null_correspondent", False
-                ),
-                "_verified_null_date": e.get("_verified_null_date", False),
-            }
-            for e in entries
-        ]
+    dataframe = pd.DataFrame(
+        [{"file_path": entry["file_path"]} for entry in existing_entries]
     )
 
-    phoenix_endpoint = "http://phoenix:6006"
     try:
         phoenix_client = AsyncClient(base_url=phoenix_endpoint)
         try:
             phoenix_dataset = await phoenix_client.datasets.create_dataset(
-                dataframe=df,
+                dataframe=dataframe,
                 input_keys=["file_path"],
-                output_keys=[
-                    "expected_correspondent",
-                    "expected_date",
-                    "expected_title_contains",
-                    "_verified_null_correspondent",
-                    "_verified_null_date",
-                ],
                 name=phoenix_dataset_name,
+                dataset_description=(
+                    "Input-only document corpus; Jev scores are computed once "
+                    "inside each experiment task."
+                ),
             )
             log.info(
-                "Created Phoenix dataset '%s' with %d examples",
+                "Created Phoenix input dataset '%s' with %d examples",
                 phoenix_dataset_name,
-                len(df),
+                len(dataframe),
             )
         except Exception as create_error:
             try:
@@ -130,32 +156,24 @@ async def run_scientific_evaluation(config: AgentConfig, split: str = "test") ->
                 log.info("Using existing Phoenix dataset '%s'", phoenix_dataset_name)
             except Exception:
                 raise create_error
-
-        # Phoenix is reachable — enable OTel so OpenAI-compatible inference spans carry token/cost data.
         setup_telemetry()
-    except Exception as e:
+    except Exception as error:
         log.error(
             "Cannot reach Phoenix at %s: %s\n"
             "Start it first with: docker compose up -d phoenix",
             phoenix_endpoint,
-            e,
+            error,
         )
         sys.exit(1)
 
-    # Load experiment configs, overlaying YAML fields on top of env defaults
     try:
         yaml_data = yaml.safe_load(EXPERIMENTS_YAML_PATH.read_text(encoding="utf-8"))
         experiments_raw = yaml_data.get("experiments", [])
-    except Exception as e:
-        log.error("Failed to parse experiments.yaml: %s", e)
+    except Exception as error:
+        log.error("Failed to parse experiments.yaml: %s", error)
         sys.exit(1)
 
-    # Model/endpoint fields must be self-contained in the YAML — do not inherit
-    # from the env config (which reflects the production watch-mode setup and
-    # could route experiment calls to the wrong model or API base).
-    # Operational fields (retries, concurrency, poll interval, etc.) are kept
-    # from env so experiments benefit from the same runtime tuning.
-    _reset_for_experiments = {
+    reset_for_experiments = {
         "name": None,
         "agent_class": "paperless_ai.agents.smart_graph_agent.SmartDocumentAgent",
         "ocr_model": "gemini/gemini-2.5-flash",
@@ -170,274 +188,139 @@ async def run_scientific_evaluation(config: AgentConfig, split: str = "test") ->
         "ocr_temperature": None,
         "metadata_temperature": None,
         "ocr_max_image_dimension": None,
-        "llm_judge_model": "gemini/gemini-3.5-flash-lite",
-        "jury": None,
+    }
+    fixed_jev_settings = {
+        "typesafe_api_key": config.typesafe_api_key,
+        "typesafe_model": config.typesafe_model,
+        "typesafe_endpoint": config.typesafe_endpoint,
     }
 
     experiments = []
-    for exp_dict in experiments_raw:
-        base_dict = config.model_dump()
-        base_dict.update(_reset_for_experiments)
-        base_dict.update(exp_dict)
-        experiments.append(AgentConfig(**base_dict))
+    for experiment in experiments_raw:
+        experiment_config = config.model_dump()
+        experiment_config.update(reset_for_experiments)
+        experiment_config.update(experiment)
+        experiment_config.update(fixed_jev_settings)
+        experiments.append(AgentConfig(**experiment_config))
+
     log.info(
-        "Loaded %d eval experiments: %s",
+        "Loaded %d eval experiments: %s; Jev model: %s",
         len(experiments),
         ", ".join(exp.name or "<unnamed>" for exp in experiments),
+        config.typesafe_model,
     )
 
-    # --- Evaluators ---
-    # Each function receives (output, expected) where:
-    #   output   — dict returned by the task function (agent extraction result)
-    #   expected — dict of output_keys from the Phoenix dataset (ground truth)
-    # Return value is a float in [0, 1] (or bool, which Phoenix coerces).
-
-    from paperless_ai.eval.metrics import score_correspondent, score_date
-
-    def _norm(v) -> str:
-        return str(v or "").strip().lower()
-
-    def date_exact(output, expected) -> float:
-        """Case-insensitive exact match on ISO date strings."""
-        return exact_match.evaluate(
-            {
-                "output": _norm(output.get("date") if output else None),
-                "expected": _norm(expected.get("expected_date")),
-            }
-        )[0].score
-
-    def correspondent_fuzzy(output, expected) -> float:
-        """Token-sort fuzzy ratio after normalizing corporate suffixes and punctuation."""
-        scores = score_correspondent(
-            expected.get("expected_correspondent"),
-            output.get("correspondent") if output else None,
-        )
-        return scores.get("corr_fuzzy_score", 0.0)
-
-    def date_partial_credit(output, expected) -> float:
-        """Linear partial credit: 1.0 at exact match, 0.0 at 365+ days off."""
-        scores = score_date(
-            expected.get("expected_date"),
-            output.get("date") if output else None,
-        )
-        return scores.get("date_partial_credit", 0.0)
-
-    # LLM-as-a-jury: classify the extracted title as appropriate or not,
-    # using the OCR transcript as context. Avoids the need for per-document
-    # reference titles — judges decide based on content relevance alone.
-    #
-    # When exp_config.jury is set, each member votes independently and the
-    # result is determined by majority vote, which reduces single-model bias
-    # and improves alignment with human judgment. Ties (even-sized jury with
-    # equal split) are resolved as "inappropriate" (score 0.0) to keep the
-    # metric conservative.
-    # If no jury is configured, a single judge uses llm_judge_model.
-    _TITLE_JUDGE_TEMPLATE = """
-You are evaluating a document title extracted by an AI system.
-
-Document text (excerpt):
-{ocr_transcript}
-
-Extracted title: {title}
-
-Is this title appropriate for the document?
-An appropriate title must be:
-- Accurate — reflects the actual content of the document
-- Specific — not generic placeholders like "Document", "Letter", or "Untitled"
-- Descriptive — gives a reader a clear idea of what the document is about
-
-Respond with exactly one word: "appropriate" or "inappropriate".
-""".strip()
-
-    class SharedTitleJudge:
-        """Synchronous Phoenix-compatible adapter backed by shared inference."""
-
-        def __init__(
-            self,
-            model: str,
-            endpoint: str | None,
-            temperature: float,
-            reasoning_effort: str | None,
-        ):
-            self.model = model
-            self.endpoint = endpoint
-            self.temperature = temperature
-            self.reasoning_effort = reasoning_effort
-
-        def evaluate(self, inputs: dict) -> list[SimpleNamespace]:
-            prompt = _TITLE_JUDGE_TEMPLATE.format(**inputs)
-            kwargs = {"temperature": self.temperature, "max_tokens": 8}
-            if self.reasoning_effort:
-                kwargs["reasoning_effort"] = self.reasoning_effort
-            result = asyncio.run(
-                complete(
-                    model=self.model,
-                    messages=[
-                        {"role": "user", "content": prompt},
-                    ],
-                    endpoint=self.endpoint,
-                    domain="evaluation_title_judge",
-                    **kwargs,
-                )
-            )
-            label = (result.content or "").strip().lower()
-            label = "inappropriate" if "inappropriate" in label else "appropriate"
-            return [SimpleNamespace(label=label)]
-
-    def _safe_majority_vote(votes: list[str]) -> str:
-        """Return the majority label, or 'tie' when no label has a strict majority."""
-        count = Counter(votes)
-        most_common = count.most_common()
-        if len(most_common) == 1 or most_common[0][1] > most_common[1][1]:
-            return most_common[0][0]
-        return "tie"
-
-    def _run_judge(title_judge: SharedTitleJudge, inputs: dict) -> str:
-        """Run one title judge and return its label or ``error``."""
+    for experiment_config in experiments:
+        jev_client = None
         try:
-            return title_judge.evaluate(inputs)[0].label
-        except Exception as e:
-            log.warning("Title judge %s failed: %s", title_judge.llm.model, e)
-            return "error"
-
-    # --- Agent factory ---
-    def _build_agent(exp_config: AgentConfig):
-        module_path, class_name = exp_config.agent_class.rsplit(".", 1)
-        module = importlib.import_module(module_path)
-        agent_class = getattr(module, class_name)
-
-        # For SmartDocumentAgent, auto-detect and select extraction strategy
-        if class_name == "SmartDocumentAgent":
-            from paperless_ai.agents.smart_graph_agent import (
-                _select_extraction_strategy,
-            )
-
-            strategy = _select_extraction_strategy(exp_config)
             log.info(
-                "Experiment %s: Using %s", exp_config.name, strategy.__class__.__name__
+                "=== Running experiment: %s (metadata model: %s) ===",
+                experiment_config.name,
+                experiment_config.metadata_model,
             )
-            return agent_class(exp_config, extraction_strategy=strategy)
-
-        return agent_class(exp_config)
-
-    # --- Run one experiment per config ---
-    for exp_config in experiments:
-        try:
-            log.info("\n=== Running Experiment: %s ===", exp_config.name)
-            log.info(
-                "Params: agent=%s model=%s ocr_temp=%s metadata_temp=%s ocr_reasoning=%s metadata_reasoning=%s",
-                exp_config.agent_class,
-                exp_config.metadata_model,
-                exp_config.ocr_temperature,
-                exp_config.metadata_temperature,
-                exp_config.ocr_reasoning_effort,
-                exp_config.metadata_reasoning_effort,
+            jev_client = TypeSafeClient(
+                api_key=config.typesafe_api_key,
+                model=config.typesafe_model,
+                base_url=config.typesafe_endpoint,
             )
+            jev_evaluator = JevMetadataEvaluator(jev_client, config.typesafe_model)
+            agent = _build_agent(experiment_config)
 
-            # Build shared-client-backed classification evaluators for each jury member
-            # (or a single judge). Each experiment may configure a different jury.
-            if exp_config.jury:
-                jury_models = [
-                    SharedTitleJudge(
-                        model=member.model,
-                        endpoint=member.endpoint,
-                        temperature=member.temperature or 0.0,
-                        reasoning_effort=member.reasoning_effort,
-                    )
-                    for member in exp_config.jury
-                ]
-                log.info(
-                    "Title jury: %d judges — %s",
-                    len(jury_models),
-                    ", ".join(m.model for m in exp_config.jury),
-                )
-            else:
-                jury_models = [
-                    SharedTitleJudge(
-                        model=exp_config.llm_judge_model,
-                        endpoint=exp_config.evaluation_endpoint,
-                        temperature=0.0,
-                        reasoning_effort=exp_config.chat_reasoning_effort,
-                    )
-                ]
-                log.info("Title judge: single model — %s", exp_config.llm_judge_model)
-
-            # _judges=jury_models captures the current jury in the closure.
-            def title_llm_jury(output, _judges=jury_models) -> float:
-                """Jury vote: 1.0 if the majority of judges find the title appropriate.
-
-                Each judge runs as a Phoenix classification evaluator. Judges run in
-                parallel via ThreadPoolExecutor. The majority label wins; ties and
-                all-error cases resolve to 0.0 (conservative / "inappropriate").
-                """
-                if not output or not output.get("title"):
-                    return 0.0
-                inputs = {
-                    "ocr_transcript": (output.get("ocr_transcript") or "")[:3000],
-                    "title": output.get("title"),
-                }
-                with ThreadPoolExecutor(max_workers=len(_judges)) as pool:
-                    votes = list(
-                        pool.map(lambda judge: _run_judge(judge, inputs), _judges)
-                    )
-                valid_votes = [
-                    v for v in votes if v in ("appropriate", "inappropriate")
-                ]
-                if not valid_votes:
-                    return 0.0
-                verdict = _safe_majority_vote(valid_votes)
-                return 1.0 if verdict == "appropriate" else 0.0
-
-            EVALUATORS = [
-                date_exact,
-                correspondent_fuzzy,
-                date_partial_credit,
-                title_llm_jury,
-            ]
-
-            agent = _build_agent(exp_config)
-
-            # _agent=agent captures the current agent in the closure — without the
-            # default arg, all iterations would share the last loop value.
-            async def task(example, _agent=agent):
+            async def task(
+                example,
+                _agent=agent,
+                _jev_evaluator=jev_evaluator,
+                _experiment_config=experiment_config,
+            ):
+                """Extract metadata, then evaluate it once with Jev."""
                 file_path = example.input["file_path"]
                 result = await _agent.process(file_path, existing_hints={})
+                metadata = result.metadata
+                document_context = getattr(result, "metadata_context", "")
+                if not document_context:
+                    from paperless_ai.agents.smart_graph_agent import (
+                        build_metadata_document_context,
+                    )
+
+                    document_context = build_metadata_document_context(
+                        getattr(metadata, "full_ocr_transcript", "")
+                    )
+
+                try:
+                    evaluation = await _jev_evaluator.evaluate(
+                        document_context=document_context,
+                        title=metadata.title,
+                        date=metadata.document_date,
+                        correspondent=metadata.correspondent,
+                    )
+                    scores = {
+                        "date": evaluation.date_score,
+                        "correspondent": evaluation.correspondent_score,
+                        "title": evaluation.title_score,
+                    }
+                    scores["metadata"] = evaluation.aggregate_score
+                    jev_error = None
+                except Exception as error:
+                    log.exception(
+                        "Jev evaluation failed for document %s using model %s: %s",
+                        file_path,
+                        _experiment_config.typesafe_model,
+                        error,
+                    )
+                    scores = {
+                        "date": 0.0,
+                        "correspondent": 0.0,
+                        "title": 0.0,
+                        "metadata": 0.0,
+                    }
+                    jev_error = str(error)
+
+                jev_output = {
+                    **scores,
+                    "model": _experiment_config.typesafe_model,
+                }
+                if jev_error is not None:
+                    jev_output["error"] = jev_error
+
                 return {
-                    "correspondent": result.metadata.correspondent,
-                    "date": result.metadata.document_date,
-                    "title": result.metadata.title,
-                    "ocr_transcript": result.metadata.full_ocr_transcript,
+                    "correspondent": metadata.correspondent,
+                    "date": metadata.document_date,
+                    "title": metadata.title,
+                    "_jev": jev_output,
                 }
 
             await phoenix_client.experiments.run_experiment(
                 dataset=phoenix_dataset,
                 task=task,
-                evaluators=EVALUATORS,
-                experiment_name=exp_config.name,
+                evaluators=[jev_date, jev_correspondent, jev_title, jev_metadata],
+                experiment_name=experiment_config.name,
                 experiment_description=(
-                    f"{exp_config.agent_class.split('.')[-1]} | {exp_config.metadata_model}"
+                    f"{experiment_config.agent_class.split('.')[-1]} | "
+                    f"{experiment_config.metadata_model} | Jev {config.typesafe_model}"
                 ),
                 experiment_metadata={
-                    "agent_class": exp_config.agent_class,
-                    "ocr_model": exp_config.ocr_model,
-                    "metadata_model": exp_config.metadata_model,
-                    "ocr_temperature": exp_config.ocr_temperature,
-                    "metadata_temperature": exp_config.metadata_temperature,
-                    "ocr_reasoning_effort": exp_config.ocr_reasoning_effort,
-                    "metadata_reasoning_effort": exp_config.metadata_reasoning_effort,
+                    "agent_class": experiment_config.agent_class,
+                    "ocr_model": experiment_config.ocr_model,
+                    "metadata_model": experiment_config.metadata_model,
+                    "typesafe_model": config.typesafe_model,
+                    "ocr_temperature": experiment_config.ocr_temperature,
+                    "metadata_temperature": experiment_config.metadata_temperature,
+                    "ocr_reasoning_effort": experiment_config.ocr_reasoning_effort,
+                    "metadata_reasoning_effort": experiment_config.metadata_reasoning_effort,
                 },
-                # Keep full-split evals memory-stable. A single Phoenix task may
-                # still fan out over OCR pages via the agent's batch size.
                 concurrency=1,
                 timeout=300,
             )
-            log.info("Experiment '%s' complete", exp_config.name)
+            log.info("Experiment '%s' complete", experiment_config.name)
         except Exception:
-            log.exception("Experiment '%s' failed; continuing", exp_config.name)
+            log.exception("Experiment '%s' failed; continuing", experiment_config.name)
+        finally:
+            if jev_client is not None:
+                jev_client.close()
 
-    log.info("\nAll experiments complete! View results at %s", phoenix_endpoint)
+    log.info("All experiments complete! View results at %s", phoenix_endpoint)
 
 
-async def run_evals(config, split: str = "test") -> None:
-    """Run the Phoenix-based scientific evaluation. Thin wrapper over run_scientific_evaluation."""
+async def run_evals(config: AgentConfig, split: str = "test") -> None:
+    """Run the Phoenix-based scientific evaluation."""
     await run_scientific_evaluation(config, split=split)

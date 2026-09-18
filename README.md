@@ -245,17 +245,6 @@ docker compose --profile cleanup run --rm \
   --cleanup-analysis-dir /review
 ```
 
-Enable the LLM judge for borderline matches:
-
-```bash
-docker compose --profile cleanup run --rm \
-  ai-cleanup \
-  --cleanup-typesafe \
-  --cleanup-correspondents-plan /review/merge-plan.json \
-  --cleanup-analysis-dir /review \
-  --cleanup-judge-borderline
-```
-
 Apply an approved plan:
 
 ```bash
@@ -554,8 +543,8 @@ Django migrations and document indexing).  A fresh pull adds image download time
 | `test_search.py` | `embed_query` runs in thread pool (event-loop non-blocking verified) |
 | `test_search.py` | `/search` 422 on missing/empty `q` and out-of-range `limit` |
 | `test_search.py` | `/search` returns `list[int]` doc_ids, deduplicates multi-chunk hits |
-| `test_metrics.py` | Scoring function unit tests (correspondent, date, title) |
 | `test_evaluator.py` | Evaluation framework unit tests |
+| `test_jev_evaluator.py` | One-request Jev metadata judgment tests |
 
 #### Infrastructure used in tests
 
@@ -603,29 +592,20 @@ docker compose -f docker-compose.yml -f docker-compose.test.yml \
 
 ### Evaluation framework
 
-The `ai/eval/` directory contains a golden dataset of 50 scanned documents (from the [IDL dataset](https://huggingface.co/datasets/aharley/rvl-cdip)) with ground-truth title, correspondent, and date annotations.
-
-#### Ground truth annotation
-
-Before running evaluations for the first time, annotate the golden dataset with the interactive review script. It runs the full agent pipeline on each document and prompts you to confirm or correct the proposed values:
-
-```bash
-docker compose run --rm --entrypoint python ai eval/review_ground_truth.py
-```
-
-For each document the script shows the OCR transcript and proposed title, correspondent, and date. Type `y` to accept, `n` to mark as genuinely null, `s` to skip, or enter a custom value.
-
-Progress is saved after each document, so you can interrupt and resume at any time.
+The `ai/eval/` directory contains an input-only corpus of 50 scanned documents
+from the [IDL dataset](https://huggingface.co/datasets/aharley/rvl-cdip). Each
+entry identifies a document and may carry split, tag, and source organization
+metadata. It contains no metadata annotations.
 
 #### Train / validation split
 
-After annotation, assign the train/validation split (one-time, deterministic):
+Assign the train/validation split (one-time, deterministic):
 
 ```bash
 docker compose run --rm --entrypoint python ai eval/assign_splits.py
 ```
 
-This writes a `"split": "test" | "validation"` field to each entry in `golden_dataset.json`. Ten representative documents are held out as a validation set for prompt tuning and hyperparameter search; the remaining ~40 are the test set.
+This writes a `"split": "test" | "validation"` field to each entry in `eval_dataset.json`. Ten representative documents are held out as a validation set for prompt tuning and hyperparameter search; the remaining ~40 are the test set.
 
 #### Running evaluations
 
@@ -646,11 +626,11 @@ EVAL_SPLIT=all docker compose run --build --rm ai-eval
 ```
 
 The `ai-eval` service defaults to `code-test` for a fast smoke run. Each split
-value maps to a separate named dataset in Phoenix (`paperless-golden-test`,
-`paperless-golden-validation`, `paperless-golden-code-test`, …), so experiments
+value maps to a separate named input dataset in Phoenix (`paperless-eval-test`,
+`paperless-eval-validation`, `paperless-eval-code-test`, …), so experiments
 from different splits are never mixed in the comparison view.
 
-The `code-test` split contains a single entry tagged `"tags": ["code-test"]` in `golden_dataset.json`. It is not filtered by the `"split"` field — any entry can carry the tag regardless of its train/validation assignment. To add more entries to the smoke test, add `"tags": ["code-test"]` to their entry.
+The `code-test` split contains a single entry tagged `"tags": ["code-test"]` in `eval_dataset.json`. It is not filtered by the `"split"` field — any entry can carry the tag regardless of its train/validation assignment. To add more entries to the smoke test, add `"tags": ["code-test"]` to their entry.
 
 #### Metrics
 
@@ -658,19 +638,17 @@ Each evaluation run reports per-experiment:
 
 | Metric | Description |
 |---|---|
-| `correspondent_exact_accuracy` | Exact match after case-normalisation and suffix removal (Inc., AG, …) |
-| `correspondent_fuzzy_mean` | Token-sort fuzzy score — robust to word reordering |
-| `date_exact_accuracy` | Exact ISO date match |
-| `date_partial_mean` | Partial credit: linear decay from 1.0 (exact) to 0.0 (≥ 1 year off) |
-| `null_precision` / `null_recall` | Precision/recall for documents where no correspondent exists |
-| `title_contains_rate` | Fraction where actual title contains the expected keyword |
+| `jev_date` | Jev probability that the predicted date is the appropriate primary document date |
+| `jev_correspondent` | Jev probability that the predicted correspondent is appropriate |
+| `jev_title` | Jev probability that the predicted title is appropriate |
+| `jev_metadata` | Arithmetic mean of the three Jev field scores; derived, not another judgment |
 
 A comparison table is printed at the end of each run:
 
 ```
 === Experiment Comparison ===
-  baseline-flash:  corr_exact=65.0%  corr_fuzzy=0.82  date_exact=72.0%  date_partial=0.89
-  creative-flash:  corr_exact=60.0%  corr_fuzzy=0.79  date_exact=68.0%  date_partial=0.85
+  baseline-flash:  jev_date=0.97  jev_correspondent=0.84  jev_title=0.91
+  creative-flash:  jev_date=0.89  jev_correspondent=0.81  jev_title=0.88
 ```
 
 #### Adding experiments

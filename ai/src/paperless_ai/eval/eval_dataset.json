@@ -1,0 +1,258 @@
+{
+  "description": "Document corpus for Paperless metadata extraction evaluation.",
+  "entries": [
+    {
+      "file_path": "/app/src/paperless_ai/eval/data/idl/klpb0135.pdf",
+      "split": "test",
+      "tags": [
+        "code-test"
+      ],
+      "original_key": "klpb0135"
+    },
+    {
+      "file_path": "/app/src/paperless_ai/eval/data/idl/hqcx0242.pdf",
+      "split": "test",
+      "original_key": "hqcx0242"
+    },
+    {
+      "file_path": "/app/src/paperless_ai/eval/data/idl/hlhj0239.pdf",
+      "split": "validation",
+      "original_key": "hlhj0239"
+    },
+    {
+      "file_path": "/app/src/paperless_ai/eval/data/idl/kykb0006.pdf",
+      "split": "test",
+      "original_key": "kykb0006"
+    },
+    {
+      "file_path": "/app/src/paperless_ai/eval/data/idl/ksdd0025.pdf",
+      "split": "test",
+      "original_key": "ksdd0025"
+    },
+    {
+      "file_path": "/app/src/paperless_ai/eval/data/idl/hrpp0144.pdf",
+      "split": "test",
+      "original_key": "hrpp0144"
+    },
+    {
+      "file_path": "/app/src/paperless_ai/eval/data/idl/fklm0254.pdf",
+      "split": "validation",
+      "original_key": "fklm0254"
+    },
+    {
+      "file_path": "/app/src/paperless_ai/eval/data/idl/gplk0025.pdf",
+      "split": "test",
+      "original_key": "gplk0025"
+    },
+    {
+      "file_path": "/app/src/paperless_ai/eval/data/idl/glvp0169.pdf",
+      "split": "test",
+      "original_key": "glvp0169"
+    },
+    {
+      "file_path": "/app/src/paperless_ai/eval/data/idl/grmj0172.pdf",
+      "split": "validation",
+      "original_key": "grmj0172"
+    },
+    {
+      "file_path": "/app/src/paperless_ai/eval/data/idl/htdn0068.pdf",
+      "split": "test",
+      "original_key": "htdn0068"
+    },
+    {
+      "file_path": "/app/src/paperless_ai/eval/data/idl/gplk0093.pdf",
+      "split": "test",
+      "original_key": "gplk0093"
+    },
+    {
+      "file_path": "/app/src/paperless_ai/eval/data/idl/fzlk0038.pdf",
+      "split": "test",
+      "original_key": "fzlk0038"
+    },
+    {
+      "file_path": "/app/src/paperless_ai/eval/data/idl/fmbl0060.pdf",
+      "split": "test",
+      "original_key": "fmbl0060"
+    },
+    {
+      "file_path": "/app/src/paperless_ai/eval/data/idl/hskv0031.pdf",
+      "split": "test",
+      "original_key": "hskv0031"
+    },
+    {
+      "file_path": "/app/src/paperless_ai/eval/data/idl/klyw0086.pdf",
+      "split": "test",
+      "original_key": "klyw0086"
+    },
+    {
+      "file_path": "/app/src/paperless_ai/eval/data/idl/hsgw0178.pdf",
+      "split": "test",
+      "original_key": "hsgw0178"
+    },
+    {
+      "file_path": "/app/src/paperless_ai/eval/data/idl/gsvf0073.pdf",
+      "split": "test",
+      "original_key": "gsvf0073"
+    },
+    {
+      "file_path": "/app/src/paperless_ai/eval/data/idl/hgcb0104.pdf",
+      "split": "validation",
+      "original_key": "hgcb0104"
+    },
+    {
+      "file_path": "/app/src/paperless_ai/eval/data/idl/jmxb0055.pdf",
+      "split": "test",
+      "original_key": "jmxb0055"
+    },
+    {
+      "file_path": "/app/src/paperless_ai/eval/data/idl/fqvp0073.pdf",
+      "split": "test",
+      "original_key": "fqvp0073"
+    },
+    {
+      "file_path": "/app/src/paperless_ai/eval/data/idl/krcp0137.pdf",
+      "split": "test",
+      "original_key": "krcp0137"
+    },
+    {
+      "file_path": "/app/src/paperless_ai/eval/data/idl/hjfy0224.pdf",
+      "split": "test",
+      "original_key": "hjfy0224"
+    },
+    {
+      "file_path": "/app/src/paperless_ai/eval/data/idl/gzww0187.pdf",
+      "split": "test",
+      "original_key": "gzww0187"
+    },
+    {
+      "file_path": "/app/src/paperless_ai/eval/data/idl/fmnx0044.pdf",
+      "split": "test",
+      "original_key": "fmnx0044"
+    },
+    {
+      "file_path": "/app/src/paperless_ai/eval/data/idl/kjbn0041.pdf",
+      "split": "test",
+      "original_key": "kjbn0041"
+    },
+    {
+      "file_path": "/app/src/paperless_ai/eval/data/idl/ktnp0106.pdf",
+      "split": "test",
+      "original_key": "ktnp0106"
+    },
+    {
+      "file_path": "/app/src/paperless_ai/eval/data/idl/fyfb0144.pdf",
+      "split": "test",
+      "original_key": "fyfb0144"
+    },
+    {
+      "file_path": "/app/src/paperless_ai/eval/data/idl/khhf0082.pdf",
+      "split": "test",
+      "original_key": "khhf0082"
+    },
+    {
+      "file_path": "/app/src/paperless_ai/eval/data/idl/fqmc0089.pdf",
+      "split": "test",
+      "original_key": "fqmc0089"
+    },
+    {
+      "file_path": "/app/src/paperless_ai/eval/data/idl/jkbg0082.pdf",
+      "split": "test",
+      "original_key": "jkbg0082"
+    },
+    {
+      "file_path": "/app/src/paperless_ai/eval/data/idl/jtgg0239.pdf",
+      "split": "test",
+      "original_key": "jtgg0239"
+    },
+    {
+      "file_path": "/app/src/paperless_ai/eval/data/idl/fsxh0052.pdf",
+      "split": "test",
+      "original_key": "fsxh0052"
+    },
+    {
+      "file_path": "/app/src/paperless_ai/eval/data/idl/gfbx0146.pdf",
+      "split": "test",
+      "original_key": "gfbx0146"
+    },
+    {
+      "file_path": "/app/src/paperless_ai/eval/data/idl/hhmx0206.pdf",
+      "split": "test",
+      "original_key": "hhmx0206"
+    },
+    {
+      "file_path": "/app/src/paperless_ai/eval/data/idl/frvb0205.pdf",
+      "split": "validation",
+      "original_key": "frvb0205"
+    },
+    {
+      "file_path": "/app/src/paperless_ai/eval/data/idl/jjkw0138.pdf",
+      "split": "test",
+      "original_key": "jjkw0138"
+    },
+    {
+      "file_path": "/app/src/paperless_ai/eval/data/idl/krfb0229.pdf",
+      "split": "test",
+      "original_key": "krfb0229"
+    },
+    {
+      "file_path": "/app/src/paperless_ai/eval/data/idl/kmll0169.pdf",
+      "split": "test",
+      "original_key": "kmll0169"
+    },
+    {
+      "file_path": "/app/src/paperless_ai/eval/data/idl/jmyg0244.pdf",
+      "split": "validation",
+      "original_key": "jmyg0244"
+    },
+    {
+      "file_path": "/app/src/paperless_ai/eval/data/idl/gybh0219.pdf",
+      "split": "test",
+      "original_key": "gybh0219"
+    },
+    {
+      "file_path": "/app/src/paperless_ai/eval/data/idl/fkhg0105.pdf",
+      "split": "validation",
+      "original_key": "fkhg0105"
+    },
+    {
+      "file_path": "/app/src/paperless_ai/eval/data/idl/fkff0016.pdf",
+      "split": "validation",
+      "original_key": "fkff0016"
+    },
+    {
+      "file_path": "/app/src/paperless_ai/eval/data/idl/jqmy0206.pdf",
+      "split": "test",
+      "original_key": "jqmy0206"
+    },
+    {
+      "file_path": "/app/src/paperless_ai/eval/data/idl/fkhj0197.pdf",
+      "split": "test",
+      "original_key": "fkhj0197"
+    },
+    {
+      "file_path": "/app/src/paperless_ai/eval/data/idl/gjfm0010.pdf",
+      "split": "test",
+      "original_key": "gjfm0010"
+    },
+    {
+      "file_path": "/app/src/paperless_ai/eval/data/idl/jjcj0064.pdf",
+      "split": "validation",
+      "original_key": "jjcj0064"
+    },
+    {
+      "file_path": "/app/src/paperless_ai/eval/data/idl/jjcc0198.pdf",
+      "split": "test",
+      "original_key": "jjcc0198"
+    },
+    {
+      "file_path": "/app/src/paperless_ai/eval/data/idl/gjjl0087.pdf",
+      "split": "test",
+      "original_key": "gjjl0087"
+    },
+    {
+      "file_path": "/app/src/paperless_ai/eval/data/idl/gqhb0141.pdf",
+      "split": "validation",
+      "original_key": "gqhb0141"
+    }
+  ]
+}

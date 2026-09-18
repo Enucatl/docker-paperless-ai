@@ -1,4 +1,3 @@
-import os
 import json
 from pathlib import Path
 import io
@@ -10,7 +9,7 @@ DATASET_NAME = "pixparse/idl-wds"
 NUM_SAMPLES = 50
 SCRIPT_DIR = Path(__file__).parent
 OUTPUT_DIR = SCRIPT_DIR / "data" / "idl"
-GOLDEN_DATASET_PATH = SCRIPT_DIR / "golden_dataset.json"
+EVAL_DATASET_PATH = SCRIPT_DIR / "eval_dataset.json"
 
 
 def main():
@@ -24,9 +23,9 @@ def main():
 
     entries = []
 
-    # Load existing golden dataset if it exists
-    if GOLDEN_DATASET_PATH.exists():
-        with open(GOLDEN_DATASET_PATH, "r") as f:
+    # Preserve existing corpus entries when refreshing the IDL subset.
+    if EVAL_DATASET_PATH.exists():
+        with open(EVAL_DATASET_PATH, "r") as f:
             data = json.load(f)
             # Filter out previous IDL entries if we want to refresh
             entries = [
@@ -34,7 +33,7 @@ def main():
             ]
             description = data.get("description", "")
     else:
-        description = "Ground-truth dataset for offline agent evaluation."
+        description = "Document corpus for Paperless metadata extraction evaluation."
 
     count = 0
     max_search = 1000
@@ -109,31 +108,11 @@ def main():
                         pdf_path, "PDF", save_all=True, append_images=pil_images[1:]
                     )
 
-            # 2. Extract full OCR transcript
-            full_ocr = ""
-            if "ocr" in example:
-                ocr_bytes = example["ocr"]
-                if isinstance(ocr_bytes, bytes):
-                    try:
-                        full_ocr = ocr_bytes.decode("utf-8")
-                    except:
-                        full_ocr = ocr_bytes.decode("latin-1")
-                else:
-                    full_ocr = str(ocr_bytes)
-
-            if not full_ocr.strip() and pages:
-                # Fallback to JSON metadata text
-                full_ocr = "\n".join([" ".join(p.get("text", [])) for p in pages])
-
             entries.append(
                 {
                     "file_path": str(pdf_path.absolute()),
-                    "expected_correspondent": "Unknown (IDL Sample)",
-                    "expected_date": "2000-01-01",
-                    "expected_title_contains": "",
                     "original_key": key,
                     "page_count": page_count,
-                    "expected_ocr_transcript": full_ocr,
                 }
             )
 
@@ -145,10 +124,10 @@ def main():
             print(f"Error processing {key}: {e}")
             continue
 
-    with open(GOLDEN_DATASET_PATH, "w") as f:
+    with open(EVAL_DATASET_PATH, "w") as f:
         json.dump({"description": description, "entries": entries}, f, indent=2)
 
-    print(f"Successfully added {count} entries with full OCR to {GOLDEN_DATASET_PATH}")
+    print(f"Successfully added {count} entries to {EVAL_DATASET_PATH}")
 
 
 if __name__ == "__main__":

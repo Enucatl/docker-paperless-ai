@@ -107,3 +107,80 @@ these Phoenix traces, so evaluator cost is not included.
   metadata; it is not a comparison against manually annotated ground truth.
 - Costs are estimates based on prices available at report time. Provider
   pricing, routing, and token accounting can change.
+
+## Interpretation: why the results differ
+
+This benchmark should not be read as a general-intelligence ranking. GLM Flash
+(`0.8474`), Mercury 2.5 (`0.8428`), and GPT-5.6 Luna (`0.8400`) are effectively
+in the same band with only 40 documents and no confidence intervals. The
+DeepSeek result (`0.6248`) is the much larger separation. The scores also come
+from an LLM judge rather than manually annotated ground truth.
+
+The experiment mainly tests document reading, entity/date disambiguation,
+instruction following, and reliable structured generation. OCR is fixed to
+Gemini 3.5 Flash Lite, the model receives OCR text rather than the PDF itself,
+and the scored output is a small metadata object. That favors models optimized
+for the pattern “read a moderately long document, then produce a small,
+schema-constrained answer.”
+
+### Mercury 2.5
+
+Mercury is a diffusion language model. Instead of committing to a strictly
+left-to-right answer, diffusion generation can refine multiple output
+positions over successive steps. That is plausibly well matched to a compact
+JSON object whose title, date, and correspondent should be globally coherent.
+Inception also positions Mercury 2.5 for structured facts, summarization,
+search/RAG, and schema-aligned JSON. Its 1.607-second mean latency is
+consistent with that architecture being a good fit for this small structured
+output, although the benchmark does not isolate architecture from training
+and serving implementation.
+
+Sources: [Mercury paper](https://arxiv.org/abs/2506.17298), [Mercury
+introduction](https://www.inceptionlabs.ai/blog/introducing-mercury), and
+[Mercury 2.5](https://www.inceptionlabs.ai/blog/introducing-mercury-2-5).
+
+### GLM Flash
+
+GLM Flash appears to be a strong fit for the same workload through a different
+route: a large sparse mixture-of-experts model with relatively low active
+compute per token, combined with strong instruction-following and structured
+output training. The result is consistent across date, correspondent, and
+title rather than being a win on only one field. Its structured-output and
+document/information-processing positioning is more relevant here than its
+headline context length or multimodality, since this experiment supplies
+short OCR transcripts and does not give the model the images.
+
+Sources: [GLM-5.3-Flash model
+card](https://huggingface.co/zai-org/GLM-5.3-Flash/blob/main/README.md) and
+[GLM-5.3-Flash on
+OpenRouter](https://openrouter.ai/z-ai/glm-5.3-flash-20260826/).
+
+### DeepSeek V4.1 Flash
+
+DeepSeek is the surprising negative result. One plausible architectural
+explanation is its asymmetric Causal Encoder–Decoder design: approximately 8B
+parameters are active during input processing and approximately 16B during
+generation. This may be an excellent trade-off for long-context agents that
+repeatedly ingest history and then generate substantial actions, but this
+benchmark places most of the difficulty in carefully understanding noisy OCR
+input before producing only a small JSON answer.
+
+The token pattern supports that hypothesis but does not prove it: DeepSeek
+produced 26,181 completion tokens versus GLM's 4,377 while receiving a much
+lower metadata score. It may be spending more output-side computation without
+improving the extraction decisions. Configuration remains an important
+alternative explanation: all models used `metadata_reasoning_effort: minimal`,
+but that setting may not be equivalent across model families, and OpenRouter
+provider routing was not pinned.
+
+Sources: [DeepSeek's V4.1 Flash announcement](https://www.deepseek.com/en/news/deepseek-v4-1-flash/),
+[DeepSeek V4.1 Flash model card](https://huggingface.co/deepseek-ai/DeepSeek-V4.1-Flash/blob/main/README.md),
+and [DeepSeek V4.1 Flash on
+OpenRouter](https://openrouter.ai/deepseek/deepseek-v4.1-flash-20260910/).
+
+These are hypotheses, not conclusions about the models in general. The most
+useful follow-up is a small controlled ablation: sweep DeepSeek reasoning
+effort, pin providers, remove the unscored `summary` field, record the exact
+request and returned usage, and repeat each model several times with paired
+bootstrap intervals. A small manually labeled subset would also distinguish
+model behavior from possible bias in the Jev evaluator.

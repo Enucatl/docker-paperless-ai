@@ -87,6 +87,7 @@ class ChatTurnResult:
     history: list[dict]
     sources: dict[int, dict[str, bool]] = field(default_factory=dict)
     usage: dict[str, int] | None = None
+    tool_activity: list[dict[str, Any]] = field(default_factory=list)
 
 
 EventCallback = Callable[[dict[str, Any]], Awaitable[None]]
@@ -169,6 +170,7 @@ class ChatCopilot:
                 "total_tokens": 0,
             }
             sources: dict[int, dict[str, bool]] = {}
+            tool_activity: list[dict[str, Any]] = []
 
             while True:
                 await self._emit(
@@ -243,6 +245,7 @@ class ChatCopilot:
                         history=messages[1:],
                         sources=sources,
                         usage=total_usage,
+                        tool_activity=tool_activity,
                     )
 
                 for tool_call in tool_calls:
@@ -309,6 +312,16 @@ class ChatCopilot:
                             "preview": result.preview or _snippet(result.content),
                             "duration_ms": duration_ms,
                         },
+                    )
+                    tool_activity.append(
+                        {
+                            "tool_call_id": tool_call.get("id"),
+                            "name": name,
+                            "arguments": args,
+                            "summary": result.summary,
+                            "preview": result.preview or _snippet(result.content),
+                            "duration_ms": duration_ms,
+                        }
                     )
                     await self._emit(
                         event_callback,

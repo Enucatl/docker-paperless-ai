@@ -23,6 +23,7 @@ dependencies = [
     "uvicorn[standard]>=0.30",
     "redis[hiredis]>=5.0",
     "qdrant-client>=1.12",
+    "psycopg[binary]>=3.2",
     "torch",
     "sentence-transformers>=3.0",
     "langchain-text-splitters>=1.1.1",
@@ -63,6 +64,9 @@ dev = [
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+"paperless_ai.search" = ["migrations/*.sql"]
 
 [tool.uv.sources]
 paperless-common = { path = "../common" }

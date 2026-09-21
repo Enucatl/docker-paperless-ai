@@ -200,6 +200,25 @@ the `phoenix` database if needed. Phoenix then applies its own schema migrations
 on startup. The old SQLite database remains in the `phoenixdata` volume and is
 not migrated by this setup.
 
+### Copilot conversation database
+
+The copilot stores history in its own `ai_chat` database, owned only by the
+`ai_chat` PostgreSQL role. Create `secrets/ai_chat_postgres_password.txt` with
+a strong password before starting the stack. On an existing PostgreSQL volume,
+run the same idempotent bootstrap used for Phoenix once:
+
+```bash
+docker compose up -d db
+docker compose exec -T db /docker-entrypoint-initdb.d/30-ai-chat-user-db.sh
+docker compose up -d ai
+```
+
+The AI service applies its own conversation migrations at startup. It receives
+the password through a Docker secret, while `CHAT_DATABASE_URL` identifies the
+dedicated database. `CHAT_OWNER_HEADER` defaults to `Remote-User`; set it when
+your reverse proxy uses another authenticated-user header. Without that header,
+conversations use the nullable single-user owner.
+
 ### Weekly correspondent consolidation
 
 The Docker-node timer runs every Tuesday at 01:10 UTC. It waits until OCR and
@@ -456,6 +475,8 @@ Supported `_FILE` variants: `GOOGLE_API_KEY_FILE`, `ANTHROPIC_API_KEY_FILE`, `OP
 | `INFERENCE_OCR_EXTRA_KWARGS` | *(none)* | JSON object of extra OpenAI-compatible inference kwargs for OCR |
 | `INFERENCE_METADATA_EXTRA_KWARGS` | *(none)* | JSON object of extra OpenAI-compatible inference kwargs for metadata extraction |
 | `INFERENCE_CHAT_EXTRA_KWARGS` | *(none)* | JSON object of extra OpenAI-compatible inference kwargs for chat |
+| `CHAT_DATABASE_URL` | *(required by the copilot)* | PostgreSQL URL for the dedicated copilot database |
+| `CHAT_OWNER_HEADER` | `Remote-User` | Reverse-proxy header containing the authenticated user ID |
 | `GOOGLE_API_KEY` | *(none)* | For Gemini models |
 | `ANTHROPIC_API_KEY` | *(none)* | For Claude models |
 | `OPENAI_API_KEY` | *(none)* | For OpenAI / vLLM models |

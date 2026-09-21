@@ -17,6 +17,7 @@ services:
     volumes: !reset []
     tmpfs:
       - /var/lib/postgresql:mode=777,uid=999,gid=999
+    secrets: !reset []
 
   broker:
     volumes: !reset []
@@ -95,6 +96,11 @@ services:
       - WEBHOOK_SECRET=test-secret-key-12345
       - WEBHOOK_SECRET_FILE=
       - MANAGE_PAPERLESS_WORKFLOWS=false
+      # The test database is ephemeral; use its existing test role instead of
+      # provisioning the production-only dedicated role and secret.
+      - CHAT_DATABASE_URL=postgresql://paperless@db:5432/paperless
+      - CHAT_DATABASE_PASSWORD=${POSTGRES_PASSWORD}
+      - CHAT_DATABASE_PASSWORD_FILE=
       # Dummy keys guarantee no real LLM API calls even if a mock is misconfigured.
       - GOOGLE_API_KEY=dummy-test-key
       - ANTHROPIC_API_KEY=dummy-test-key
@@ -121,6 +127,14 @@ services:
         condition: service_healthy
       webhook-listener:
         condition: service_healthy
+    secrets: !reset
+      - paperless_token
+      - webhook_secret
+      - openai_api_key
+      - anthropic_api_key
+      - google_api_key
+      - openrouter_api_key
+      - hf_token
 
   ai-test:
     build:
@@ -132,6 +146,9 @@ services:
     environment:
       - PAPERLESS_URL=http://webserver:8000
       - MANAGE_PAPERLESS_WORKFLOWS=false
+      - CHAT_DATABASE_URL=postgresql://paperless@db:5432/paperless
+      - CHAT_DATABASE_PASSWORD=${POSTGRES_PASSWORD}
+      - CHAT_DATABASE_PASSWORD_FILE=
       - PAPERLESS_TOKEN_FILE=
       - GOOGLE_API_KEY=dummy-test-key
       - ANTHROPIC_API_KEY=dummy-test-key

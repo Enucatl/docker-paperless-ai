@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 import time
@@ -11,7 +12,15 @@ from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING
 
 import niquests
-from fastapi import FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect
+from fastapi import (
+    FastAPI,
+    HTTPException,
+    Query,
+    Request,
+    Response,
+    WebSocket,
+    WebSocketDisconnect,
+)
 from fastapi.responses import HTMLResponse, JSONResponse
 from paperless_common.secrets import read_secret
 
@@ -26,6 +35,7 @@ from paperless_ai.search.retriever import (
 
 if TYPE_CHECKING:
     from paperless_ai.search.chat_agent import ChatCopilot
+    from paperless_ai.search.chat_store import ChatStore
     from paperless_ai.search.local_search_process import ProcessLocalSearchEmbedder
 
 log = logging.getLogger(__name__)
@@ -36,6 +46,7 @@ _paperless_client: PaperlessClient | None = None
 _qdrant_store = None
 _qdrant_url: str = "http://qdrant:6333"
 _chat_copilot: ChatCopilot | None = None
+_chat_store: ChatStore | None = None
 _config: AgentConfig | None = None
 _local_search_idle_timeout_seconds: int = 300
 _local_search_start_method: str = "spawn"
@@ -139,6 +150,7 @@ async def lifespan(app: FastAPI):
         _qdrant_store, \
         _qdrant_url, \
         _chat_copilot, \
+        _chat_store, \
         _config
     global _local_search_idle_timeout_seconds, _local_search_start_method
     global _local_search_warm_on_startup, _local_search_warm_on_chat_load
@@ -188,6 +200,16 @@ async def lifespan(app: FastAPI):
 
     _config = AgentConfig.from_env()
     setup_telemetry(service_name=_config.name, project_name=_config.name)
+    chat_database_url = os.environ.get("CHAT_DATABASE_URL")
+    if not chat_database_url:
+        raise RuntimeError("CHAT_DATABASE_URL is not set for the copilot service")
+    from paperless_ai.search.chat_store import ChatStore
+
+    _chat_store = ChatStore(
+        chat_database_url, password=read_secret("CHAT_DATABASE_PASSWORD")
+    )
+    await _chat_store.migrate()
+    log.info("Chat history database migrations are ready")
     _queues = TaskQueues(redis_url)
     _lazy_embedder = None
 
@@ -355,6 +377,7 @@ async def lifespan(app: FastAPI):
     if _paperless_client is not None:
         await _paperless_client.aclose()
     _chat_copilot = None
+    _chat_store = None
     _config = None
     _worker_tasks = []
     _worker_ready = False
@@ -535,6 +558,106 @@ async def _build_chat_sources(source_flags: dict[int, dict[str, bool]]) -> list[
     return items
 
 
+async def _restore_chat_sources(sources: list[dict]) -> list[dict]:
+    """Refresh persisted source cards while retaining deleted-document snapshots."""
+    items: list[dict] = []
+    for source in sources:
+        metadata = (
+            await _paperless_client.get_document_chat_metadata(source["id"])
+            if _paperless_client is not None
+            else None
+        )
+        item = {**source, **(metadata or {}), "available": metadata is not None}
+        item["detail_url"] = _document_detail_url(source["id"])
+        item["thumb_url"] = _document_thumb_url(source["id"])
+        item["preview_url"] = _document_preview_url(source["id"])
+        items.append(item)
+    return items
+
+
+def _chat_owner(headers) -> str | None:
+    """Return the reverse-proxy user identity, or the single-user owner key."""
+    value = headers.get(os.environ.get("CHAT_OWNER_HEADER", "Remote-User"))
+    return value.strip() if value and value.strip() else None
+
+
+def _chat_title(payload: dict) -> str | None:
+    """Validate an optional user-supplied conversation title."""
+    title = payload.get("title")
+    if title is None:
+        return None
+    if not isinstance(title, str) or not (title := title.strip()) or len(title) > 120:
+        raise HTTPException(status_code=422, detail="title must be 1 to 120 characters")
+    return title
+
+
+def _require_chat_store() -> ChatStore:
+    """Return the initialized conversation store."""
+    if _chat_store is None:
+        raise HTTPException(status_code=503, detail="Chat history is unavailable")
+    return _chat_store
+
+
+@app.post("/conversations")
+async def create_conversation(
+    request: Request, payload: dict | None = None
+) -> JSONResponse:
+    """Create a durable conversation for the current user."""
+    conversation = await _require_chat_store().create_conversation(
+        _chat_owner(request.headers), _chat_title(payload or {})
+    )
+    return JSONResponse(content=conversation, status_code=201)
+
+
+@app.get("/conversations")
+async def list_conversations(request: Request) -> JSONResponse:
+    """List the current user's durable conversations."""
+    return JSONResponse(
+        content={
+            "items": await _require_chat_store().list_conversations(
+                _chat_owner(request.headers)
+            )
+        }
+    )
+
+
+@app.get("/conversations/{conversation_id}")
+async def load_conversation(conversation_id: str, request: Request) -> JSONResponse:
+    """Load a conversation and refresh its source-card metadata."""
+    conversation = await _require_chat_store().load_conversation(
+        conversation_id, _chat_owner(request.headers)
+    )
+    if conversation is None:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    for message in conversation["messages"]:
+        message["sources"] = await _restore_chat_sources(message["sources"])
+    return JSONResponse(content=conversation)
+
+
+@app.patch("/conversations/{conversation_id}")
+async def rename_conversation(
+    conversation_id: str, request: Request, payload: dict
+) -> JSONResponse:
+    """Rename one owned conversation."""
+    conversation = await _require_chat_store().rename_conversation(
+        conversation_id, _chat_owner(request.headers), _chat_title(payload)
+    )
+    if conversation is None:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    return JSONResponse(content=conversation)
+
+
+@app.delete("/conversations/{conversation_id}", status_code=204)
+async def delete_conversation(conversation_id: str, request: Request) -> Response:
+    """Delete one owned conversation and its source references."""
+    deleted = await _require_chat_store().delete_conversation(
+        conversation_id, _chat_owner(request.headers)
+    )
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    return Response(status_code=204)
+
+
 @app.get("/chat")
 async def chat_ui() -> HTMLResponse:
     """Serve the browser UI for the Paperless copilot."""
@@ -589,9 +712,44 @@ async def chat_ui() -> HTMLResponse:
     .chat-layout {
       display: grid;
       gap: 1rem;
-      grid-template-columns: minmax(0, 2.25fr) minmax(300px, 1fr);
+      grid-template-columns: minmax(190px, 0.7fr) minmax(0, 2.25fr) minmax(300px, 1fr);
       align-items: start;
     }
+    .history-panel {
+      border: 1px solid var(--chat-border);
+      border-radius: var(--chat-radius);
+      box-shadow: var(--chat-shadow);
+      background: var(--chat-panel);
+      overflow: hidden;
+    }
+    .history-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 0.5rem;
+      padding: 0.8rem;
+      border-bottom: 1px solid var(--chat-border);
+    }
+    .history-list {
+      display: grid;
+      gap: 0.2rem;
+      padding: 0.45rem;
+    }
+    .history-item {
+      width: 100%;
+      border: 0;
+      border-radius: 0.55rem;
+      background: transparent;
+      color: inherit;
+      padding: 0.6rem;
+      text-align: left;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .history-item:hover,
+    .history-item.active { background: var(--chat-primary-soft); color: var(--chat-primary); }
+    .history-empty { color: var(--chat-muted); font-size: 0.9rem; padding: 0.7rem; }
     .chat-column,
     .preview-column {
       min-width: 0;
@@ -925,6 +1083,7 @@ async def chat_ui() -> HTMLResponse:
       .chat-layout {
         grid-template-columns: 1fr;
       }
+      .history-panel { order: -1; }
       .preview-panel {
         position: static;
       }
@@ -971,6 +1130,19 @@ async def chat_ui() -> HTMLResponse:
   </header>
   <main class="chat-shell">
     <div class="chat-layout">
+      <aside class="history-column">
+        <section class="history-panel">
+          <div class="history-header">
+            <strong>Conversations</strong>
+            <button id="new-conversation" type="button" class="btn btn-sm btn-outline-primary">New</button>
+          </div>
+          <div id="history-list" class="history-list"></div>
+          <div class="px-2 pb-2 d-flex gap-2">
+            <button id="rename-conversation" type="button" class="btn btn-sm btn-outline-secondary">Rename</button>
+            <button id="delete-conversation" type="button" class="btn btn-sm btn-outline-danger">Delete</button>
+          </div>
+        </section>
+      </aside>
       <section class="chat-column">
         <div id="socket-banner" class="socket-banner alert alert-warning mb-0"></div>
         <section class="chat-panel">
@@ -1018,11 +1190,82 @@ async def chat_ui() -> HTMLResponse:
     const previewOpenLink = document.getElementById("preview-open-link");
     const previewFrameWrap = document.getElementById("preview-frame-wrap");
     const previewFrame = document.getElementById("preview-frame");
+    const historyList = document.getElementById("history-list");
+    const newConversationButton = document.getElementById("new-conversation");
+    const renameConversationButton = document.getElementById("rename-conversation");
+    const deleteConversationButton = document.getElementById("delete-conversation");
     const protocol = window.location.protocol === "https:" ? "wss" : "ws";
     const basePath = window.location.pathname.replace(/\/chat\/?$/, "");
     const wsPath = `${basePath}/ws/chat`.replace(/\/{2,}/g, "/");
     const socket = new WebSocket(`${protocol}://${window.location.host}${wsPath}`);
     const turns = new Map();
+    let activeConversationId = null;
+    let conversations = [];
+
+    function apiPath(path) {
+      return `${basePath}${path}`.replace(/\/{2,}/g, "/");
+    }
+
+    async function api(path, options = {}) {
+      const response = await fetch(apiPath(path), {
+        ...options,
+        headers: { "Content-Type": "application/json", ...(options.headers || {}) },
+      });
+      if (!response.ok) throw new Error((await response.json().catch(() => ({}))).detail || "Request failed.");
+      return response.status === 204 ? null : response.json();
+    }
+
+    function renderConversationList() {
+      historyList.innerHTML = "";
+      if (!conversations.length) {
+        historyList.innerHTML = '<div class="history-empty">No conversations yet.</div>';
+        return;
+      }
+      conversations.forEach((item) => {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = `history-item ${item.id === activeConversationId ? "active" : ""}`;
+        button.textContent = item.title;
+        button.title = item.title;
+        button.addEventListener("click", () => loadConversation(item.id));
+        historyList.appendChild(button);
+      });
+    }
+
+    async function refreshConversations() {
+      conversations = (await api("/conversations")).items;
+      renderConversationList();
+    }
+
+    async function createConversation() {
+      const item = await api("/conversations", { method: "POST", body: "{}" });
+      activeConversationId = item.id;
+      conversation.innerHTML = "";
+      turns.clear();
+      await refreshConversations();
+      prompt.focus();
+    }
+
+    async function loadConversation(conversationId) {
+      const item = await api(`/conversations/${conversationId}`);
+      activeConversationId = item.id;
+      conversation.innerHTML = "";
+      turns.clear();
+      item.messages.forEach((message) => {
+        if (message.role === "user") {
+          addUserBubble(message.content);
+          return;
+        }
+        const turn = createTurn(message.id);
+        setAssistantMessage(message.id, message.content);
+        (message.tool_activity || []).forEach((tool) => updateTool(message.id, tool, false));
+        if (message.usage || message.model) {
+          updateUsage(message.id, { available: Boolean(message.usage), model: message.model, ...(message.usage || {}) });
+        }
+        renderSources(message.id, message.sources || []);
+      });
+      await refreshConversations();
+    }
 
     function scrollConversation() {
       conversation.scrollTop = conversation.scrollHeight;
@@ -1235,6 +1478,7 @@ async def chat_ui() -> HTMLResponse:
 
     function renderSourceBadges(source) {
       const badges = [];
+      if (source.available === false) badges.push(["Unavailable", ""]);
       if (source.matched) badges.push(["Matched", "match"]);
       if (source.inspected) badges.push(["Read in full", "read"]);
       if (source.document_type_name) badges.push([source.document_type_name, ""]);
@@ -1264,7 +1508,7 @@ async def chat_ui() -> HTMLResponse:
         thumb.className = "source-thumb";
         thumb.loading = "lazy";
         thumb.alt = source.title || `Document ${source.id}`;
-        thumb.src = source.thumb_url;
+        if (source.available !== false) thumb.src = source.thumb_url;
         thumb.onerror = () => {
           thumb.style.visibility = "hidden";
         };
@@ -1309,7 +1553,8 @@ async def chat_ui() -> HTMLResponse:
         const previewButton = document.createElement("button");
         previewButton.type = "button";
         previewButton.className = "btn btn-sm btn-outline-secondary";
-        previewButton.textContent = "Preview";
+        previewButton.textContent = source.available === false ? "Unavailable" : "Preview";
+        previewButton.disabled = source.available === false;
         previewButton.addEventListener("click", () => openPreview(source));
 
         const openLink = document.createElement("a");
@@ -1365,6 +1610,11 @@ async def chat_ui() -> HTMLResponse:
     socket.addEventListener("message", (event) => {
       const payload = JSON.parse(event.data);
       const turnId = payload.turn_id;
+      if (payload.type === "conversation_created") {
+        activeConversationId = payload.conversation.id;
+        refreshConversations().catch((error) => setSocketBanner("warning", error.message));
+        return;
+      }
       if (payload.type === "turn_started") {
         createTurn(turnId);
         addTimelineItem(turnId, "Turn started.");
@@ -1400,9 +1650,28 @@ async def chat_ui() -> HTMLResponse:
       }
       if (payload.type === "turn_completed") {
         addTimelineItem(turnId, payload.success ? "Answer ready." : "Turn failed.");
+        if (payload.success) refreshConversations().catch((error) => setSocketBanner("warning", error.message));
       }
     });
 
+    newConversationButton.addEventListener("click", () => createConversation().catch((error) => setSocketBanner("danger", error.message)));
+    renameConversationButton.addEventListener("click", async () => {
+      if (!activeConversationId) return;
+      const item = conversations.find((conversation) => conversation.id === activeConversationId);
+      const title = window.prompt("Conversation title", item ? item.title : "");
+      if (title === null) return;
+      try {
+        await api(`/conversations/${activeConversationId}`, { method: "PATCH", body: JSON.stringify({ title }) });
+        await refreshConversations();
+      } catch (error) { setSocketBanner("danger", error.message); }
+    });
+    deleteConversationButton.addEventListener("click", async () => {
+      if (!activeConversationId || !window.confirm("Delete this conversation?")) return;
+      try {
+        await api(`/conversations/${activeConversationId}`, { method: "DELETE" });
+        await createConversation();
+      } catch (error) { setSocketBanner("danger", error.message); }
+    });
     form.addEventListener("submit", (event) => {
       event.preventDefault();
       const content = prompt.value.trim();
@@ -1412,7 +1681,7 @@ async def chat_ui() -> HTMLResponse:
         return;
       }
       addUserBubble(content);
-      socket.send(content);
+      socket.send(JSON.stringify({ content, conversation_id: activeConversationId }));
       prompt.value = "";
       prompt.focus();
     });
@@ -1424,6 +1693,10 @@ async def chat_ui() -> HTMLResponse:
       event.preventDefault();
       form.requestSubmit();
     });
+
+    refreshConversations()
+      .then(() => conversations.length ? loadConversation(conversations[0].id) : createConversation())
+      .catch((error) => setSocketBanner("danger", `Unable to load chat history: ${error.message}`));
   </script>
 </body>
 </html>
@@ -1449,13 +1722,59 @@ async def chat_ws(websocket: WebSocket) -> None:
         return
 
     history: list[dict] = []
+    active_conversation_id: str | None = None
+    owner_id = _chat_owner(websocket.headers)
+    chat_store = _require_chat_store()
     try:
         while True:
-            user_message = (await websocket.receive_text()).strip()
+            incoming = await websocket.receive_text()
+            try:
+                payload = json.loads(incoming)
+            except json.JSONDecodeError:
+                payload = {"content": incoming}
+            if not isinstance(payload, dict):
+                await websocket.send_json(
+                    {
+                        "type": "error",
+                        "turn_id": "invalid",
+                        "content": "Invalid chat message.",
+                    }
+                )
+                continue
+            user_message = str(payload.get("content") or "").strip()
             if not user_message:
                 continue
+            conversation_id = payload.get("conversation_id") or active_conversation_id
+            if conversation_id is None:
+                conversation = await chat_store.create_conversation(owner_id)
+                conversation_id = conversation["id"]
+                await websocket.send_json(
+                    {"type": "conversation_created", "conversation": conversation}
+                )
+            conversation_id = str(conversation_id)
+            if conversation_id != active_conversation_id:
+                if (
+                    await chat_store.load_conversation(conversation_id, owner_id)
+                    is None
+                ):
+                    await websocket.send_json(
+                        {
+                            "type": "error",
+                            "turn_id": "invalid",
+                            "content": "Conversation not found.",
+                        }
+                    )
+                    continue
+                history = []
+                active_conversation_id = conversation_id
             turn_id = uuid.uuid4().hex
-            await websocket.send_json({"type": "turn_started", "turn_id": turn_id})
+            await websocket.send_json(
+                {
+                    "type": "turn_started",
+                    "turn_id": turn_id,
+                    "conversation_id": conversation_id,
+                }
+            )
 
             async def emit(event: dict) -> None:
                 payload = {"turn_id": turn_id, **event}
@@ -1475,6 +1794,32 @@ async def chat_ws(websocket: WebSocket) -> None:
                 )
                 await emit({"type": "turn_completed", "success": False})
                 continue
+            try:
+                sources = await _build_chat_sources(result.sources)
+                saved = await chat_store.append_turn(
+                    conversation_id,
+                    owner_id,
+                    user_message,
+                    result.reply or "(no response)",
+                    result.tool_activity,
+                    chat_copilot._config.chat_model,
+                    result.usage,
+                    sources,
+                )
+            except Exception as exc:
+                log.exception("Chat history persistence failed")
+                await emit(
+                    {
+                        "type": "error",
+                        "content": f"Chat history could not be saved: {type(exc).__name__}: {exc}",
+                    }
+                )
+                await emit({"type": "turn_completed", "success": False})
+                continue
+            if not saved:
+                await emit({"type": "error", "content": "Conversation was deleted."})
+                await emit({"type": "turn_completed", "success": False})
+                continue
             history = result.history
             await emit(
                 {
@@ -1491,9 +1836,7 @@ async def chat_ws(websocket: WebSocket) -> None:
                     **(result.usage or {}),
                 }
             )
-            await emit(
-                {"type": "sources", "items": await _build_chat_sources(result.sources)}
-            )
+            await emit({"type": "sources", "items": sources})
             await emit({"type": "turn_completed", "success": True})
     except WebSocketDisconnect:
         return

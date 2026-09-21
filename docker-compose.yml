@@ -32,8 +32,10 @@ services:
     volumes:
       - pgdata:/var/lib/postgresql
       - ./db/init/phoenix-user-db.sh:/docker-entrypoint-initdb.d/20-phoenix-user-db.sh:ro
+      - ./db/init/ai-chat-user-db.sh:/docker-entrypoint-initdb.d/30-ai-chat-user-db.sh:ro
     secrets:
       - phoenix_postgres_password
+      - ai_chat_postgres_password
 
   webserver:
     extends:
@@ -274,6 +276,9 @@ services:
       - WEBHOOK_SECRET_FILE=/run/secrets/webhook_secret
       - PAPERLESS_WEBHOOK_URL=http://webhook-listener:8001/webhook/document
       - MANAGE_PAPERLESS_WORKFLOWS=${MANAGE_PAPERLESS_WORKFLOWS:-true}
+      - CHAT_DATABASE_URL=postgresql://ai_chat@db:5432/ai_chat
+      - CHAT_DATABASE_PASSWORD_FILE=/run/secrets/ai_chat_postgres_password
+      - CHAT_OWNER_HEADER
 
       # OCR model — any OpenAI-compatible inference vision model string:
       #   gemini/gemini-2.5-flash          (cloud, default)
@@ -372,6 +377,8 @@ services:
         condition: service_healthy
       phoenix:
         condition: service_healthy
+      db:
+        condition: service_healthy
     secrets:
       - paperless_token
       - webhook_secret
@@ -380,6 +387,7 @@ services:
       - google_api_key
       - openrouter_api_key
       - hf_token
+      - ai_chat_postgres_password
 
   ai-cleanup:
     extends:
@@ -568,6 +576,8 @@ secrets:
     file: ./secrets/typesafe_api_token.txt
   phoenix_postgres_password:
     file: ./secrets/phoenix_postgres_password.txt
+  ai_chat_postgres_password:
+    file: ./secrets/ai_chat_postgres_password.txt
 
 networks:
   internal:

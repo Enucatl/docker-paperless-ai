@@ -452,6 +452,15 @@ async def test_chat_copilot_run_turn_emits_events_and_aggregates_usage():
         "completion_tokens": 6,
         "total_tokens": 36,
     }
+    activity = result.tool_activity[0]
+    assert {key: activity[key] for key in activity if key != "duration_ms"} == {
+        "tool_call_id": "call_1",
+        "name": "search_documents",
+        "arguments": {"query": "invoice"},
+        "summary": "Found 1 matching document(s).",
+        "preview": "Doc 42 matched.",
+    }
+    assert activity["duration_ms"] >= 0
     assert any(event["type"] == "tool_call_started" for event in events)
     assert any(event["type"] == "tool_call_completed" for event in events)
     assert any(

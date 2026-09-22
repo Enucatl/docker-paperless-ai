@@ -5,14 +5,14 @@ compose=(docker compose --profile cleanup)
 command_name="${1:-start}"
 
 generate() {
-  "${compose[@]}" run --rm ai-cleanup \
+  "${compose[@]}" run --no-deps --rm ai-cleanup \
     --cleanup-typesafe \
     --cleanup-correspondents-plan /review/merge-plan.json \
     --cleanup-analysis-dir /review
 }
 
 weekly() {
-  "${compose[@]}" run --rm ai-cleanup \
+  "${compose[@]}" run --no-deps --rm ai-cleanup \
     --cleanup-correspondents-weekly /review/merge-plan.json
 }
 
@@ -24,10 +24,10 @@ case "$command_name" in
     weekly
     ;;
   review)
-    "${compose[@]}" up -d cleanup-review
+    "${compose[@]}" up --no-deps -d cleanup-review
     ;;
   start)
-    "${compose[@]}" up -d cleanup-review
+    "${compose[@]}" up --no-deps -d cleanup-review
     ;;
   stop)
     "${compose[@]}" stop cleanup-review

@@ -276,10 +276,14 @@ the last fully successful apply. Later plans only compare newer correspondents
 with those canonical records (and with one another); a failed or partial apply
 does not advance that watermark.
 
+Cleanup commands assume the main Paperless AI stack is already running. They
+use `--no-deps` so one-off cleanup and review commands cannot start or recreate
+shared application services.
+
 Generate a correspondent cleanup plan:
 
 ```bash
-docker compose --profile cleanup run --rm \
+docker compose --profile cleanup run --no-deps --rm \
   ai-cleanup \
   --cleanup-typesafe \
   --cleanup-correspondents-plan /review/merge-plan.json \
@@ -289,14 +293,14 @@ docker compose --profile cleanup run --rm \
 Apply an approved plan:
 
 ```bash
-docker compose --profile cleanup run --rm -T \
+docker compose --profile cleanup run --no-deps --rm -T \
   ai-cleanup --cleanup-correspondents-apply /review/merge-plan.json
 ```
 
 Dry-run the apply step:
 
 ```bash
-docker compose --profile cleanup run --rm -T \
+docker compose --profile cleanup run --no-deps --rm -T \
   ai-cleanup --cleanup-correspondents-apply /review/merge-plan.json \
   --dry-run
 ```

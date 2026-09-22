@@ -441,11 +441,6 @@ services:
     command: --help
     networks:
       - internal
-    depends_on:
-      webserver:
-        condition: service_healthy
-      phoenix:
-        condition: service_healthy
     volumes:
       - cleanup_review_data:/review
 

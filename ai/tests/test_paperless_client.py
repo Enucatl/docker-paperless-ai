@@ -116,12 +116,35 @@ async def test_paperless_client_metadata_resolvers_use_cached_lists():
                 "storage_paths": ["Archive/2023"],
                 "tags": ["Personal", "Urgent"],
             }
-
             assert await client.get_tag_names([11]) == ["Urgent"]
             assert await client.get_document_type_name(21) == "Receipt"
             assert await client.get_storage_path_name(31) == "Archive/2023"
 
         assert mock_session.get.await_count == 4
+
+
+@pytest.mark.asyncio
+async def test_document_chat_metadata_includes_nullable_added_field():
+    client = PaperlessClient("http://test:8000", "token")
+    document = {
+        "id": 42,
+        "title": "Receipt",
+        "created": "2024-01-01",
+        "added": None,
+    }
+    response = MagicMock(status_code=200)
+    response.json.return_value = document
+    client._client.get = AsyncMock(return_value=response)
+    await client.get_document_for_chat(42)
+    assert "added" in client._client.get.await_args.kwargs["params"]["fields"]
+
+    client.get_document_for_chat = AsyncMock(return_value=document)
+    client.get_tag_names = AsyncMock(return_value=[])
+
+    metadata = await client.get_document_chat_metadata(42)
+
+    assert metadata["added"] is None
+    assert metadata["created"] == "2024-01-01"
 
 
 @pytest.mark.asyncio

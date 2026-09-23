@@ -115,7 +115,7 @@ class PaperlessClient:
             f"/api/documents/{doc_id}/",
             params={
                 "fields": (
-                    "id,title,correspondent,document_type,storage_path,created,tags,"
+                    "id,title,correspondent,document_type,storage_path,created,added,tags,"
                     "archive_serial_number,original_filename"
                 )
             },
@@ -442,6 +442,7 @@ class PaperlessClient:
             "id": int(doc["id"]),
             "title": doc.get("title") or "Untitled",
             "created": doc.get("created"),
+            "added": doc.get("added"),
             "correspondent_name": (
                 await self.get_correspondent_name(correspondent_id)
                 if correspondent_id

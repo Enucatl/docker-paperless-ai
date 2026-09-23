@@ -1,8 +1,8 @@
-# Deep Dive: Ingestion, RAG, and Observability
+# Deep Dive: Ingestion, Keyword Search, and Evaluation
 
-This write-up focuses on the ML and retrieval architecture behind the
-paperless-ngx AI layer. It complements the [index](index.md), which
-is the higher-level summary.
+This write-up describes the current document pipeline, Paperless keyword-search
+copilot, and Jev-based metadata evaluation. It complements the
+[overview](index.md).
 
 ## Architecture
 
@@ -28,32 +28,46 @@ The ingestion path is:
 1. Paperless imports a document and assigns `ai:run-ocr`.
 2. The webhook listener receives the Paperless event and enqueues the document
    ID in Redis.
-3. The AI service downloads the original PDF, sends page images to the OCR
-   model, and writes the transcript to the Paperless content field.
+3. The AI service downloads the original PDF, sends selected page images to
+   the OCR model, and writes the transcript to Paperless. It OCRs all pages up
+   to the configured threshold and only configured first/last pages for longer
+   documents.
 4. The metadata stage extracts document fields from the transcript and patches
    Paperless metadata.
 5. The metadata stage removes its stage tag when processing completes.
 
-This design accepts delays in return for operational flexibility:
-I run the energy-hungry GPU workstation on a weekly schedule to process any new documents with local models.
-This keeps running costs minimal, as my personal needs are around 1-2 documents per week.
+Paperless remains the source of truth for full text and metadata. The chat
+copilot uses Paperless's existing full-text search; it does not create
+embeddings or maintain a vector database.
+
+```mermaid
+flowchart LR
+    P[Paperless workflow] -->|document event| W[Webhook listener]
+    W -->|document ID| OQ[(Redis OCR queue)]
+    OQ --> OW[OCR worker]
+    OW --> VM[Vision model]
+    VM -->|OCR text and stage tag| P
+    OW -->|document ID| MQ[(Redis metadata queue)]
+    MQ --> MW[Metadata worker]
+    MW --> TM[Metadata model]
+    TM -->|fields and completed tag| P
+```
 
 ### Retrieval Design
 
-Chat search uses Paperless full-text search directly. The LLM is instructed to
-use short, distinctive keywords and to retry with simpler or alternate terms
-when no results appear. Paperless applies optional correspondent, document type,
-storage path, tag, and year filters. Matching document text is returned to the
-LLM, which can inspect full documents before answering.
+The model turns a user's question into short, distinctive keywords and calls
+Paperless's full-text API. If there are no results, it retries with simpler or
+alternate terms. Searches can include exact correspondent, document type,
+storage path, tag, and year filters. The tool returns matching OCR snippets;
+the model can read selected documents in full before answering.
 
 Precision searches default to 20 results; recall searches require an explicit
-limit.
+limit. There is no embedding, vector-search, or reranking stage.
 
 ### Agentic Chat
 
-The chat copilot is a LangGraph-based loop around a LiteLLM chat model. The
-agent receives tool schemas and decides when to call them. The available tools
-are intentionally narrow:
+The chat copilot runs a tool-calling loop through the shared inference client. The model
+chooses among three narrow Paperless tools:
 
 - `get_available_metadata` returns exact Paperless correspondent, document
   type, storage path, and tag names before filtered searches.
@@ -67,86 +81,66 @@ progress, final answers, and source cards. That makes the system easier to
 debug and easier to trust: the user can see when the model searched, what kind
 of source it used, and which documents back the answer.
 
-<video src="assets/chat-demo.webm" controls width="100%">
-  Chat copilot demo for the tax final bills query.
-</video>
+```mermaid
+flowchart LR
+    subgraph Chat runtime
+        U[User] <--> UI[Chat UI and WebSocket]
+        UI <--> C[Chat model and tool loop]
+        C -->|short keyword query| S[Paperless full-text API]
+        S -->|matching documents| C
+        C -->|document ID| R[Paperless OCR text]
+        R -->|full document| C
+        C -->|answer with source citations| UI
+    end
 
-The example query asks: "by searching through the tax final bills, show me how
-much I paid in federal taxes since 2022". The chat model is Gemini 3.1
-flash-lite. For this turn, the agent first inspected available metadata, then
-searched documents with Paperless keywords, decided it needed the full text of
-three documents, and then produced
-the final answer.
+    subgraph Metadata evaluation
+        D[Input-only corpus] --> X[Metadata model experiments]
+        X -->|predicted fields| J[Jev metadata judge]
+        D -->|source evidence| J
+        J --> F[Phoenix scores]
+    end
 
-This is the intended shape of the agent: the LLM plans and verifies, while
-retrieval and relevance filtering stay in deterministic tools. The turn used about 67k
-tokens, cost about $0.01, and returned the correct comprehensive answer.
+    subgraph Correspondent consolidation
+        Pairs[Name-similarity candidates] --> CJ[Jev identity judge]
+        CJ -->|same identity| Auto[Weekly auto-apply clear matches]
+        CJ -->|uncertain| Plan[Reviewable merge plan]
+        Plan --> Review[Human review]
+        Review --> Apply[Apply approved merges]
+    end
+```
 
-![Advanced Phoenix trace for a longer agentic chat turn](assets/tax-query-trace.png)
+![Chat copilot answering a Google Cloud spending question](assets/chat-demo.png)
 
-## Evaluation and model choice
+The example asks how much was spent on Google Cloud in 2026. The copilot searches
+Paperless, reads matching invoices, and returns the total through August with
+source cards. Retrieval is Paperless keyword search.
 
-The evaluation uses 50 PDFs downloaded from the
-[pixparse/idl-wds OCR testing dataset](https://huggingface.co/datasets/pixparse/idl-wds).
-The corpus contains document inputs without metadata annotations; Jev judges
-the extracted metadata directly from each document's evidence.
+## Evaluation and correspondent matching
 
-Experiments are configured in `ai/src/paperless_ai/eval/experiments.yaml`.
-Gemini 3.5 flash-lite remains fixed for OCR and chat while the metadata matrix
-compares DeepSeek 4.1 Flash, Inception Mercury 2.5, IBM Granite 4.2 8B, GLM
-Flash Latest, Qwen 3.8 Flash, Qwen 3.7 Flash, GPT 5.6 Luna, and Gemma 4 26B
-A4B.
+The evaluation corpus contains 50 input-only scanned documents from the
+[pixparse/idl-wds dataset](https://huggingface.co/datasets/pixparse/idl-wds). Each
+configured metadata model processes the same documents while OCR and chat
+models stay fixed. Jev judges extracted fields against source evidence; these
+scores are model judgments, not manually annotated ground truth.
 
-![Phoenix experiment comparison for OCR and metadata extraction models](assets/eval-comparison.png)
+Jev also powers correspondent identity matching in the cleanup workflow: a
+deterministic name-similarity pass proposes pairs, then Jev judges whether each
+pair represents the same identity. Weekly cleanup applies clear matches;
+uncertain pairs go through the review plan. Ordinary per-document correspondent
+assignment uses the deterministic name resolver.
 
-The evaluation presents four metrics:
-
-- Jev probability that the date is appropriate,
-- Jev probability that the correspondent is appropriate,
-- Jev probability that the title is appropriate,
-- derived metadata probability and calibrated confidence metrics.
-
-This supports semantic evaluation without requiring a brittle, hand-labelled
-reference value for every field.
-
-The evaluation validates the end-to-end extraction and judging path while
-holding OCR constant. OCR is roughly 10x more expensive in tokens than plain
-text metadata extraction.
-
-![Phoenix trace for the selected Gemini extraction setup](assets/full-metadata-trace.png)
-
-The deployed extraction path uses Gemini 3.5 flash-lite for OCR and metadata.
-The evaluation's input-only corpus and Jev scores keep model comparisons
-separate from production metadata annotations.
-
-Qwen 3.5 9B fit the RTX 5090 hardware and showed promise, but it had a stubborn problem:
-when prompted to reason, the model would keep "thinking" — emitting text between
-`<thinking>` and `</thinking>` tags — until it exhausted its token budget instead
-of closing the section naturally.
-
-The technical fix was straightforward but intrusive: inject custom logic into the
-logit generation loop to gradually bias the model toward emitting `</thinking>`
-once it hit a predefined token limit. This requires intercepting the generation
-stream, modifying probability distributions on-the-fly, and managing state across
-generation steps.
-
-I could have implemented that fix, but it would mean carrying custom generation
-code in this project — a maintenance burden for a personal pipeline. The chosen
-tradeoff was simplicity: use a cloud model (Gemini flash-lite) that works
-reliably out of the box, and has quite low cost per token. For a 1-2 documents/week
-workload, the extra API cost is negligible compared to the time saved not
-maintaining model-specific hacks.
+Jev does not rank chat search results or answer user queries. The copilot uses
+Paperless keyword search as described above. See the
+[evaluation report](phoenix-paperless-eval-test-report.md) for the measured
+metadata model comparison and its limitations.
 
 
 ## Observability and Cost Management
 
 Telemetry is exported through OpenTelemetry when `OTEL_EXPORTER_OTLP_ENDPOINT`
-is set. The shared telemetry helper instruments LiteLLM and LangChain, and the
-application adds spans around retrieval and tool execution. Phoenix then becomes
-the shared place to inspect chat turns, model calls, token counts, tool latency,
-retrieval sizes, and evaluation experiments.
+is set. The shared telemetry helper instruments LangChain, and the application
+adds spans around chat turns, retrieval, and tool execution. Phoenix shows these
+spans and evaluation experiments. Token usage appears when a provider returns it.
 
-The LiteLLM and Phoenix integration is especially useful here because it gives
-native traceability for LLM calls across providers. The same trace view can show
-Gemini calls, OpenAI-compatible local endpoints, token usage, latency, and cost
-metadata without a separate tracing adapter for each model API.
+The shared inference client routes model calls to OpenRouter or configured
+OpenAI-compatible endpoints.

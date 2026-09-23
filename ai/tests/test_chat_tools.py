@@ -3,7 +3,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from paperless_common.telemetry import start_span
-from paperless_ai.search.chat_agent import ChatCopilot, route_tools
+from paperless_ai.search.chat_agent import ChatCopilot
 from paperless_ai.search.tools import (
     TOOL_SCHEMAS,
     ToolExecutionResult,
@@ -29,30 +29,6 @@ def _completion(content: str, tool_calls: list[dict] | None = None) -> Completio
         usage=Usage(),
         request_id=None,
         raw={},
-    )
-
-
-def test_route_tools_goes_to_tool_node_when_tool_calls_present():
-    state = {
-        "messages": [
-            {
-                "role": "assistant",
-                "tool_calls": [
-                    {
-                        "id": "call_1",
-                        "function": {"name": "search_documents", "arguments": "{}"},
-                    }
-                ],
-            }
-        ]
-    }
-    assert route_tools(state) == "tool_node"
-
-
-def test_route_tools_ends_when_no_tool_calls():
-    assert (
-        route_tools({"messages": [{"role": "assistant", "content": "done"}]})
-        == "__end__"
     )
 
 

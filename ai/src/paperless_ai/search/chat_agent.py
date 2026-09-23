@@ -1,4 +1,4 @@
-"""LangGraph-based Paperless chat copilot."""
+"""Tool-calling Paperless chat copilot."""
 
 import time
 from dataclasses import dataclass, field
@@ -8,7 +8,6 @@ from paperless_ai.core.config import AgentConfig
 from paperless_ai.inference import complete
 from paperless_common.paperless import PaperlessClient
 from paperless_common.telemetry import set_span_attributes, start_span
-from paperless_ai.search.chat_state import ChatState
 from paperless_ai.search.tools import (
     TOOL_SCHEMAS,
     ToolExecutionResult,
@@ -36,12 +35,6 @@ SYSTEM_PROMPT = (
     "document(s) before answering if the answer depends on document contents. Read more than one "
     "when multiple candidates remain plausible."
 )
-
-
-def route_tools(state: ChatState) -> str:
-    """Route to the tool node when the assistant emitted tool calls."""
-    last_message = state["messages"][-1]
-    return "tool_node" if last_message.get("tool_calls") else "__end__"
 
 
 def _message_to_dict(message: Any) -> dict:

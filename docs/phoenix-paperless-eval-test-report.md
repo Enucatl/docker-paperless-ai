@@ -130,8 +130,8 @@ Mercury is a diffusion language model. Instead of committing to a strictly
 left-to-right answer, diffusion generation can refine multiple output
 positions over successive steps. That is plausibly well matched to a compact
 JSON object whose title, date, and correspondent should be globally coherent.
-Inception also positions Mercury 2.5 for structured facts, summarization,
-search/RAG, and schema-aligned JSON. Its 1.607-second mean latency is
+Inception also positions Mercury 2.5 for structured facts, summarization, and
+schema-aligned JSON. Its 1.607-second mean latency is
 consistent with that architecture being a good fit for this small structured
 output, although the benchmark does not isolate architecture from training
 and serving implementation.
@@ -183,7 +183,7 @@ These are hypotheses, not conclusions about the models in general.
 
 ## Production decision
 
-For this specific production workload, we will move metadata extraction to
-Mercury 2.5. It combines near-top quality with the lowest latency and a low
-estimated metadata cost, while appearing particularly well matched to compact,
-schema-constrained document extraction.
+For this specific workload, Mercury 2.5 is the preferred metadata candidate.
+It combines near-top quality with the lowest latency and a low estimated
+metadata cost in this run. The example configuration still uses Gemini 3.1
+Flash Lite for metadata extraction.

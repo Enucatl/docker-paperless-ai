@@ -375,12 +375,8 @@ async def paperless_workflow(paperless_client):
     """
     workflow_ids: list[int] = []
 
-    async def _create(
-        trigger_type: int, name: str, filter_has_tags: list | None = None
-    ) -> int:
-        wf_id = await _create_webhook_workflow(
-            paperless_client, trigger_type, name, filter_has_tags
-        )
+    async def _create(trigger_type: int, name: str) -> int:
+        wf_id = await _create_webhook_workflow(paperless_client, trigger_type, name)
         workflow_ids.append(wf_id)
         return wf_id
 
@@ -394,15 +390,11 @@ async def _create_webhook_workflow(
     client,
     trigger_type: int,
     name: str,
-    filter_has_tags: list | None = None,
 ) -> int:
     """
     Create a Paperless Workflow that POSTs {"doc_url": "{{doc_url}}"} to the
     webhook-listener on the given trigger and return the workflow ID.
 
-    filter_has_tags: list of tag IDs the document must carry for the trigger
-    to fire.  Pass the ai-review-pending tag ID here to prevent the workflow
-    from re-queuing a document after the AI has removed that tag.
     """
     payload = {
         "name": name,
@@ -412,7 +404,7 @@ async def _create_webhook_workflow(
             {
                 "type": trigger_type,
                 "sources": [],  # empty = all sources
-                "filter_has_tags": filter_has_tags or [],
+                "filter_has_tags": [],
             }
         ],
         "actions": [

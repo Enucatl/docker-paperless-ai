@@ -6,49 +6,7 @@ tokens, hostnames, and internal URLs are not exposed.
 
 ## Assets
 
-### `chat-demo.webm`
-
-Video of the `/chat` interface for the tax final bills query. It shows the user
-query, the visible tool-call panel, the final answer, and source cards.
-
 ### `chat-demo.png`
 
-Still image accompanying the chat demo. It shows the trace detail for the same
-turn, including the model/tool stack and cost context.
-
-### `data-ingestion-flow.png`
-
-Architecture diagram for the document ingestion pipeline. It shows:
-
-- Paperless-ngx document import and workflows,
-- the thin webhook listener,
-- Redis queues and stage tags,
-- the AI worker stages: OCR and metadata extraction,
-- model providers or local vLLM endpoints on the GPU workstation,
-- Phoenix for traces and token/cost visibility.
-
-### `agentic-chat-flow.png`
-
-Agentic chat architecture diagram. It shows the user query entering the
-LangGraph agent, tool fan-out, metadata and full-document reads through the
-Paperless REST API, Paperless full-text keyword search, document inspection, and the final
-source-backed response.
-
-### `phoenix-trace.png`
-
-Advanced Phoenix trace for a more complex chat turn. It shows a longer agentic
-flow with more tool calls than the tax final bills example, which makes it a
-good second observability example after the simpler demo trace.
-
-### `eval-comparison.png`
-
-Phoenix experiment comparison for the fixed-OCR metadata model matrix. The
-useful story is that the models were evaluated against a fixed document corpus
-instead of picked by intuition.
-
-### `full-metadata-trace.png`
-
-Phoenix trace/cost view for the chosen setup: Gemini 3.5 flash-lite extraction
-and Paperless full-text search. This supports the
-cost claim from the real backfill: about 2,000 documents, roughly 7,000 pages,
-and less than one dollar in Google API credits.
+Screenshot of the `/chat` interface answering a Google Cloud spending query,
+with tool progress, the final answer, and source cards.

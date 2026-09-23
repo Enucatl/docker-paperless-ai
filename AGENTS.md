@@ -17,7 +17,7 @@ and the relevant tests.
 
 ## Integration tests
 
-Tests that require Paperless, Redis, Qdrant, webhook delivery, or container
+Tests that require Paperless, Redis, webhook delivery, or container
 networking must use the Docker harness:
 
 ```bash
@@ -46,7 +46,7 @@ corresponding dataset splits. If rebuilt datasets retain stale paths, run
 
 ## Code map
 
-- `ai/src/paperless_ai/search/`: indexing, retrieval, embeddings, Qdrant, and
+- `ai/src/paperless_ai/search/`: chat copilot, Paperless keyword search, and
   the search/webhook runtime.
 - `ai/src/paperless_ai/core/`: configuration, runner, and Paperless client
   compatibility layer.

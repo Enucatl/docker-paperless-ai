@@ -196,23 +196,21 @@ services:
       broker:
         condition: service_healthy
 
-  # AI batch post-processing — runs permanently alongside paperless.
-  # Polls for documents tagged "ai-review-pending", re-OCRs them with a vision
-  # LLM, extracts metadata (title, date, correspondent) with a text LLM, and
-  # patches the documents via the paperless API. No paperless patches required.
+  # AI service — hosts the chat copilot and the OCR/metadata queue workers.
+  # Workers take document IDs from Redis, re-OCR the source, extract metadata,
+  # and update Paperless through its API. No Paperless patches are required.
   #
   # The heavy model serving (Ollama / vLLM) runs on the GPU workstation, which
   # can be turned on/off independently. While the workstation is off, this
-  # service idles gracefully — documents queue up with the pending tag.
+  # service idles gracefully — documents remain queued under their stage tags.
   #
-  # One-shot run (skip watch mode, useful for ad-hoc processing):
-  #   docker compose run --rm ai --once
+  # One-shot OCR/metadata run for ad-hoc processing:
+  #   docker compose run --rm --entrypoint python ai cli.py --once
   #
   # Dry run (preview without modifying anything):
-  #   docker compose run --rm ai --once --dry-run
+  #   docker compose run --rm --entrypoint python ai cli.py --once --dry-run
   #
-  # Set up a paperless Workflow (UI → Workflows) to auto-tag new documents:
-  #   Trigger: DOCUMENT_ADDED  →  Action: ASSIGNMENT, add tag "ai-review-pending"
+  # Paperless workflows assign ai:run-ocr and send document events to the listener.
   #
   # See ai/README.md for full setup instructions.
   ai:
@@ -277,6 +275,7 @@ services:
       #   INFERENCE_OCR_ENDPOINT=http://workstation:8000/v1     (vLLM)
       - INFERENCE_OCR_ENDPOINT
       - INFERENCE_METADATA_ENDPOINT
+      - INFERENCE_CHAT_ENDPOINT
 
       # Docker secrets (_FILE variants read the key from a file, safer):
       - GOOGLE_API_KEY_FILE=/run/secrets/google_api_key

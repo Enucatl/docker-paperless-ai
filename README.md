@@ -1,16 +1,18 @@
 # docker-paperless-ai
 
-[chat-demo.webm](https://github.com/user-attachments/assets/c14cc7c6-392d-4c8d-b0bf-c2c51b6ef124)
+![Chat copilot screenshot](docs/assets/chat-demo.png)
 
-AI batch OCR and metadata extraction for [paperless-ngx](https://github.com/paperless-ngx/paperless-ngx) — no source patches required.
+AI OCR, metadata extraction, and chat for [paperless-ngx](https://github.com/paperless-ngx/paperless-ngx) — no source patches required.
 
-Documents are ingested normally via Tesseract, then routed through a two-stage AI pipeline (OCR → metadata extraction) driven by Paperless tags and a Redis queue. Each page is re-OCRd with a vision LLM and title/date/correspondent are extracted with a text LLM. The chat copilot searches Paperless full text directly with concise keywords.
+Documents are ingested through a two-stage AI pipeline (OCR → metadata extraction) driven by Paperless tags and a Redis queue. Selected pages are re-OCRd with a vision LLM, then a text LLM extracts metadata. The chat copilot searches Paperless full text directly with concise keywords.
 
-The always-on `ai` service exposes the browser copilot. The internal `webhook-listener` is a thin ingress that only receives Paperless webhooks and enqueues work in Redis.
+The always-on `ai` service exposes the browser copilot and runs OCR/metadata
+queue workers. The internal `webhook-listener` receives Paperless events and
+enqueues document IDs in Redis.
 
-For a portfolio-oriented explanation of the architecture, model evaluation,
-RAG design, and production tradeoffs, see
-[docs/portfolio](docs/index.md).
+For a portfolio-oriented explanation of the architecture, Jev-based model
+evaluation, keyword search, and production tradeoffs, see
+[case study](docs/index.md).
 
 
 ## What is paperless-ngx?
@@ -22,16 +24,17 @@ extracts text, metadata, and performs OCR to make everything searchable. Think
 of it as a self-hosted Google Drive specifically designed for documents — with
 powerful tagging, full-text search, and automated organization.
 
-This project extends paperless-ngx with advanced AI-powered OCR and metadata
-extraction using vision and language models, while keeping the workflow entirely
-within your infrastructure.
+This project adds AI-powered OCR and metadata extraction using vision and
+language models, without changing Paperless itself.
 
 ## Privacy notice
 
 > **When using cloud models (the default), the following data is sent to the configured third-party API:**
 >
-> - **Page images** — every page of every processed document is sent to the OCR model.
-> - **Document text** — the extracted text (or the first 6000 characters) is sent to the metadata model.
+> - **Page images** — selected pages from each processed document go to the OCR model. Long documents may be limited to configured first and last pages.
+> - **Document text** — extracted text (or the first 6000 characters) goes to the metadata model.
+> - **Jev evaluation** — OCR text and predicted metadata go to TypeSafe/Jev when evaluations run.
+> - **Jev correspondent cleanup** — correspondent names and sample document titles go to TypeSafe/Jev when a plan is generated with `--cleanup-typesafe`.
 >
 > Use `INFERENCE_OCR_MODEL=ollama/...` or `INFERENCE_OCR_MODEL=openai/...` with local servers for fully on-premises processing.
 
@@ -43,7 +46,7 @@ New document arrives → Paperless Workflow fires (Document Added):
                          2. Webhook → webhook-listener enqueues doc ID in Redis
 
 OCR worker          → downloads original PDF
-                    → vision LLM OCRs each page
+                    → vision LLM OCRs selected pages
                     → writes transcript to Paperless content field
                     → tag transitions: ai:run-ocr → ai:run-metadata
 
@@ -61,10 +64,8 @@ If a document fails repeatedly, the worker retries it up to `STAGE_MAX_ATTEMPTS`
 retrying forever.
 
 ```
-Chat search query → Paperless full-text search
-                    1. The LLM searches with short, distinctive keywords
-                    2. If no results appear, it retries with simpler or alternate terms
-                    3. Matching document text is returned for the LLM to answer from
+Chat query → LLM chooses short keywords → Paperless full-text search
+          → LLM reads matching document text → cited answer
 ```
 
 ## Repo layout
@@ -107,15 +108,17 @@ Set at minimum:
 ```env
 PAPERLESS_SECRET_KEY=   # openssl rand -hex 32
 DOCKER_DOMAIN=          # your domain
-PAPERLESS_TOKEN=        # from paperless UI: Settings → API Tokens
-GOOGLE_API_KEY=         # if using Gemini (default)
 ```
+
+Put your Paperless API token in `secrets/paperless_token.txt` and your
+OpenRouter key in `secrets/openrouter_api_key.txt`. Compose reads both as Docker
+secrets. The default inference endpoint uses OpenRouter.
 
 ### 2. Configure Paperless
 
 In the Paperless UI go to **Settings -> API Tokens** and create an API token
-for the AI services. Put that value into `PAPERLESS_TOKEN` (or
-`PAPERLESS_TOKEN_FILE`).
+for the AI services. Put that value into `secrets/paperless_token.txt` for
+Compose, or `PAPERLESS_TOKEN` for a local run.
 
 The token must be allowed to:
 
@@ -270,6 +273,11 @@ the last fully successful apply. Later plans only compare newer correspondents
 with those canonical records (and with one another); a failed or partial apply
 does not advance that watermark.
 
+With `--cleanup-typesafe`, a name-similarity pass proposes correspondent
+candidates and Jev judges whether each pair represents the same identity. The
+generated merge plan remains reviewable before changes are applied. Normal
+per-document correspondent assignment uses the deterministic name resolver.
+
 Cleanup commands assume the main Paperless AI stack is already running. They
 use `--no-deps` so one-off cleanup and review commands cannot start or recreate
 shared application services.
@@ -372,47 +380,39 @@ to increasingly large slices of your archive.
 
 ## Switching models
 
-Edit `INFERENCE_OCR_MODEL`, `INFERENCE_METADATA_MODEL`, and `INFERENCE_CHAT_MODEL` in `.env`, then restart:
+Edit `INFERENCE_OCR_MODEL`, `INFERENCE_METADATA_MODEL`, and `INFERENCE_CHAT_MODEL` in `.env`, then recreate the service:
 
 ```bash
-docker compose restart ai
+docker compose up -d --force-recreate ai
 ```
 
 ```env
-# Gemini (default)
-INFERENCE_OCR_MODEL=gemini/gemini-2.5-flash
+# Default models from .env.example (served through OpenRouter)
+INFERENCE_OCR_MODEL=google/gemini-3.1-flash-lite
+INFERENCE_METADATA_MODEL=google/gemini-3.1-flash-lite
+INFERENCE_CHAT_MODEL=google/gemini-3.1-flash-lite
 
-# Claude
-INFERENCE_OCR_MODEL=claude-3-5-sonnet-20241022
-ANTHROPIC_API_KEY=your-key
-
-# OpenAI
-INFERENCE_OCR_MODEL=gpt-4o
-OPENAI_API_KEY=your-key
-
-# Use a smarter model for metadata (called once per doc, not per page)
-INFERENCE_METADATA_MODEL=gemini/gemini-2.5-pro
-
-# Use a separate chat/planning model for the copilot UI
-INFERENCE_CHAT_MODEL=gemini/gemini-2.5-flash
+# Evaluated metadata alternative (called once per document)
+INFERENCE_METADATA_MODEL=inception/mercury-2.5
 ```
 
 ## Local / self-hosted models
 
-The AI worker connects to any OpenAI-compatible API via OpenAI-compatible inference.
+The AI service uses the shared inference client. It calls OpenRouter by default;
+set each stage's endpoint to use another OpenAI-compatible server.
 
-**Ollama** (easiest):
+**Ollama**:
 
 ```env
-INFERENCE_OCR_MODEL=ollama/llava-llama3
-INFERENCE_METADATA_MODEL=ollama/llama3.2
-INFERENCE_CHAT_MODEL=ollama/llama3.2
-INFERENCE_OCR_ENDPOINT=http://workstation:11434
-INFERENCE_METADATA_ENDPOINT=http://workstation:11434
-INFERENCE_CHAT_ENDPOINT=http://workstation:11434
+INFERENCE_OCR_MODEL=llava-llama3
+INFERENCE_METADATA_MODEL=llama3.2
+INFERENCE_CHAT_MODEL=llama3.2
+INFERENCE_OCR_ENDPOINT=http://workstation:11434/v1
+INFERENCE_METADATA_ENDPOINT=http://workstation:11434/v1
+INFERENCE_CHAT_ENDPOINT=http://workstation:11434/v1
 ```
 
-**vLLM** (recommended for Nanonets-OCR2-3B):
+**vLLM**:
 
 ```env
 INFERENCE_OCR_MODEL=openai/nanonets/Nanonets-OCR2-3B
@@ -429,23 +429,10 @@ For running the model endpoints themselves, see [Enucatl/vllm](https://github.co
 
 ## Docker secrets
 
-API keys passed as plain env vars are visible in `docker inspect`. Use Docker secrets instead:
-
-```yaml
-# docker-compose.yml additions:
-secrets:
-  google_api_key:
-    file: ./secrets/google_api_key.txt
-
-services:
-  ai:
-    secrets:
-      - google_api_key
-    environment:
-      - GOOGLE_API_KEY_FILE=/run/secrets/google_api_key
-```
-
-Supported `_FILE` variants: `GOOGLE_API_KEY_FILE`, `ANTHROPIC_API_KEY_FILE`, `OPENAI_API_KEY_FILE`, `PAPERLESS_TOKEN_FILE`.
+The Compose stack already mounts API keys from files in `secrets/`. The default
+OpenRouter endpoint reads `secrets/openrouter_api_key.txt`. Supported `_FILE`
+variants include `OPENROUTER_API_KEY_FILE`, `GOOGLE_API_KEY_FILE`,
+`ANTHROPIC_API_KEY_FILE`, `OPENAI_API_KEY_FILE`, and `PAPERLESS_TOKEN_FILE`.
 
 ## Environment variables
 
@@ -453,12 +440,13 @@ Supported `_FILE` variants: `GOOGLE_API_KEY_FILE`, `ANTHROPIC_API_KEY_FILE`, `OP
 |---|---|---|
 | `PAPERLESS_URL` | `http://webserver:8000` | Paperless base URL (internal Docker network) |
 | `PAPERLESS_TOKEN` | *(required)* | API authentication token |
-| `INFERENCE_OCR_MODEL` | `gemini/gemini-2.5-flash` | OpenAI-compatible inference vision model string for OCR |
+| `INFERENCE_OCR_MODEL` | `google/gemini-3.1-flash-lite` in `.env.example` | Vision model for OCR |
 | `INFERENCE_METADATA_MODEL` | *(required)* | OpenAI-compatible inference text model for metadata extraction |
 | `INFERENCE_CHAT_MODEL` | *(required)* | OpenAI-compatible inference chat/planning model for the browser copilot |
 | `INFERENCE_OCR_ENDPOINT` | *(none)* | Base URL for local OCR server |
 | `INFERENCE_METADATA_ENDPOINT` | *(none)* | Base URL for local metadata server |
 | `INFERENCE_CHAT_ENDPOINT` | *(none)* | Base URL for the chat model server |
+| `OPENROUTER_API_KEY` | *(required for default endpoint)* | API key for OpenRouter |
 | `INFERENCE_OCR_TEMPERATURE` | *(none)* | Temperature override for OCR |
 | `INFERENCE_METADATA_TEMPERATURE` | *(none)* | Temperature override for metadata extraction |
 | `INFERENCE_CHAT_TEMPERATURE` | *(none)* | Temperature override for chat |
@@ -472,7 +460,7 @@ Supported `_FILE` variants: `GOOGLE_API_KEY_FILE`, `ANTHROPIC_API_KEY_FILE`, `OP
 | `INFERENCE_CHAT_EXTRA_KWARGS` | *(none)* | JSON object of extra OpenAI-compatible inference kwargs for chat |
 | `CHAT_DATABASE_URL` | *(required by the copilot)* | PostgreSQL URL for the dedicated copilot database |
 | `CHAT_OWNER_HEADER` | `Remote-User` | Reverse-proxy header containing the authenticated user ID |
-| `GOOGLE_API_KEY` | *(none)* | For Gemini models |
+| `GOOGLE_API_KEY` | *(none)* | Available to integrations that use Google directly; the default inference endpoint uses OpenRouter |
 | `ANTHROPIC_API_KEY` | *(none)* | For Claude models |
 | `OPENAI_API_KEY` | *(none)* | For OpenAI / vLLM models |
 | `POLL_INTERVAL` | `300` | Seconds between polls in watch mode |
@@ -482,17 +470,19 @@ Supported `_FILE` variants: `GOOGLE_API_KEY_FILE`, `ANTHROPIC_API_KEY_FILE`, `OP
 
 ## Chat search retrieval
 
-Chat search uses Paperless full-text search directly. The copilot sends concise,
-distinctive keywords, applies optional Paperless metadata filters, and retries
-with simpler or alternate keywords when a search returns no results.
+Chat search uses Paperless's full-text API; this project does not maintain a
+separate embedding index or vector database. The copilot sends concise,
+distinctive keywords, can apply exact Paperless metadata filters, and retries
+with simpler or alternate keywords when a search returns no results. It can
+read matching OCR text before answering and cite the source documents.
 
 ## Customising prompts
 
-Edit `ai/prompt.txt` and `ai/metadata_prompt.txt` — they are mounted into the container as read-only volumes, so no rebuild is needed:
+Edit `ai/src/paperless_ai/prompt.txt` and
+`ai/src/paperless_ai/metadata_prompt.txt`, then rebuild the AI image:
 
 ```bash
-# Edit, then restart
-docker compose restart ai
+docker compose up -d --build ai
 ```
 
 ## Finding processed documents
@@ -585,8 +575,8 @@ docker compose -f docker-compose.yml -f docker-compose.test.yml \
 
 ### Evaluation framework
 
-The `ai/eval/` directory contains an input-only corpus of 50 scanned documents
-from the [IDL dataset](https://huggingface.co/datasets/aharley/rvl-cdip). Each
+The `ai/src/paperless_ai/eval/` directory contains an input-only corpus of 50
+scanned documents from [pixparse/idl-wds](https://huggingface.co/datasets/pixparse/idl-wds). Each
 entry identifies a document and may carry split, tag, and source organization
 metadata. It contains no metadata annotations.
 
@@ -595,27 +585,32 @@ metadata. It contains no metadata annotations.
 Assign the train/validation split (one-time, deterministic):
 
 ```bash
-docker compose run --rm --entrypoint python ai eval/assign_splits.py
+cd ai
+uv run python -m paperless_ai.eval.assign_splits
 ```
 
-This writes a `"split": "test" | "validation"` field to each entry in `eval_dataset.json`. Ten representative documents are held out as a validation set for prompt tuning and hyperparameter search; the remaining ~40 are the test set.
+This writes a `"split": "test" | "validation"` field to each entry in
+`ai/src/paperless_ai/eval/eval_dataset.json`. Ten representative documents are
+held out as a validation set; the remaining 40 are the test set.
 
 #### Running evaluations
 
-Evaluations run all experiments defined in `ai/eval/experiments.yaml` and log results to Arize Phoenix (start it first with `docker compose up -d phoenix`).
+Evaluations run all experiments defined in
+`ai/src/paperless_ai/eval/experiments.yaml` and log results to Arize Phoenix.
+They require `secrets/typesafe_api_token.txt` for the Jev judge.
 
 ```bash
 # Smoke test — single tagged document, verifies the pipeline works end-to-end
 docker compose run --build --rm ai-eval
 
 # Run against the test set
-EVAL_SPLIT=test docker compose run --build --rm ai-eval
+docker compose run --build --rm ai-eval --split test
 
 # Run against the held-out validation set
-EVAL_SPLIT=validation docker compose run --build --rm ai-eval
+docker compose run --build --rm ai-eval --split validation
 
 # Run against all documents
-EVAL_SPLIT=all docker compose run --build --rm ai-eval
+docker compose run --build --rm ai-eval --split all
 ```
 
 The `ai-eval` service defaults to `code-test` for a fast smoke run. Each split
@@ -634,34 +629,37 @@ Each evaluation run reports per-experiment:
 | `jev_date` | Jev probability that the predicted date is the appropriate primary document date |
 | `jev_correspondent` | Jev probability that the predicted correspondent is appropriate |
 | `jev_title` | Jev probability that the predicted title is appropriate |
+| `jev_summary` | Jev probability that the summary is accurate and useful |
 | `jev_metadata` | Arithmetic mean of the three Jev field scores; derived, not another judgment |
+| `jev_document_understanding` | Mean of date, correspondent, title, and summary scores |
 | `jev_*_confidence` | Jev confidence for each field, plus the derived metadata mean |
 
 A comparison is available in Phoenix after each run:
 
 ```
 === Experiment Comparison ===
-  baseline-flash:  jev_date=0.97  jev_correspondent=0.84  jev_title=0.91
-  creative-flash:  jev_date=0.89  jev_correspondent=0.81  jev_title=0.88
+  glm-flash-latest:       jev_metadata=0.8474
+  inception-mercury-2.5: jev_metadata=0.8428
 ```
 
 #### Adding experiments
 
-Edit `ai/eval/experiments.yaml` — no rebuild required. Any `AgentConfig` field can be overridden per experiment:
+Edit `ai/src/paperless_ai/eval/experiments.yaml`, then rebuild `ai-eval`.
+Any `AgentConfig` field can be overridden per experiment:
 
 ```yaml
 experiments:
   - name: "baseline-flash"
-    ocr_model: "gemini/gemini-2.5-flash"
-    metadata_model: "gemini/gemini-2.5-flash"
-    temperature: 0.0
+    ocr_model: "google/gemini-3.5-flash-lite"
+    metadata_model: "inception/mercury-2.5"
+    metadata_temperature: 0.75
 
   - name: "local-nuextract"
     ocr_model: "openai/Nanonets-OCR2-3B"
     ocr_endpoint: "http://workstation:8100/v1"
     metadata_model: "openai/numind/NuExtract-2.0-4B"
     metadata_endpoint: "http://workstation:8101/v1"
-    temperature: 0.0
+    metadata_temperature: 0.0
 ```
 
 ## Security baseline

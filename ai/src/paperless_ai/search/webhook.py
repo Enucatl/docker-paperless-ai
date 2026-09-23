@@ -43,7 +43,6 @@ _worker_tasks: list[asyncio.Task] = []
 _worker_heartbeats: dict[str, float] = {"ocr": 0.0, "metadata": 0.0}
 _worker_ready: bool = False
 _worker_setup_error: str | None = None
-PAPERLESS_SEARCH_PAGE_SIZE = 50
 
 
 def _is_retryable_paperless_error(exc: Exception) -> bool:
@@ -2419,23 +2418,6 @@ async def chat_ws(websocket: WebSocket) -> None:
             await emit({"type": "turn_completed", "success": True})
     except WebSocketDisconnect:
         return
-
-
-async def _empty_list() -> list[int]:
-    return []
-
-
-async def _keyword_search_safe(query: str) -> list[int]:
-    """Wrapper around keyword_search() that treats errors as empty results."""
-    if _paperless_client is None:
-        return []
-    try:
-        return await _paperless_client.search_documents(
-            query, page_size=PAPERLESS_SEARCH_PAGE_SIZE
-        )
-    except Exception as e:
-        log.warning("Keyword search failed: %s", e)
-        return []
 
 
 def _worker_health_snapshot() -> tuple[bool, dict]:

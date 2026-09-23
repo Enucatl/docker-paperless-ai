@@ -9,27 +9,24 @@ extracts text, metadata, and performs OCR to make everything searchable. Think
 of it as a self-hosted Google Drive specifically designed for documents — with
 powerful tagging, full-text search, and automated organization.
 
-This project extends paperless-ngx with advanced AI-powered OCR and metadata
-extraction using vision and language models, while keeping the workflow entirely
-within your infrastructure, and without patching paperless-ngx itself.
+This project adds AI-powered OCR, metadata extraction, and a browser chat
+copilot to Paperless-ngx without patching Paperless itself.
 
-[chat-demo.webm](https://github.com/user-attachments/assets/34e8d8ad-590b-443d-85e5-608ff87cb4dc)
+![Chat copilot screenshot](assets/chat-demo.png)
 
-New documents are imported through
-the normal Paperless flow, then an external AI service re-OCRs the pages,
-extracts structured metadata, indexes the content for semantic retrieval, and
-serves a browser copilot (and API endpoint) that can search, inspect, and
-answer questions over the archive with a modern agentic architecture.
+New documents follow the normal Paperless flow. An AI service re-OCRs selected
+pages and extracts metadata. The chat copilot searches Paperless full text with
+keywords, reads matching documents, and returns source-backed answers; it does
+not build a separate semantic or vector index.
 
 It supports both cloud and self-hosted
 models, and makes model quality visible through evaluation and tracing.
 
-The example query asks the copilot to search my recent tickets from the zoo.
-The Gemini 3.1 flash-lite chat model
-inspects available metadata, searches Paperless full text with keywords, reads
-three documents in full, and then returns a correct comprehensive answer. This costs less than one cent, and is fully traced by arize phoenix.
-
-![Trace detail for the demo query](assets/chat-demo.png)
+The example asks how much was spent on Google Cloud in 2026. The copilot
+searches Paperless, reads matching invoices, and cites the documents behind its
+answer. Jev evaluates metadata extraction and judges proposed correspondent
+merges in the cleanup workflow. Chat retrieval separately uses Paperless
+keyword search.
 
 
 
@@ -41,6 +38,7 @@ three documents in full, and then returns a correct comprehensive answer. This c
   a metadata LLM.
 - Provides a browser chat copilot that can call tools, search the archive, read
   source text, and return source-backed answers.
-- Leverages modern frameworks to provide cloud and local model compatibility (LiteLLM) and first-class observability and evaluation (Arize Phoenix)
+- Uses the shared inference client for cloud and local models, with traces and evaluation in Arize Phoenix.
 
-Learn more in the [deep dive](deep-dive.md)
+Learn more in the [deep dive](deep-dive.md) and the
+[Jev evaluation report](phoenix-paperless-eval-test-report.md).

@@ -716,13 +716,14 @@ async def chat_ui() -> HTMLResponse:
   <style>
     :root { color-scheme: light; --chat-bg:#f8faf9; --chat-panel:#fff; --chat-muted:#64748b; --chat-border:#dce3e8; --chat-primary:#17541f; --chat-primary-soft:#e4f0e6; --chat-radius:12px; }
     * { box-sizing: border-box; }
-    html, body { width:100%; min-height:100%; margin:0; }
-    body { overflow:hidden; background:var(--chat-bg); color:#111827; font-family:var(--bs-body-font-family,system-ui,sans-serif); }
+    html, body { width:100%; height:100%; min-height:0; margin:0; }
+    body { overflow:hidden; background:var(--chat-bg); color:#111827; font:14px/1.5 var(--bs-body-font-family,system-ui,sans-serif); }
+    [hidden] { display:none!important; }
     button, a, textarea { font:inherit; }
     :focus-visible { outline:3px solid #18752b!important; outline-offset:2px; }
     .paperless-topbar { min-height:52px; height:52px; background:var(--chat-primary); color:#fff; }
     .paperless-topbar-inner { height:100%; display:flex; align-items:center; gap:12px; padding:0 20px; }
-    .brand-link { color:inherit; text-decoration:none; font-weight:700; }
+    .brand-link { display:flex; align-items:center; gap:6px; min-width:0; color:inherit; text-decoration:none; font-weight:700; }
     .brand-divider { height:24px; border-left:1px solid #ffffff80; }
     .topbar-title { font-weight:600; }
     .topbar-spacer { flex:1; }
@@ -730,20 +731,22 @@ async def chat_ui() -> HTMLResponse:
     .topbar-button { min-width:44px; min-height:44px; border:0; background:transparent; color:inherit; border-radius:8px; }
     .chat-shell { height:calc(100dvh - 52px); height:calc(100vh - 52px); }
     @supports (height: 100dvh) { .chat-shell { height:calc(100dvh - 52px); } }
-    .chat-layout { height:100%; display:grid; grid-template-columns:300px minmax(560px,1fr) minmax(440px,31vw); align-items:stretch; }
+    .chat-layout { height:100%; display:grid; grid-template-columns:260px minmax(0,1fr) minmax(380px,31vw); align-items:stretch; }
     .history-column, .chat-column, .preview-column { min-width:0; min-height:0; }
     .history-column { display:flex; flex-direction:column; background:var(--chat-bg); border-right:1px solid var(--chat-border); }
     .history-panel { display:flex; flex:1; flex-direction:column; min-height:0; overflow:hidden; }
     .history-header { display:flex; align-items:center; justify-content:space-between; gap:8px; padding:16px 12px; }
-    .history-header strong { font-size:1rem; }
-    #new-conversation { width:100%; min-height:46px; }
+    .history-header strong { position:absolute; width:1px; height:1px; overflow:hidden; clip-path:inset(50%); }
+    #new-conversation { width:100%; min-height:46px; background:var(--chat-primary); border-color:var(--chat-primary); color:#fff; font-weight:600; }
+    #new-conversation::before { content:'+'; margin-right:10px; font-size:1.3rem; font-weight:400; }
     .history-header { flex-wrap:wrap; }
     .history-list { display:grid; align-content:start; gap:12px; flex:1; min-height:0; overflow:auto; padding:8px 12px; }
     .history-group { display:grid; gap:4px; }
     .history-group h3 { margin:0; padding:4px 10px; color:var(--chat-muted); font-size:.75rem; font-weight:600; }
-    .history-item { display:flex; width:100%; min-width:0; min-height:52px; flex-direction:column; justify-content:center; gap:2px; border:0; border-radius:8px; background:transparent; color:inherit; padding:7px 10px; text-align:left; overflow:hidden; }
-    .history-item-title { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-    .history-item time { color:var(--chat-muted); font-size:.75rem; }
+    .history-item { display:flex; width:100%; min-width:0; min-height:44px; align-items:center; gap:8px; border:0; border-radius:8px; background:transparent; color:inherit; padding:7px 10px; text-align:left; overflow:hidden; }
+    .history-item::before { content:''; width:15px; height:13px; border:1px solid currentColor; border-radius:5px 5px 5px 0; flex:none; opacity:.65; }
+    .history-item-title { flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    .history-item time { flex:none; color:var(--chat-muted); font-size:.7rem; }
     .history-item:hover, .history-item.active { background:var(--chat-primary-soft); color:var(--chat-primary); }
     .history-empty { color:var(--chat-muted); font-size:.875rem; padding:12px; }
     .history-actions { display:flex; gap:8px; padding:12px; border-top:1px solid var(--chat-border); }
@@ -756,7 +759,7 @@ async def chat_ui() -> HTMLResponse:
     .archive-footer-heading { color:#111827; font-weight:600; }
     .archive-footer button { justify-self:start; min-height:36px; }
     .chat-column { display:flex; flex-direction:column; min-height:0; background:var(--chat-bg); }
-    .chat-heading { padding:30px 20px 16px; }
+    .chat-heading { flex:none; padding:22px 24px 16px; }
     .chat-heading h1 { margin:0; font-size:2.125rem; line-height:1.2; font-weight:700; }
     .chat-heading p { margin:8px 0 0; color:var(--chat-muted); }
     .socket-banner { display:none; margin:0 20px 12px; }
@@ -772,19 +775,22 @@ async def chat_ui() -> HTMLResponse:
     .tool-card { padding:10px 12px; }
     .tool-card-header { display:flex; justify-content:space-between; gap:12px; }
     .tool-card-status { color:var(--chat-muted); }
-    .tool-card details { margin-top:6px; }
+    .tool-card details { margin:0; }
     .tools-panel h3 { margin:0; padding:10px 12px 0; color:var(--chat-primary); font-size:.95rem; }
     .markdown-fallback { margin-top:8px; color:var(--chat-muted); font-size:.85rem; }
     .recovery-panel { display:none; margin:0 20px 8px; padding:12px; border:1px solid #f0c36d; border-radius:8px; background:#fff8e6; }
     .recovery-panel.active { display:grid; gap:8px; }
-    .composer { display:grid; grid-template-columns:minmax(0,1fr) 44px; align-items:end; gap:12px; margin:8px 20px 16px; padding:8px; border:1px solid var(--chat-border); border-radius:16px; background:#fff; box-shadow:0 2px 8px #1118270d; padding-bottom:calc(8px + env(safe-area-inset-bottom)); }
+    .composer { flex:none; display:grid; grid-template-columns:minmax(0,1fr) 44px; align-items:center; gap:12px; margin:8px 20px 16px; padding:16px; border:1px solid var(--chat-border); border-radius:12px; background:#fff; padding-bottom:calc(16px + env(safe-area-inset-bottom)); }
     .composer textarea { width:100%; min-height:44px; max-height:35vh; resize:none; border:0; border-radius:999px; padding:11px 14px; line-height:1.5; overflow-y:auto; }
     .composer-actions .btn { width:44px; height:44px; padding:0; border-radius:50%; font-size:0; }
+    .composer-actions .btn { background:var(--chat-primary); border-color:var(--chat-primary); }
     .composer-actions .btn::after { content:'↑'; font-size:1.4rem; }
     .preview-column { min-width:0; background:#fff; border-left:1px solid var(--chat-border); }
     .preview-panel { height:100%; min-height:0; display:flex; flex-direction:column; overflow:auto; background:#fff; }
     .preview-placeholder { margin:auto; padding:24px; max-width:32ch; color:var(--chat-muted); text-align:center; }
-    .preview-header { display:none; flex:none; align-items:flex-start; justify-content:space-between; gap:12px; padding:20px; border-bottom:1px solid var(--chat-border); }
+    .preview-header { display:none; flex:none; align-items:flex-start; justify-content:space-between; gap:10px; padding:20px 20px 8px; }
+    .preview-header > div { flex:1; min-width:0; }
+    #preview-open-link { flex:none; white-space:nowrap; font-size:.75rem; padding:8px; }
     .preview-header.active { display:flex; }
     .preview-header h2 { font-size:1.25rem; line-height:1.3; }
     .preview-metadata { flex:none; padding:16px 20px; }
@@ -792,11 +798,12 @@ async def chat_ui() -> HTMLResponse:
     .preview-metadata dt { color:var(--chat-muted); font-weight:500; }
     .preview-metadata dd { min-width:0; margin:0; overflow-wrap:anywhere; }
     .preview-tags { display:flex; flex-wrap:wrap; gap:4px; }
-    .preview-frame-wrap { display:none; min-height:320px; height:50vh; flex:none; padding:12px; background:#eef1ef; }
-    .preview-frame-wrap.active { display:block; }
+    .preview-frame-wrap { display:none; min-height:320px; flex:1; padding:12px; background:#f2f5f4; }
+    .preview-frame-wrap.active { display:flex; flex-direction:column; }
     .preview-state { margin:0 0 8px; color:var(--chat-muted); font-size:.875rem; }
-    .preview-frame { width:100%; height:calc(100% - 28px); min-height:280px; border:0; border-radius:8px; background:#fff; box-shadow:0 2px 8px #11182712; }
-    .preview-close { min-width:44px; min-height:44px; }
+    .preview-state:empty { display:none; }
+    .preview-frame { width:100%; flex:1; min-height:280px; border:0; border-radius:8px; background:#fff; box-shadow:0 2px 8px #11182712; }
+    .preview-close { min-width:32px; min-height:32px; padding:0; border:0; font-size:1.4rem; }
     .drawer-backdrop { display:none; }
     .skip-link { position:fixed; z-index:20; top:8px; left:8px; transform:translateY(-150%); padding:10px; background:#fff; color:#111827; }
     .skip-link:focus { transform:none; }
@@ -808,12 +815,12 @@ async def chat_ui() -> HTMLResponse:
       padding: 0.9rem 1rem;
       border-radius: 1rem;
       white-space: pre-wrap;
-      box-shadow: 0 0.35rem 0.8rem rgba(0, 0, 0, 0.05);
+      box-shadow: none;
     }
     .bubble.user {
       justify-self: end;
-      background: var(--chat-primary);
-      color: #fff;
+      background: var(--chat-primary-soft);
+      color: #111827;
       border-bottom-right-radius: 0.3rem;
     }
     .turn {
@@ -924,7 +931,9 @@ async def chat_ui() -> HTMLResponse:
       font-size: 0.82rem;
       border: 1px solid var(--chat-border);
     }
-    .tools-panel,
+    .tools-panel { padding:4px 0 4px 8px; }
+    .tools-panel h3 { position:absolute; width:1px; height:1px; overflow:hidden; clip-path:inset(50%); }
+    .turn-status:empty, .turn-time:empty, .timeline:empty, .usage:empty, .bubble.assistant:empty { display:none; }
     .sources-panel {
       border: 1px solid var(--chat-border);
       border-radius: 0.8rem;
@@ -944,20 +953,30 @@ async def chat_ui() -> HTMLResponse:
     }
     .tool-list {
       display: grid;
-      gap: 0.75rem;
-      padding: 0 0.95rem 0.95rem;
+      gap: 0;
+      padding: 0 0 0 16px;
     }
     .tool-card {
-      border: 1px solid var(--chat-border);
-      border-radius: 0.8rem;
-      background: #fff;
-      overflow: hidden;
+      position:relative;
+      border:0;
+      border-left:1px solid var(--chat-border);
+      border-radius:0;
+      background:transparent;
+      padding:0 0 16px 24px;
     }
+    .tool-card:last-child { border-color:transparent; padding-bottom:0; }
+    .tool-card::before { content:'…'; position:absolute; left:-10px; top:0; width:19px; height:19px; border-radius:50%; background:#e4eae7; color:var(--chat-primary); text-align:center; line-height:19px; box-shadow:0 0 0 4px var(--chat-bg); }
+    .tool-card[data-state="complete"]::before { content:'✓'; background:#18752b; color:white; }
+    .tool-card[data-state="interrupted"]::before, .tool-card[data-interrupted="true"]::before { content:'!'; background:#fff3cd; color:#664d03; }
+    .tool-card-header { display:grid; gap:0; font-size:.85rem; }
+    .tool-card-header strong { color:#111827; font-weight:500; }
+    .tool-card-status { font-size:.8rem; }
     .tool-card details summary {
-      padding: 0.7rem 0.85rem;
-      background: #f8f9fa;
-      color: var(--bs-body-color);
-      font-weight: 600;
+      padding: 0;
+      background: transparent;
+      color: var(--chat-muted);
+      font-size:.75rem;
+      font-weight:400;
     }
     .tool-body {
       padding: 0.8rem 0.85rem 0.9rem;
@@ -978,7 +997,7 @@ async def chat_ui() -> HTMLResponse:
       white-space: pre-wrap;
       word-break: break-word;
     }
-    .source-list { display:grid; grid-template-columns:repeat(auto-fit,minmax(min(100%,220px),1fr)); gap:12px; padding:0 0.95rem 0.95rem; }
+    .source-list { display:grid; grid-template-columns:repeat(auto-fill,minmax(min(100%,220px),1fr)); gap:12px; padding:0 0.95rem 0.95rem; }
     .source-card {
       display: grid;
       grid-template-columns:56px minmax(0,1fr);
@@ -1034,12 +1053,12 @@ async def chat_ui() -> HTMLResponse:
       color: #664d03;
       border-color: #ffe69c;
     }
-    @media (min-width:1440px) { .chat-layout.inspector-closed { grid-template-columns:300px minmax(0,1fr) 0; } .chat-layout.inspector-closed .preview-column { display:none; } }
+    @media (min-width:1440px) { .chat-layout.inspector-closed { grid-template-columns:260px minmax(0,1fr) 0; } .chat-layout.inspector-closed .preview-column { display:none; } }
     @media (min-width:1200px) and (max-width:1439px) { .chat-layout { grid-template-columns:240px minmax(0,1fr); } .preview-column { position:fixed; z-index:12; inset:52px 0 0 auto; width:min(480px,100vw); transform:translateX(100%); transition:transform .18s ease; box-shadow:-8px 0 24px #1118271a; } .chat-layout[data-inspector-open="true"] .preview-column { transform:none; } }
     @media (max-width:1199px) { .chat-layout { grid-template-columns:minmax(0,1fr); } .history-column,.preview-column { position:fixed; z-index:12; top:52px; bottom:0; width:min(300px,calc(100vw - 32px)); background:#fff; box-shadow:8px 0 24px #1118271a; transition:transform .18s ease; } .history-column { left:0; transform:translateX(-105%); } .preview-column { right:0; width:min(480px,100vw); transform:translateX(105%); box-shadow:-8px 0 24px #1118271a; } .chat-layout[data-history-open="true"] .history-column,.chat-layout[data-inspector-open="true"] .preview-column { transform:none; } .drawer-backdrop.active { display:block; position:fixed; z-index:11; inset:52px 0 0; border:0; background:#11182766; } .topbar-button { display:inline-flex; align-items:center; justify-content:center; } }
     @media (min-width:1200px) { #history-toggle { display:none; } }
     @media (max-width:767px) { .paperless-topbar-inner { padding:0 8px; gap:8px; } .brand-label { max-width:108px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; } .connection-status { font-size:.75rem; } .chat-heading { padding:22px 12px 12px; } .chat-heading h1 { font-size:26px; } .conversation { padding:12px; } .composer { margin:8px 12px 12px; } .source-list { grid-template-columns:1fr; } .preview-column { width:100vw!important; } .preview-frame-wrap { height:45vh; min-height:280px; } }
-    @media (max-width:400px) { .paperless-topbar-inner { gap:4px; padding-inline:4px; } .brand-divider { display:none; } .brand-label { max-width:42px; } .topbar-title { font-size:.8rem; white-space:nowrap; } .connection-status { max-width:64px; overflow-wrap:anywhere; font-size:.68rem; } .topbar-button { min-width:44px; padding:0 4px; font-size:.75rem; } }
+    @media (max-width:400px) { .paperless-topbar-inner { gap:6px; padding-inline:4px; } .brand-divider { display:none; } .brand-label { max-width:70px; } .topbar-title { font-size:.8rem; white-space:nowrap; } .connection-status { white-space:nowrap; font-size:.68rem; } .topbar-button { min-width:44px; padding:0 4px; font-size:.75rem; } }
     @media (prefers-reduced-motion:reduce) { *,*::before,*::after { scroll-behavior:auto!important; transition:none!important; animation:none!important; } }
   </style>
 </head>
@@ -1088,7 +1107,7 @@ async def chat_ui() -> HTMLResponse:
           <div id="recovery-panel" class="recovery-panel" role="status" aria-live="polite"></div>
           <form id="chat-form" class="composer">
             <label class="visually-hidden" for="prompt">Message your archive</label>
-            <textarea id="prompt" placeholder="Ask about invoices from 2024, documents from a correspondent, or the contents of a specific receipt..." aria-describedby="composer-help"></textarea>
+            <textarea id="prompt" placeholder="Ask about invoices, receipts, correspondents, or document contents…" aria-describedby="composer-help"></textarea>
             <span id="composer-help" class="visually-hidden">Press Enter to send. Press Shift and Enter for a new line. Control and Enter or Command and Enter also send.</span>
             <div class="composer-actions">
               <button id="send-button" type="submit" class="btn btn-primary px-4">Send</button>
@@ -1109,7 +1128,7 @@ async def chat_ui() -> HTMLResponse:
               <p id="preview-subtitle" class="text-muted small mb-0"></p>
             </div>
             <a id="preview-open-link" class="btn btn-sm btn-outline-secondary" target="_blank" rel="noopener noreferrer">Open in Paperless</a>
-            <button id="preview-close" class="preview-close btn btn-outline-secondary" type="button" aria-label="Close document inspector">Close</button>
+            <button id="preview-close" class="preview-close btn btn-outline-secondary" type="button" aria-label="Close document inspector">×</button>
           </div>
           <div id="preview-metadata" class="preview-metadata" hidden><dl></dl></div>
           <div id="preview-frame-wrap" class="preview-frame-wrap">
@@ -1437,8 +1456,8 @@ async def chat_ui() -> HTMLResponse:
       const date = new Date(timestamp);
       if (Number.isNaN(date.getTime())) return "Date unavailable";
       return group === "Today"
-        ? new Intl.DateTimeFormat(undefined, { hour: "numeric", minute: "2-digit" }).format(date)
-        : new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric", year: date.getFullYear() === new Date().getFullYear() ? undefined : "numeric" }).format(date);
+        ? new Intl.DateTimeFormat(navigator.languages, { hour: "numeric", minute: "2-digit" }).format(date)
+        : new Intl.DateTimeFormat(navigator.languages, { month: "short", day: "numeric", year: date.getFullYear() === new Date().getFullYear() ? undefined : "numeric" }).format(date);
     }
 
     function renderConversationList() {
@@ -1464,7 +1483,7 @@ async def chat_ui() -> HTMLResponse:
           button.className = `history-item ${item.id === selectedConversationId ? "active" : ""}`;
           button.dataset.conversationId = item.id;
           button.title = item.title;
-          button.setAttribute("aria-label", `${item.title}, updated ${new Date(item.updated_at).toLocaleString()}`);
+          button.setAttribute("aria-label", `${item.title}, updated ${new Date(item.updated_at).toLocaleString(navigator.languages)}`);
           if (item.id === selectedConversationId) button.setAttribute("aria-current", "page");
           const title = document.createElement("span");
           title.className = "history-item-title";
@@ -1472,7 +1491,7 @@ async def chat_ui() -> HTMLResponse:
           const time = document.createElement("time");
           time.dateTime = item.updated_at;
           time.textContent = formatHistoryTime(item.updated_at, label);
-          time.title = new Date(item.updated_at).toLocaleString();
+          time.title = new Date(item.updated_at).toLocaleString(navigator.languages);
           button.append(title, time);
           button.addEventListener("click", () => selectConversation(item.id));
           group.appendChild(button);
@@ -1675,8 +1694,8 @@ async def chat_ui() -> HTMLResponse:
       const date = createdAt ? new Date(createdAt) : new Date();
       if (!Number.isNaN(date.getTime())) {
         time.dateTime = date.toISOString();
-        time.textContent = new Intl.DateTimeFormat(undefined, { hour: "numeric", minute: "2-digit" }).format(date);
-        time.title = createdAt ? date.toLocaleString() : "Received in this browser";
+        time.textContent = new Intl.DateTimeFormat(navigator.languages, { hour: "numeric", minute: "2-digit" }).format(date);
+        time.title = createdAt ? date.toLocaleString(navigator.languages) : "Received in this browser";
         conversation.appendChild(time);
       }
       refreshEmptyState();
@@ -1706,7 +1725,7 @@ async def chat_ui() -> HTMLResponse:
         const date = new Date(createdAt);
         if (!Number.isNaN(date.getTime())) {
           time.dateTime = date.toISOString();
-          time.textContent = new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(date);
+          time.textContent = new Intl.DateTimeFormat(navigator.languages, { dateStyle: "medium", timeStyle: "short" }).format(date);
         }
       }
 
@@ -1750,10 +1769,6 @@ async def chat_ui() -> HTMLResponse:
       if (!turn) return;
       turn.status.textContent = text;
       chatAnnouncements.textContent = text;
-      const item = document.createElement("div");
-      item.className = "timeline-item";
-      item.textContent = text;
-      turn.timeline.appendChild(item);
       scrollConversation();
     }
 
@@ -1784,7 +1799,7 @@ async def chat_ui() -> HTMLResponse:
     }
 
     function toolLabel(name) {
-      return ({ get_available_metadata: "Check archive metadata", search_documents: "Search documents", read_document: "Read document" })[name] || name || "Unknown tool";
+      return ({ get_available_metadata: "Check archive metadata", search_documents: "Search documents", read_document: "Read document", read_full_document: "Read document" })[name] || name || "Unknown tool";
     }
 
     function getOrCreateToolCard(turnId, payload, position = 0) {
@@ -1804,7 +1819,8 @@ async def chat_ui() -> HTMLResponse:
       header.append(label, state);
       const details = document.createElement("details");
       const summary = document.createElement("summary");
-      summary.textContent = "Details";
+      summary.title = "Show activity details";
+      summary.appendChild(header);
       const body = document.createElement("div");
       body.className = "tool-body";
       const meta = document.createElement("div");
@@ -1816,7 +1832,7 @@ async def chat_ui() -> HTMLResponse:
       args.textContent = formatJson(payload.arguments ?? {});
       body.append(meta, preview, args);
       details.append(summary, body);
-      card.append(header, details);
+      card.appendChild(details);
       turn.toolList.appendChild(card);
       const tool = { card, details, meta, preview, args, label, state };
       turn.toolEntries.set(key, tool);
@@ -1829,6 +1845,7 @@ async def chat_ui() -> HTMLResponse:
       if (!tool) return;
       tool.label.textContent = toolLabel(payload.name);
       tool.args.textContent = formatJson(payload.arguments ?? {});
+      tool.card.dataset.state = started ? "running" : payload.interrupted ? "interrupted" : "complete";
       if (started) {
         tool.state.textContent = "Running…";
         tool.meta.replaceChildren();
@@ -1843,7 +1860,6 @@ async def chat_ui() -> HTMLResponse:
           return span;
         }));
         tool.preview.textContent = payload.preview || "";
-        tool.details.hidden = !payload.arguments && !payload.preview;
       }
       scrollConversation();
     }
@@ -1892,7 +1908,7 @@ async def chat_ui() -> HTMLResponse:
         if (date.getFullYear() !== year || date.getMonth() !== month - 1 || date.getDate() !== day) return "Not available";
       } else date = new Date(value);
       if (Number.isNaN(date.getTime())) return "Not available";
-      return date.toLocaleDateString();
+      return new Intl.DateTimeFormat(navigator.languages, { dateStyle: "medium" }).format(date);
     }
 
     function renderSourceBadges(source) {
@@ -2134,7 +2150,7 @@ async def chat_ui() -> HTMLResponse:
       } else {
         turn.answer.innerHTML = `<div class="markdown-body">${html}</div>`;
       }
-      turn.status.textContent = "Answer ready.";
+      turn.status.textContent = "";
       scrollConversation();
     }
 
@@ -2276,7 +2292,7 @@ async def chat_ui() -> HTMLResponse:
           recoveryNeedsRefresh = false;
           renderRecovery();
         } else if (turns.has(turnId)) {
-          turns.get(turnId).status.textContent = "Answer ready.";
+          turns.get(turnId).status.textContent = "";
           chatAnnouncements.textContent = "Answer ready.";
           refreshConversations().catch((error) => setSocketBanner("warning", error.message, true));
         }

@@ -803,7 +803,6 @@ async def chat_ui() -> HTMLResponse:
     dialog { width:min(420px,calc(100vw - 32px)); border:1px solid var(--chat-border); border-radius:12px; padding:24px; color:#111827; }
     dialog::backdrop { background:#11182780; }
     dialog button { min-height:44px; }
-    .bubble { max-width:min(78ch,100%); padding:14px 16px; border-radius:12px; white-space:pre-wrap; box-shadow:0 2px 8px #0000000d; }
     .bubble {
       max-width: min(78ch, 100%);
       padding: 0.9rem 1rem;
@@ -820,8 +819,11 @@ async def chat_ui() -> HTMLResponse:
     .turn {
       display: grid;
       gap: 0.75rem;
+      min-width: 0;
     }
     .bubble.assistant {
+      min-width: 0;
+      overflow-x: auto;
       background: #fff;
       border: 1px solid var(--chat-border);
       border-bottom-left-radius: 0.3rem;
@@ -1009,11 +1011,6 @@ async def chat_ui() -> HTMLResponse:
       font-weight:600;
     }
     .source-select { max-width:100%; padding:0; border:0; background:none; color:inherit; font-weight:inherit; text-align:left; overflow-wrap:anywhere; }
-    .source-title a { color:inherit; text-decoration:none; overflow-wrap:anywhere;
-    }
-    .source-title a:hover {
-      color: var(--chat-primary);
-    }
     .source-badges,.source-tags,.source-meta,.source-actions { display:flex; flex-wrap:wrap; align-items:center; gap:4px; }
     .source-actions { grid-column:1/-1; }
     .source-badge,
@@ -1226,11 +1223,13 @@ async def chat_ui() -> HTMLResponse:
       const modal = Boolean(name && drawerIsModal(name));
       document.querySelector(".paperless-topbar").inert = modal;
       document.querySelector(".chat-column").inert = modal;
-      historyColumn.inert = modal && name !== "history";
-      previewColumn.inert = modal && name !== "inspector";
-      const pane = name === "history" ? historyColumn : previewColumn;
-      if (pane) pane.setAttribute("aria-modal", String(modal));
+      historyColumn.inert = (drawerIsModal("history") && name !== "history") || (modal && name !== "history");
+      previewColumn.inert = (drawerIsModal("inspector") && name !== "inspector")
+        || (modal && name !== "inspector") || (window.matchMedia("(min-width: 1440px)").matches && chatLayout.classList.contains("inspector-closed"));
+      historyColumn.setAttribute("aria-modal", String(modal && name === "history"));
+      previewColumn.setAttribute("aria-modal", String(modal && name === "inspector"));
     }
+    setDrawerInert(null);
 
     function openDrawer(name, opener = document.activeElement) {
       if ((name === "history" && window.matchMedia("(min-width:1200px)").matches)
@@ -1238,6 +1237,7 @@ async def chat_ui() -> HTMLResponse:
         if (name === "inspector") {
           drawerOpener = opener;
           chatLayout.classList.remove("inspector-closed");
+          setDrawerInert(null);
         }
         return;
       }
@@ -1259,10 +1259,10 @@ async def chat_ui() -> HTMLResponse:
       delete chatLayout.dataset.historyOpen;
       delete chatLayout.dataset.inspectorOpen;
       drawerBackdrop.classList.remove("active");
-      setDrawerInert(null);
       if (!previous && window.matchMedia("(min-width:1440px)").matches) {
         chatLayout.classList.add("inspector-closed");
       }
+      setDrawerInert(null);
       if (restoreFocus && drawerOpener?.isConnected && !drawerOpener.closest("[inert]")) drawerOpener.focus();
       drawerOpener = null;
     }
@@ -1271,13 +1271,19 @@ async def chat_ui() -> HTMLResponse:
       if (openDrawerName && !drawerIsModal(openDrawerName)) {
         const name = openDrawerName;
         closeDrawer({ restoreFocus: false });
-        if (name === "inspector") chatLayout.classList.remove("inspector-closed");
+        if (name === "inspector") {
+          chatLayout.classList.remove("inspector-closed");
+          setDrawerInert(null);
+        }
         document.getElementById("page-heading").focus({ preventScroll: true });
       } else if (openDrawerName) {
         setDrawerInert(openDrawerName);
       } else if (selectedSource && drawerIsModal("inspector")) {
         openDrawer("inspector", selectedSource.opener);
+      } else {
+        setDrawerInert(null);
       }
+      if (document.activeElement.closest("[inert]")) document.getElementById("page-heading").focus({ preventScroll: true });
     }
 
     historyToggle.addEventListener("click", (event) => openDrawer("history", event.currentTarget));
@@ -1402,6 +1408,7 @@ async def chat_ui() -> HTMLResponse:
         .forEach((button) => button.setAttribute("aria-pressed", "false"));
       chatLayout.classList.add("inspector-closed");
       if (openDrawerName === "inspector") closeDrawer({ restoreFocus: false });
+      else setDrawerInert(null);
       if (restoreFocus && opener?.isConnected) opener.focus();
     }
 
@@ -1484,13 +1491,14 @@ async def chat_ui() -> HTMLResponse:
       return conversations;
     }
 
-    async function createConversation() {
+    async function createConversation({ preserveDraft = false } = {}) {
       if (lifecycleBusy()) return;
-      if (selectedConversationId && conversation.childElementCount === 0 && !prompt.value.trim()) {
+      if (selectedConversationId && !conversation.querySelector(".bubble.user, .turn") && !prompt.value.trim()) {
         prompt.focus();
         return;
       }
-      if (prompt.value.trim() && !window.confirm("Discard the unsent draft and start a new conversation?")) return;
+      if (!preserveDraft && prompt.value.trim() && !window.confirm("Discard the unsent draft and start a new conversation?")) return;
+      const draftRevision = promptRevision;
       setLifecycleMutation(true);
       clearHistoryError();
       try {
@@ -1498,7 +1506,7 @@ async def chat_ui() -> HTMLResponse:
         selectedConversationId = item.id;
         historyReady = true;
         clearConversationView();
-        prompt.value = "";
+        if (!preserveDraft && promptRevision === draftRevision) prompt.value = "";
         renderRecovery();
         if (openDrawerName === "history") closeDrawer({ restoreFocus: false });
         conversations = [item, ...conversations.filter((conversation) => conversation.id !== item.id)];
@@ -1523,7 +1531,7 @@ async def chat_ui() -> HTMLResponse:
       try {
         const item = await api(`/conversations/${conversationId}`);
         if (request !== selectionRequest) return false;
-        if (promptRevision !== draftRevision) {
+        if (!preserveDraft && promptRevision !== draftRevision) {
           historyFeedback.textContent = "Draft changed while loading. Conversation switch canceled; the draft was kept.";
           return false;
         }
@@ -1654,7 +1662,7 @@ async def chat_ui() -> HTMLResponse:
     }
 
     function refreshEmptyState() {
-      emptyChatInvitation.hidden = conversation.querySelector(".bubble.user, .turn, .context-reset-notice") !== null;
+      emptyChatInvitation.hidden = conversation.querySelector(".bubble.user, .turn") !== null;
     }
 
     function addUserBubble(content, createdAt = null) {
@@ -2095,7 +2103,7 @@ async def chat_ui() -> HTMLResponse:
         inspectButton.addEventListener("click", () => openPreview(source, turnId, inspectButton));
 
         actions.appendChild(previewButton);
-        actions.appendChild(inspectButton);
+        if (source.available === false || id === null) actions.appendChild(inspectButton);
         if (openLink) actions.appendChild(openLink);
 
         content.appendChild(title);
@@ -2221,14 +2229,6 @@ async def chat_ui() -> HTMLResponse:
       }
       if (!payload || typeof payload !== "object" || typeof payload.type !== "string") return;
       const turnId = payload.turn_id;
-      if (payload.type === "conversation_created") {
-        if (activeTurn?.legacyCreation && payload.conversation?.id) {
-          activeTurn.conversationId = payload.conversation.id;
-          selectedConversationId = payload.conversation.id;
-          refreshConversations().catch((error) => setSocketBanner("warning", error.message, true));
-        }
-        return;
-      }
       if (payload.type === "error" && (turnId === "invalid" || turnId === "unavailable")) {
         setSocketBanner("danger", payload.content || "Chat is unavailable.", true);
         if (activeTurn && !activeTurn.turnId) {
@@ -2396,6 +2396,7 @@ async def chat_ui() -> HTMLResponse:
       if (prompt.value.trim() && !window.confirm("Discard the unsent draft and delete this conversation?")) return;
       if (!window.confirm(`Delete “${target.title}”? This deletes only chat history, never Paperless documents.`)) return;
       const targetId = selectedConversationId;
+      const draftRevision = promptRevision;
       setLifecycleMutation(true);
       clearHistoryError();
       try {
@@ -2403,7 +2404,7 @@ async def chat_ui() -> HTMLResponse:
         selectedConversationId = null;
         historyReady = false;
         clearConversationView();
-        prompt.value = "";
+        if (promptRevision === draftRevision) prompt.value = "";
         conversations = conversations.filter((item) => item.id !== targetId);
         renderConversationList();
         setLifecycleMutation(false);
@@ -2413,8 +2414,8 @@ async def chat_ui() -> HTMLResponse:
           setHistoryError(`Conversation deleted, but history could not refresh: ${error.message}`, () => retryHistory());
         });
         if (!historyRefreshed) return;
-        if (conversations.length) await selectConversation(conversations[0].id, { discardDraft: true });
-        else await createConversation();
+        if (conversations.length) await selectConversation(conversations[0].id, { discardDraft: true, preserveDraft: true });
+        else await createConversation({ preserveDraft: true });
       } catch (error) {
         if (error.status === 404) {
           selectedConversationId = null;
@@ -2430,11 +2431,15 @@ async def chat_ui() -> HTMLResponse:
       }
     });
     historyRefreshButton.addEventListener("click", async () => {
+      const reloadSelected = !lifecycleBusy() && !recoveryNeedsRefresh;
       clearHistoryError();
       await Promise.all([
         refreshConversations().catch((error) => setHistoryError(`Unable to refresh history: ${error.message}`, () => retryHistory())),
         loadArchiveStatus(),
       ]);
+      if (reloadSelected && !lifecycleBusy() && !recoveryNeedsRefresh && selectedConversationId) {
+        await selectConversation(selectedConversationId, { discardDraft: true, force: true, preserveDraft: true });
+      }
     });
     form.addEventListener("submit", (event) => {
       event.preventDefault();

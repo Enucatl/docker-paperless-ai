@@ -13,19 +13,15 @@ independent stages, and writes results back through supported REST APIs.
 
 The separation of models matters because the operational profile of each step is
 different. OCR may need a vision-capable model and larger image payloads.
-Metadata extraction is usually a smaller text-only call. Embedding is a batch
-indexing task. Chat is interactive and must keep latency acceptable. The repo
-therefore exposes independent model and API-base settings for OCR, metadata,
-and chat.
+Metadata extraction is usually a smaller text-only call. Chat is interactive
+and must keep latency acceptable. The repo therefore exposes independent model
+and API-base settings for OCR, metadata, and chat.
 
 ### Data ingestion
 
-![Data ingestion architecture](assets/data-ingestion-flow.png)
-
 New (or updated) documents are governed by
-Paperless stage tags (`ai:run-ocr`, `ai:run-metadata`, `ai:run-embed`) and wait
-in Redis until the GPU workstation and local vLLM models are online, which is
-managed separately in [docker-vllm](https://github.com/Enucatl/docker-vllm).
+Paperless stage tags (`ai:run-ocr`, `ai:run-metadata`) and wait in Redis until
+the configured OCR and metadata model endpoints are online.
 
 The ingestion path is:
 
@@ -36,8 +32,7 @@ The ingestion path is:
    model, and writes the transcript to the Paperless content field.
 4. The metadata stage extracts document fields from the transcript and patches
    Paperless metadata.
-5. The embedding stage chunks the document, writes vectors to Qdrant, and
-   removes the stage tag.
+5. The metadata stage removes its stage tag when processing completes.
 
 This design accepts delays in return for operational flexibility:
 I run the energy-hungry GPU workstation on a weekly schedule to process any new documents with local models.
@@ -45,38 +40,14 @@ This keeps running costs minimal, as my personal needs are around 1-2 documents 
 
 ### Retrieval Design
 
-The search layer is hybrid. During indexing, chunks are written to Qdrant with
-named dense vectors from bge-m3-compatible embeddings. At query time,
-the shared retrieval pipeline combines:
+Chat search uses Paperless full-text search directly. The LLM is instructed to
+use short, distinctive keywords and to retry with simpler or alternate terms
+when no results appear. Paperless applies optional correspondent, document type,
+storage path, tag, and year filters. Matching document text is returned to the
+LLM, which can inspect full documents before answering.
 
-- dense vector search against Qdrant,
-- keyword search through the Paperless API,
-- Reciprocal Rank Fusion over dense and keyword document rankings,
-- local reranking of chunk candidates with `BAAI/bge-reranker-v2-m3`,
-- document-level deduplication after chunk-level scoring.
-
-The browser chat and `/search` endpoint share the retrieval implementation, but
-chat can choose precision or recall behavior.
-This was introduced after early tests made it clear that there was tension between two types of queries, that needed opposite optimizations:
-- "precision"-focused queries ("which (one or few) document(s) has...?")
-- "recall"-focused queries ("how many documents about ... can you find?")
-
-So the model has to choose one of the two processes based on the user query before hitting the document database.
-
-The browser chat needs a local embedding and reranker model to achieve good answer quality, but the
-GPU workstation that hosts the vision LLM isn't always running. 
-Therefore, the system includes a local CPU model (`BAAI/bge-reranker-v2-m3`, ~1GB) that runs on demand.
-
-This model lives in a separate process-backed worker for two reasons:
-1. **Keep FastAPI responsive**: Loading and running the reranker is CPU-intensive. Running it in a separate process prevents blocking the main request loop.
-2. **Save RAM**: The model weighs ~1-2GB. By launching it lazily on first use and terminating it after 5 minutes of idle time, we avoid keeping memory-heavy models in RAM when no one is using the search feature.
-
-The flow looks like this:
-- First query → FastAPI spawns a child process that loads the models (~15s warmup)
-- Subsequent queries → reuse the same process for fast reranking (~50ms latency)
-- Idle for 5 min → child process exits, reclaiming ~2GB RAM
-
-This gives the best of both worlds: good search quality on CPU when needed, without the cost of keeping heavy models resident all the time (RAM is expensive!).
+Precision searches default to 20 results; recall searches require an explicit
+limit.
 
 ### Agentic Chat
 
@@ -86,16 +57,10 @@ are intentionally narrow:
 
 - `get_available_metadata` returns exact Paperless correspondent, document
   type, storage path, and tag names before filtered searches.
-- `search_documents` runs hybrid retrieval with optional metadata filters,
+- `search_documents` runs Paperless full-text search with optional metadata filters,
   year filters, limit, and precision/recall mode.
 - `read_full_document` reads OCR text for a specific Paperless document when
   the agent needs source detail beyond snippets.
-
-![Agentic chat architecture](assets/agentic-chat-flow.png)
-
-The diagram expands the `search_documents` tool because that is where most of
-the RAG-specific work happens: keyword retrieval, dense vector retrieval,
-fusion, reranking, and final precision judging.
 
 The `/chat` UI uses a WebSocket endpoint so it can show turn state, tool-call
 progress, final answers, and source cards. That makes the system easier to
@@ -109,12 +74,12 @@ of source it used, and which documents back the answer.
 The example query asks: "by searching through the tax final bills, show me how
 much I paid in federal taxes since 2022". The chat model is Gemini 3.1
 flash-lite. For this turn, the agent first inspected available metadata, then
-searched documents through the hybrid retrieval pipeline, reranked candidates
-locally with `bge-reranker-v2-m3`, decided it needed the full text of three
-documents, and then produced the final answer.
+searched documents with Paperless keywords, decided it needed the full text of
+three documents, and then produced
+the final answer.
 
 This is the intended shape of the agent: the LLM plans and verifies, while
-retrieval and reranking stay in deterministic tools. The turn used about 67k
+retrieval and relevance filtering stay in deterministic tools. The turn used about 67k
 tokens, cost about $0.01, and returned the correct comprehensive answer.
 
 ![Advanced Phoenix trace for a longer agentic chat turn](assets/tax-query-trace.png)
@@ -150,10 +115,9 @@ text metadata extraction.
 
 ![Phoenix trace for the selected Gemini extraction setup](assets/full-metadata-trace.png)
 
-The deployed extraction path uses Gemini 3.5 flash-lite for OCR and metadata;
-embeddings remain local with the small BAAI/bge-m3 model. The evaluation's
-input-only corpus and Jev scores keep model comparisons separate from production
-metadata annotations.
+The deployed extraction path uses Gemini 3.5 flash-lite for OCR and metadata.
+The evaluation's input-only corpus and Jev scores keep model comparisons
+separate from production metadata annotations.
 
 Qwen 3.5 9B fit the RTX 5090 hardware and showed promise, but it had a stubborn problem:
 when prompted to reason, the model would keep "thinking" — emitting text between

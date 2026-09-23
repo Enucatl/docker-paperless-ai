@@ -554,13 +554,14 @@ class PaperlessClient:
         self,
         query: str,
         *,
+        limit: int | None = None,
         correspondent: str | None = None,
         document_type: str | None = None,
         storage_path: str | None = None,
         tags: list[str] | None = None,
         year: str | None = None,
     ) -> list[int]:
-        """Search via Paperless and return all matching doc IDs in relevance order."""
+        """Search Paperless and return matching IDs in relevance order."""
         with start_span(
             "paperless_ai.search.keyword_search",
             **{
@@ -586,7 +587,7 @@ class PaperlessClient:
                     storage_path=storage_path,
                     tags=tags,
                     year=year,
-                    page_size=250,
+                    page_size=min(250, limit) if limit else 250,
                     page=page,
                 )
                 if params is None:
@@ -607,6 +608,10 @@ class PaperlessClient:
                     if doc_id not in seen:
                         seen.add(doc_id)
                         doc_ids.append(doc_id)
+                        if limit is not None and len(doc_ids) >= limit:
+                            break
+                if limit is not None and len(doc_ids) >= limit:
+                    break
                 if not data.get("next"):
                     break
                 page += 1

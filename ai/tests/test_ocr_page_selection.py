@@ -1,7 +1,7 @@
 """
 Unit tests for the OCR page-selection logic (_select_ocr_pages).
 
-All tests are pure unit tests — no Paperless, Redis, Qdrant, or LiteLLM.
+All tests are pure unit tests — no Paperless, Redis, or LiteLLM.
 """
 
 import pytest

@@ -4,9 +4,9 @@
 
 AI batch OCR and metadata extraction for [paperless-ngx](https://github.com/paperless-ngx/paperless-ngx) — no source patches required.
 
-Documents are ingested normally via Tesseract, then routed through a three-stage AI pipeline (OCR → metadata extraction → embedding) driven by Paperless tags and a Redis queue. Each page is re-OCRd with a vision LLM, title/date/correspondent are extracted with a text LLM, and the document is indexed in Qdrant for semantic search. Everything is updated via the Paperless REST API.
+Documents are ingested normally via Tesseract, then routed through a two-stage AI pipeline (OCR → metadata extraction) driven by Paperless tags and a Redis queue. Each page is re-OCRd with a vision LLM and title/date/correspondent are extracted with a text LLM. The chat copilot searches Paperless full text directly with concise keywords.
 
-The always-on `ai` service also exposes the browser copilot and **`GET /search`** endpoint. The internal `webhook-listener` is a thin ingress that only receives Paperless webhooks and enqueues work in Redis.
+The always-on `ai` service exposes the browser copilot. The internal `webhook-listener` is a thin ingress that only receives Paperless webhooks and enqueues work in Redis.
 
 For a portfolio-oriented explanation of the architecture, model evaluation,
 RAG design, and production tradeoffs, see
@@ -50,12 +50,7 @@ OCR worker          → downloads original PDF
 Metadata worker     → reads transcript from Paperless (no PDF download)
                     → text LLM extracts title / date / correspondent
                     → PATCHes document via REST API
-                    → tag transitions: ai:run-metadata → ai:run-embed
-
-Embed worker        → reads content + metadata from Paperless
-                    → chunks text, embeds via the embeddings API (bge-m3)
-                    → upserts dense + sparse vectors into Qdrant
-                    → removes tag ai:run-embed
+                    → removes tag ai:run-metadata
 ```
 
 Each stage is independent: if the GPU workstation is off, the workers detect
@@ -66,11 +61,10 @@ If a document fails repeatedly, the worker retries it up to `STAGE_MAX_ATTEMPTS`
 retrying forever.
 
 ```
-Search query arrives → GET /search?q=invoice+2024&limit=20 on the ai service
-                       1. ProcessLocalSearchEmbedder starts a child process on first use
-                       2. The child lazily loads bge-m3 and computes the dense query vector
-                       3. Shared Qdrant client queries chunk vectors, then local reranking reorders hits
-                       4. The child process exits after 5 min idle, reclaiming RAM cleanly
+Chat search query → Paperless full-text search
+                    1. The LLM searches with short, distinctive keywords
+                    2. If no results appear, it retries with simpler or alternate terms
+                    3. Matching document text is returned for the LLM to answer from
 ```
 
 ## Repo layout
@@ -85,7 +79,7 @@ docker-paperless-ai/
 │   │   ├── agents/                 # OCR + metadata agent stack
 │   │   ├── core/                   # Config, runner, compatibility wrappers
 │   │   ├── eval/                   # Offline evaluation framework
-│   │   └── search/                 # Copilot/search app, retrieval, Qdrant integration
+│   │   └── search/                 # Copilot and Paperless keyword search
 │   └── tests/                      # Unit + Docker E2E test suite
 ├── common/
 │   ├── pyproject.toml
@@ -155,7 +149,7 @@ and create the same two workflows manually:
 - `Document Added`: assignment adds `ai:run-ocr`, then webhook posts to `http://webhook-listener:8001/webhook/document`
 - `Document Updated`: filtered on `ai:run-ocr`, webhook posts to `http://webhook-listener:8001/webhook/document`
 
-Tags (`ai:run-ocr`, `ai:run-metadata`, `ai:run-embed`) are created automatically
+Tags (`ai:run-ocr`, `ai:run-metadata`) are created automatically
 on first run if they do not exist. The AI service also creates these custom
 fields automatically on first successful startup:
 
@@ -169,7 +163,7 @@ fields automatically on first successful startup:
 docker compose up -d
 ```
 
-This starts Redis, PostgreSQL, paperless-ngx, Gotenberg, Tika, Qdrant,
+This starts Redis, PostgreSQL, paperless-ngx, Gotenberg, Tika,
 Phoenix, the thin webhook listener, and the always-on `ai` service that hosts
 both the copilot HTTP API and the long-running worker loop.
 
@@ -331,7 +325,7 @@ After the stack is up and the workflows exist, new documents flow automatically:
 2. The auto-managed `document-added` workflow adds tag `ai:run-ocr`.
 3. The same workflow sends the webhook to `webhook-listener`.
 4. The thin webhook listener enqueues the document in Redis.
-5. The `ai` service runs OCR -> metadata -> embedding and serves `/search` and `/chat`.
+5. The `ai` service runs OCR -> metadata and serves `/chat`.
 6. The pipeline removes the stage tags when each step completes.
 7. The worker writes:
    - `ai_processed`
@@ -340,7 +334,6 @@ After the stack is up and the workflows exist, new documents flow automatically:
 
 The `ai` service exposes:
 
-- `/search` for hybrid retrieval
 - `/chat` for the browser chat UI
 - `/ws/chat` for the WebSocket copilot endpoint
 
@@ -432,8 +425,6 @@ INFERENCE_CHAT_ENDPOINT=http://workstation:8101/v1
 
 `INFERENCE_OCR_ENDPOINT`, `INFERENCE_METADATA_ENDPOINT`, and `INFERENCE_CHAT_ENDPOINT` are independent — each stage can run on different servers or ports.
 
-Hybrid search reranking uses the local `BAAI/bge-reranker-v2-m3` model in-process. It is lazy-loaded on first use and unloaded again after an idle period, like the local query embedder.
-
 For running the model endpoints themselves, see [Enucatl/vllm](https://github.com/Enucatl/vllm).
 
 ## Docker secrets
@@ -487,43 +478,13 @@ Supported `_FILE` variants: `GOOGLE_API_KEY_FILE`, `ANTHROPIC_API_KEY_FILE`, `OP
 | `POLL_INTERVAL` | `300` | Seconds between polls in watch mode |
 | `TAG_OCR` | `ai:run-ocr` | Tag for documents entering the OCR stage |
 | `TAG_METADATA` | `ai:run-metadata` | Tag for documents entering the metadata stage |
-| `TAG_EMBED` | `ai:run-embed` | Tag for documents entering the embedding stage |
 | `DRY_RUN` | `false` | Log actions without modifying documents |
-| `QDRANT_URL` | `http://qdrant:6333` | Qdrant vector DB URL (used by the embed worker and the `ai` copilot/search service) |
 
-## Search API
+## Chat search retrieval
 
-The `ai` service exposes a search endpoint alongside the browser copilot:
-
-```
-GET /search?q=<query>[&limit=20]
-```
-
-Returns a JSON array of Paperless `doc_id` integers ranked by semantic similarity, deduplicated across chunks:
-
-```bash
-curl "http://localhost:8001/search?q=electricity+bill+2024&limit=10"
-# → [42, 17, 88]
-```
-
-### Dual-embedder design
-
-Two embedders serve different roles and never interfere:
-
-| Embedder | Class | Used for | When available |
-|---|---|---|---|
-| `EmbeddingAPIEmbedder` | `embedder.py` | Batch indexing via the embed worker | Only when embeddings API is reachable |
-| `ProcessLocalSearchEmbedder` | `local_search_process.py` | Answering `/search` and `/chat` queries | Always (CPU, no GPU needed) |
-
-`ProcessLocalSearchEmbedder` starts a dedicated child process on the first query.
-That worker lazily loads the local embedding and reranking models, handles all
-local search inference, and exits after the configured idle timeout. This keeps
-the main FastAPI process responsive and reclaims RAM by terminating the worker
-process rather than relying on in-process GC.
-
-The `INFERENCE_EMBEDDING_ENDPOINT` and external embeddings service availability do not affect
-`/search` — local retrieval uses the process-backed CPU search worker in the
-`ai` container.
+Chat search uses Paperless full-text search directly. The copilot sends concise,
+distinctive keywords, applies optional Paperless metadata filters, and retries
+with simpler or alternate keywords when a search returns no results.
 
 ## Customising prompts
 
@@ -550,8 +511,8 @@ stores the structured JSON payload for debugging and audits.
 ## Reprocessing a document
 
 Re-add the `ai:run-ocr` tag and, with Workflow B configured, the worker will
-pick the document up on the next poll, restarting the full three-stage pipeline
-and overwriting the previous content, title, date, summary, and embeddings.
+pick the document up on the next poll, restarting OCR and metadata extraction and overwriting the previous content,
+title, date, and summary.
 
 To revert to Tesseract permanently, trigger a reprocess from the paperless UI (More → Reprocess document).
 
@@ -561,7 +522,7 @@ To revert to Tesseract permanently, trigger a reprocess from the paperless UI (M
 
 ### E2E test suite
 
-The test suite spins up a fully ephemeral stack (Paperless-ngx, Redis, Qdrant,
+The test suite spins up a fully ephemeral stack (Paperless-ngx, Redis,
 webhook-listener) in Docker, runs pytest inside the AI container, then tears
 everything down — including all volumes.  No persistent state is left behind
 even if the run is interrupted.
@@ -577,7 +538,7 @@ Django migrations and document indexing).  A fresh pull adds image download time
 
 | Test file | What it covers |
 |---|---|
-| `test_phase_b_pipeline.py` | Unit tests for the three-stage pipeline (OCR / metadata / embed batches) |
+| `test_phase_b_pipeline.py` | Unit tests for the OCR and metadata pipeline |
 | `test_webhook.py` | Listener enqueues from `doc_url` field (Paperless `{{doc_url}}` placeholder) |
 | `test_webhook.py` | Listener enqueues from `document_id` / `id` fallback fields |
 | `test_webhook.py` | Redis SADD deduplication (same ID posted twice → one queue entry) |
@@ -585,11 +546,6 @@ Django migrations and document indexing).  A fresh pull adds image download time
 | `test_webhook.py` | `/health` endpoint reflects live pending count |
 | `test_webhook.py` | **Full Paperless integration**: workflow created via API → document uploaded → Paperless fires `{{doc_url}}` webhook → doc ID lands in Redis |
 | `test_phase_b_pipeline.py` | Failed documents are retried up to `STAGE_MAX_ATTEMPTS` then moved to `paperless-ai:queue:failed` |
-| `test_search.py` | Local search model unit tests: lazy load, reuse, thread-offloaded query embedding |
-| `test_search.py` | Memory lifecycle: `tracemalloc` before/after snapshot + `weakref` GC assertion |
-| `test_search.py` | `embed_query` runs in thread pool (event-loop non-blocking verified) |
-| `test_search.py` | `/search` 422 on missing/empty `q` and out-of-range `limit` |
-| `test_search.py` | `/search` returns `list[int]` doc_ids, deduplicates multi-chunk hits |
 | `test_evaluator.py` | Evaluation framework unit tests |
 | `test_jev_evaluator.py` | One-request Jev metadata judgment tests |
 
@@ -599,18 +555,8 @@ Django migrations and document indexing).  A fresh pull adds image download time
 |---|---|---|
 | `webserver` | paperless-ngx | Real Paperless instance (tmpfs DB, anon volumes) |
 | `broker` | redis:8 | Redis on tmpfs — DB 0 for Paperless, DB 1 for AI queue |
-| `qdrant` | qdrant/qdrant | Vector DB (anonymous volume) |
 | `webhook-listener` | *(this repo)* | Receives Paperless webhook events |
 | `db` | postgres:18 | Paperless DB on tmpfs |
-
-The embeddings API is **not** available in the test environment (GPU
-not present in CI).  The `mock_embedder` fixture provides deterministic 1024-d
-fake vectors directly to `run_embed_batch()` so the embedding code path is still
-exercised end-to-end against real Qdrant.
-
-The local search embedder is tested with a lightweight fake model that
-allocates a real `bytearray` so `tracemalloc` can verify allocation and
-deallocation without downloading the actual bge-m3 weights.
 
 #### Skip the build step (faster re-runs)
 
@@ -630,11 +576,11 @@ docker compose -f docker-compose.yml -f docker-compose.test.yml \
   run --rm ai pytest -v -k test_paperless_fires_webhook_on_document_added /app/tests/
 ```
 
-> These commands assume the infrastructure services (`webserver`, `qdrant`,
+> These commands assume the infrastructure services (`webserver`,
 > `webhook-listener`, etc.) are already running.  Start them first with:
 > ```bash
 > docker compose -f docker-compose.yml -f docker-compose.test.yml \
->   up -d db broker webserver qdrant webhook-listener
+>   up -d db broker webserver webhook-listener
 > ```
 
 ### Evaluation framework

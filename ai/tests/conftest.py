@@ -8,10 +8,7 @@ document state between tests and reset mocks cleanly.
 Infrastructure available in the test environment (docker-compose.test.yml):
   - Paperless-ngx (webserver)    http://webserver:8000
   - Redis (broker)               redis://broker:6379/1  (DB 1, AI queue)
-  - Qdrant (vector DB)           http://qdrant:6333
   - Webhook listener             http://webhook-listener:8001
-  - Copilot/search service       http://ai:8001
-  - Embeddings API               NOT available — use mock_embedder fixture instead
 """
 
 import io
@@ -36,26 +33,18 @@ def pytest_configure(config):
         "markers",
         "requires_webhook_listener: mark test as requiring webhook-listener to be running",
     )
-    config.addinivalue_line(
-        "markers",
-        "requires_copilot: mark test as requiring the ai copilot service to be running",
-    )
 
 
 PAPERLESS_URL = os.environ.get("PAPERLESS_URL", "http://webserver:8000")
 REDIS_URL = os.environ.get("REDIS_URL", "redis://broker:6379/1")
-QDRANT_URL = os.environ.get("QDRANT_URL", "http://qdrant:6333")
 WEBHOOK_URL = os.environ.get("WEBHOOK_URL", "http://webhook-listener:8001")
-COPILOT_URL = os.environ.get("COPILOT_URL", "http://ai:8001")
 TEST_USER = os.environ.get("TEST_PAPERLESS_USER", "admin")
 TEST_PASS = os.environ.get("TEST_PAPERLESS_PASS", "admin")
 
-# Phase B: three-stage task queues
+# OCR and metadata task queues
 _TASK_QUEUE_KEYS = [
     "paperless-ai:queue:ocr",
     "paperless-ai:queue:metadata",
-    "paperless-ai:queue:embed",
-    "paperless-ai:queue:refresh",
 ]
 _ALL_QUEUE_KEYS = [
     *_TASK_QUEUE_KEYS,
@@ -173,28 +162,10 @@ def _redis_available() -> bool:
         return False
 
 
-def _qdrant_available() -> bool:
-    """Check if Qdrant is available."""
-    try:
-        r = niquests.get(f"{QDRANT_URL}/health", timeout=2.0)
-        return r.status_code < 500
-    except Exception:
-        return False
-
-
 def _webhook_listener_available() -> bool:
     """Check if webhook-listener is available."""
     try:
         r = niquests.get(f"{WEBHOOK_URL}/health", timeout=2.0)
-        return r.status_code < 500
-    except Exception:
-        return False
-
-
-def _copilot_available() -> bool:
-    """Check if the copilot service is available."""
-    try:
-        r = niquests.get(f"{COPILOT_URL}/health", timeout=2.0)
         return r.status_code < 500
     except Exception:
         return False
@@ -214,9 +185,6 @@ def pytest_runtest_setup(item):
     if "requires_webhook_listener" in item.keywords:
         if not _webhook_listener_available():
             pytest.skip("webhook-listener is not available")
-    if "requires_copilot" in item.keywords:
-        if not _copilot_available():
-            pytest.skip("copilot service is not available")
 
 
 @pytest.fixture(scope="session")
@@ -279,7 +247,6 @@ def mock_litellm():
     fake = _make_fake_completion()
     with (
         patch("paperless_ai.agents.smart_graph_agent.complete", side_effect=fake),
-        patch("paperless_ai.core.hooks.complete", side_effect=fake),
         patch("paperless_ai.inference.complete", side_effect=fake),
     ):
         yield
@@ -295,7 +262,7 @@ async def task_queues():
     """
     A fresh TaskQueues backed by the real test Redis (DB 1).
 
-    Clears all three stage queues before and after each test.
+    Clears both stage queues before and after each test.
     """
     from paperless_common.queue import TaskQueues
 
@@ -307,107 +274,6 @@ async def task_queues():
     yield q
     await q.close()
     _clear_redis_queue()
-
-
-# ---------------------------------------------------------------------------
-# Function-scoped: mock embedder — deterministic vectors, no network calls
-# ---------------------------------------------------------------------------
-
-
-@pytest.fixture
-def mock_embedder(monkeypatch):
-    """
-    A fake embeddings client that returns deterministic 1024-d dense vectors
-    and sparse BM25 weights without making any network calls.
-
-    Pass this directly to run_embed_batch() when testing the embedding pipeline.
-    The embeddings API is not available in the test environment.
-
-    Also patches _check_server_reachable so that run_embed_batch's preflight
-    check doesn't bail early — that check is a production guard and is
-    meaningless when a mock embedder is in use.
-    """
-    from paperless_ai.core import runner as _runner
-
-    async def _always_reachable(url: str) -> bool:  # noqa: ARG001
-        return True
-
-    monkeypatch.setattr(_runner, "_check_server_reachable", _always_reachable)
-    from paperless_ai.search.embedder import EmbeddingResult
-
-    class _MockEmbedder:
-        def __init__(self) -> None:
-            self.last_texts: list[str] = []
-
-        async def embed(self, texts: list[str]) -> list[EmbeddingResult]:
-            self.last_texts = list(texts)
-            return [
-                EmbeddingResult(
-                    dense=[0.01 * (i % 100)] * 1024,
-                    sparse_indices=[1, 42, 512],
-                    sparse_values=[0.7, 0.3, 0.1],
-                )
-                for i, _ in enumerate(texts)
-            ]
-
-        async def aclose(self) -> None:
-            """No-op stub for compatibility with async context manager."""
-            pass
-
-    return _MockEmbedder()
-
-
-# ---------------------------------------------------------------------------
-# Function-scoped: Qdrant store — real Qdrant, cleaned up per test
-# ---------------------------------------------------------------------------
-
-
-@pytest.fixture
-async def uploaded_document(paperless_client):
-    """
-    Factory fixture: upload a fresh document for each call, delete all on teardown.
-
-    This fixture does NOT enqueue the document in Redis. Tests opt into the
-    staged queues explicitly.
-
-    Usage::
-
-        async def test_something(uploaded_document):
-            doc_id = await uploaded_document()
-            ...
-    """
-    doc_ids: list[int] = []
-
-    async def _upload() -> int:
-        doc_id = await _upload_document(paperless_client, _make_test_pdf())
-        doc_ids.append(doc_id)
-        return doc_id
-
-    yield _upload
-
-    for doc_id in doc_ids:
-        try:
-            await paperless_client._client.delete(f"/api/documents/{doc_id}/")
-        except Exception:
-            pass
-
-
-@pytest.fixture
-async def qdrant_store():
-    """
-    A QdrantDocumentStore connected to the test Qdrant instance.
-
-    Creates the collection if it does not exist.  The collection persists
-    within the test run (anonymous volume); `docker compose down -v` wipes it.
-    """
-    from paperless_ai.search.qdrant_store import QdrantDocumentStore
-
-    if not _qdrant_available():
-        pytest.skip("Qdrant is not available")
-
-    store = QdrantDocumentStore(url=QDRANT_URL)
-    await store.ensure_collection()
-    yield store
 
 
 # ---------------------------------------------------------------------------

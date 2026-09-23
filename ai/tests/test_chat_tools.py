@@ -1,4 +1,3 @@
-import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -6,12 +5,9 @@ import pytest
 from paperless_common.telemetry import start_span
 from paperless_ai.search.chat_agent import ChatCopilot, route_tools
 from paperless_ai.search.tools import (
-    JUDGE_DOC_MAX_CHARS,
     TOOL_SCHEMAS,
     ToolExecutionResult,
     ToolSourceRef,
-    _chat_completion_kwargs,
-    _judge_precision_documents,
     execute_tool_call,
     execute_tool_call_detailed,
     get_available_metadata,
@@ -83,160 +79,30 @@ async def test_get_available_metadata_formats_lists():
 
 
 @pytest.mark.asyncio
-async def test_search_documents_formats_qdrant_hits():
-    embedder = AsyncMock()
+async def test_search_documents_returns_paperless_keyword_matches():
     client = AsyncMock()
+    client.search_documents_all.return_value = [2231, 1104]
+    client.get_document_with_content.side_effect = [
+        {"id": 2231, "title": "Zoo ticket", "content": "Zoo admission CHF 30"},
+        {"id": 1104, "title": "Zoo visit", "content": "Zoo ticket 2026"},
+    ]
 
-    point = MagicMock()
-    point.payload = {
-        "doc_id": 42,
-        "title": "Invoice 42",
-        "correspondent": "Acme Corp",
-        "document_type": "Invoice",
-        "storage_path": "Archive/2024",
-        "tags": ["Paid"],
-        "date": "2024-01-15",
-        "text": "Line item one and line item two",
-    }
+    result = await search_documents("zoo", client=client, year="2026", limit=20)
 
-    qdrant = AsyncMock()
-    qdrant.scroll.return_value = ([point], None)
-
-    with (
-        patch("paperless_ai.search.tools.AsyncQdrantClient", return_value=qdrant),
-        patch(
-            "paperless_ai.search.tools.hybrid_retrieve",
-            AsyncMock(return_value=([42], {42: "Line item one and line item two"})),
-        ),
-    ):
-        result = await search_documents(
-            "invoice",
-            embedder=embedder,
-            qdrant_url="http://qdrant:6333",
-            config=MagicMock(),
-            client=client,
-            correspondent="Acme Corp",
-            mode="recall",
-            limit=20,
-        )
-
-    assert "Doc 42" in result.content
-    assert "Invoice 42" in result.content
-    assert "Acme Corp" in result.content
-    assert "Type: Invoice" in result.content
-    assert "Tags: Paid" in result.content
-    qdrant.close.assert_awaited_once()
+    client.search_documents_all.assert_awaited_once_with(
+        "zoo",
+        limit=20,
+        correspondent=None,
+        document_type=None,
+        storage_path=None,
+        tags=None,
+        year="2026",
+    )
+    assert "Doc 2231" in result.content
+    assert "Doc 1104" in result.content
+    assert [ref.doc_id for ref in result.source_refs] == [2231, 1104]
 
 
-@pytest.mark.asyncio
-async def test_search_documents_uses_chunk_map_when_scroll_payload_missing():
-    embedder = AsyncMock()
-    client = AsyncMock()
-
-    qdrant = AsyncMock()
-    qdrant.scroll.return_value = ([], None)
-
-    with (
-        patch("paperless_ai.search.tools.AsyncQdrantClient", return_value=qdrant),
-        patch(
-            "paperless_ai.search.tools.hybrid_retrieve",
-            AsyncMock(
-                return_value=([99], {99: "Family admission tickets purchased online"})
-            ),
-        ),
-    ):
-        result = await search_documents(
-            "zoo",
-            embedder=embedder,
-            qdrant_url="http://qdrant:6333",
-            config=MagicMock(),
-            client=client,
-            mode="recall",
-            limit=20,
-        )
-
-    assert "Doc 99" in result.content
-    assert "Family admission tickets purchased online" in result.content
-    qdrant.close.assert_awaited_once()
-
-
-@pytest.mark.asyncio
-async def test_search_documents_reuses_shared_qdrant_client():
-    embedder = AsyncMock()
-    client = AsyncMock()
-    shared_qdrant = AsyncMock()
-
-    point = MagicMock()
-    point.payload = {"doc_id": 42, "text": "hello"}
-    shared_qdrant.scroll.return_value = ([point], None)
-
-    with (
-        patch("paperless_ai.search.tools.AsyncQdrantClient") as qdrant_cls,
-        patch(
-            "paperless_ai.search.tools.hybrid_retrieve",
-            AsyncMock(return_value=([42], {42: "hello"})),
-        ),
-    ):
-        result = await search_documents(
-            "invoice",
-            embedder=embedder,
-            qdrant_url="http://qdrant:6333",
-            config=MagicMock(),
-            client=client,
-            mode="recall",
-            limit=20,
-            qdrant_client=shared_qdrant,
-        )
-
-    assert "Doc 42" in result.content
-    qdrant_cls.assert_not_called()
-    shared_qdrant.close.assert_not_called()
-
-
-@pytest.mark.asyncio
-async def test_precision_judge_fetches_batch_in_parallel_with_short_excerpts():
-    client = AsyncMock()
-    active = 0
-    max_active = 0
-
-    async def get_document_with_content(doc_id):
-        nonlocal active, max_active
-        active += 1
-        max_active = max(max_active, active)
-        await asyncio.sleep(0.01)
-        active -= 1
-        return {"id": doc_id, "title": f"Doc {doc_id}", "content": "x" * 3000}
-
-    client.get_document_with_content.side_effect = get_document_with_content
-    config = MagicMock()
-    config.chat_model = "openai/chat-model"
-    config.chat_endpoint = None
-    config.get_chat_kwargs.return_value = {}
-
-    response = _completion('{"keep_doc_ids":[1,2,3,4,5]}')
-
-    captured_prompt = ""
-
-    async def judge_call(**kwargs):
-        nonlocal captured_prompt
-        captured_prompt = kwargs["messages"][1]["content"]
-        return response
-
-    with patch("paperless_ai.search.tools.complete", judge_call):
-        kept = await _judge_precision_documents(
-            query="query",
-            doc_ids=[1, 2, 3, 4, 5],
-            client=client,
-            config=config,
-        )
-
-    assert kept == [1, 2, 3, 4, 5]
-    assert max_active == 5
-    assert "x" * JUDGE_DOC_MAX_CHARS in captured_prompt
-    assert "x" * (JUDGE_DOC_MAX_CHARS + 1) not in captured_prompt
-
-
-@pytest.mark.asyncio
 async def test_execute_tool_call_reads_document():
     client = AsyncMock()
     client.get_document_with_content.return_value = {
@@ -244,15 +110,10 @@ async def test_execute_tool_call_reads_document():
         "title": "Receipt",
         "content": "Full OCR text",
     }
-    embedder = AsyncMock()
-
     result = await execute_tool_call(
         "read_full_document",
         {"doc_id": 7, "max_chars": 8000},
         client=client,
-        embedder=embedder,
-        qdrant_url="http://qdrant:6333",
-        config=MagicMock(),
     )
 
     assert result == "[Doc 7 | Receipt]\nFull OCR text"
@@ -266,15 +127,10 @@ async def test_execute_tool_call_detailed_collects_source_refs():
         "title": "Receipt",
         "content": "Full OCR text",
     }
-    embedder = AsyncMock()
-
     result = await execute_tool_call_detailed(
         "read_full_document",
         {"doc_id": 7, "max_chars": 8000},
         client=client,
-        embedder=embedder,
-        qdrant_url="http://qdrant:6333",
-        config=MagicMock(),
     )
 
     assert result.summary == "Read OCR text for document 7."
@@ -288,35 +144,16 @@ def test_search_tool_schema_exposes_mode_enum():
         if tool["function"]["name"] == "search_documents"
     )
     assert schema["parameters"]["properties"]["mode"]["enum"] == ["precision", "recall"]
-    assert "always provide an explicit limit" in schema["description"]
-
-
-def test_chat_completion_kwargs_respects_configured_chat_temperature():
-    config = MagicMock()
-    config.chat_model = "gemini/gemini-3.1-flash-lite"
-    config.chat_endpoint = "http://llm:4000"
-    config.get_chat_kwargs.return_value = {
-        "max_tokens": 321,
-        "temperature": 1.0,
-        "reasoning_effort": "low",
-    }
-
-    kwargs = _chat_completion_kwargs(config, [{"role": "user", "content": "hello"}])
-
-    assert kwargs["model"] == config.chat_model
-    assert kwargs["temperature"] == 1.0
-    assert kwargs["max_tokens"] == 321
-    assert kwargs["reasoning_effort"] == "low"
-    assert kwargs["endpoint"] == "http://llm:4000"
+    assert (
+        "short, distinctive keyword query" in schema["description"]
+        and "explicit limit" in schema["description"]
+    )
 
 
 @pytest.mark.asyncio
 async def test_search_documents_recall_requires_explicit_limit():
     result = await search_documents(
         "youtube premium",
-        embedder=AsyncMock(),
-        qdrant_url="http://qdrant:6333",
-        config=MagicMock(),
         client=AsyncMock(),
         mode="recall",
     )
@@ -326,24 +163,17 @@ async def test_search_documents_recall_requires_explicit_limit():
 
 @pytest.mark.asyncio
 async def test_search_documents_rejects_invalid_mode_without_retrieval():
-    with patch(
-        "paperless_ai.search.tools.hybrid_retrieve", AsyncMock()
-    ) as hybrid_retrieve_mock:
-        result = await search_documents(
-            "youtube premium",
-            embedder=AsyncMock(),
-            qdrant_url="http://qdrant:6333",
-            config=MagicMock(),
-            client=AsyncMock(),
-            mode="recall,precision",
-            limit=20,
-        )
+    result = await search_documents(
+        "youtube premium",
+        client=AsyncMock(),
+        mode="recall,precision",
+        limit=20,
+    )
 
     assert (
         result.summary
         == "Invalid search mode 'recall,precision'. Allowed values: precision, recall."
     )
-    hybrid_retrieve_mock.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -352,9 +182,6 @@ async def test_execute_tool_call_detailed_recall_requires_explicit_limit():
         "search_documents",
         {"query": "youtube premium", "mode": "recall"},
         client=AsyncMock(),
-        embedder=AsyncMock(),
-        qdrant_url="http://qdrant:6333",
-        config=MagicMock(),
     )
 
     assert result.content == "Recall searches require an explicit limit."
@@ -362,23 +189,16 @@ async def test_execute_tool_call_detailed_recall_requires_explicit_limit():
 
 @pytest.mark.asyncio
 async def test_execute_tool_call_detailed_rejects_invalid_mode():
-    with patch(
-        "paperless_ai.search.tools.hybrid_retrieve", AsyncMock()
-    ) as hybrid_retrieve_mock:
-        result = await execute_tool_call_detailed(
-            "search_documents",
-            {"query": "youtube premium", "mode": "recall,precision"},
-            client=AsyncMock(),
-            embedder=AsyncMock(),
-            qdrant_url="http://qdrant:6333",
-            config=MagicMock(),
-        )
+    result = await execute_tool_call_detailed(
+        "search_documents",
+        {"query": "youtube premium", "mode": "recall,precision"},
+        client=AsyncMock(),
+    )
 
     assert (
         result.content
         == "Invalid search mode 'recall,precision'. Allowed values: precision, recall."
     )
-    hybrid_retrieve_mock.assert_not_called()
 
 
 def test_start_span_preserves_original_exception():
@@ -399,8 +219,6 @@ async def test_chat_copilot_run_turn_emits_events_and_aggregates_usage():
     copilot = ChatCopilot(
         config=config,
         client=AsyncMock(),
-        embedder=AsyncMock(),
-        qdrant_url="http://qdrant:6333",
     )
 
     first_response = _completion(

@@ -5,26 +5,8 @@ import json
 from dataclasses import dataclass, field
 from typing import Any
 
-from qdrant_client import AsyncQdrantClient
-from qdrant_client import models
-
-from paperless_ai.core.config import AgentConfig
-from paperless_ai.inference import complete
 from paperless_common.paperless import PaperlessClient
 from paperless_common.telemetry import set_span_attributes, start_span
-from paperless_ai.search.embedder_types import SearchEmbedder
-from paperless_ai.search.qdrant_store import COLLECTION
-from paperless_ai.search.retriever import (
-    RETRIEVAL_MODE_DENSE_K,
-    RetrievalMode,
-    SearchFilters,
-    _extract_qdrant_hits,
-    hybrid_retrieve,
-)
-
-JUDGE_DOC_MAX_CHARS = 2000
-JUDGE_BATCH_SIZE = 5
-VALID_RETRIEVAL_MODES = tuple(RETRIEVAL_MODE_DENSE_K)
 
 
 @dataclass
@@ -58,8 +40,12 @@ TOOL_SCHEMAS = [
         "function": {
             "name": "search_documents",
             "description": (
-                "Search Paperless documents using semantic search with optional exact metadata "
-                "filters for correspondent, document type, storage path, tags, and year. "
+                "Search Paperless full text using a short, distinctive keyword query. "
+                "Paperless supports uppercase AND, OR, NOT, and parentheses; terms without "
+                "an operator imply AND. Use OR for alternate terms and quotes for exact phrases. "
+                "Avoid natural language sentences. If no results are found, retry with "
+                "shorter keywords or a different distinctive term. Optional exact metadata "
+                "filters are available for correspondent, document type, storage path, tags, and year. "
                 "Use mode=precision for singular lookups and mode=recall for exhaustive lists. "
                 "When mode=recall, always provide an explicit limit."
             ),
@@ -104,182 +90,26 @@ def _snippet(text: str, limit: int = 280) -> str:
     return clean[: limit - 3].rstrip() + "..."
 
 
-def _chat_completion_kwargs(
-    config: AgentConfig, messages: list[dict[str, Any]]
-) -> dict[str, Any]:
-    kwargs: dict[str, Any] = {
-        "model": config.chat_model,
-        "messages": messages,
-        **config.get_chat_kwargs(),
-    }
-    if "temperature" not in kwargs:
-        kwargs["temperature"] = 0.0
-    kwargs.pop("tools", None)
-    kwargs.pop("tool_choice", None)
-    if config.chat_endpoint:
-        kwargs["endpoint"] = config.chat_endpoint
-    return kwargs
-
-
-def _format_hit(payload: dict[str, Any]) -> str:
-    doc_id = payload.get("doc_id", "?")
-    parts = [f"Doc {doc_id}"]
-    if payload.get("title"):
-        parts.append(str(payload["title"]))
-    if payload.get("correspondent"):
-        parts.append(str(payload["correspondent"]))
-    if payload.get("date"):
-        parts.append(str(payload["date"]))
-    if payload.get("document_type"):
-        parts.append(f"Type: {payload['document_type']}")
-    if payload.get("storage_path"):
-        parts.append(f"Path: {payload['storage_path']}")
-    tags = payload.get("tags") or []
-    if tags:
-        parts.append(f"Tags: {', '.join(tags)}")
-    return f"[{' | '.join(parts)}]: {_snippet(str(payload.get('text') or ''))}"
-
-
-async def _lookup_payloads(
-    qdrant_url: str,
-    doc_ids: list[int],
-    limit: int,
-    *,
-    qdrant_client: AsyncQdrantClient | None = None,
-) -> dict[int, dict[str, Any]]:
-    with start_span(
-        "paperless_ai.search.lookup_payloads",
-        **{
-            "paperless_ai.search.lookup_doc_count": len(doc_ids),
-        },
-    ) as span:
-        qdrant = qdrant_client or AsyncQdrantClient(url=qdrant_url)
-        try:
-            hits = ([], None)
-            if doc_ids:
-                hits = await qdrant.scroll(
-                    collection_name=COLLECTION,
-                    scroll_filter=models.Filter(
-                        must=[
-                            models.FieldCondition(
-                                key="doc_id",
-                                match=models.MatchAny(any=doc_ids),
-                            )
-                        ]
-                    ),
-                    with_payload=True,
-                    limit=max(limit * 8, 20),
-                )
-        finally:
-            if qdrant_client is None:
-                await qdrant.close()
-        payload_by_doc_id: dict[int, dict[str, Any]] = {}
-        for point in _extract_qdrant_hits(hits):
-            if not point.payload or point.payload.get("doc_id") is None:
-                continue
-            payload_by_doc_id.setdefault(int(point.payload["doc_id"]), point.payload)
-        set_span_attributes(
-            span, **{"paperless_ai.search.lookup_payload_count": len(payload_by_doc_id)}
-        )
-        return payload_by_doc_id
-
-
-async def _judge_precision_documents(
-    *,
-    query: str,
-    doc_ids: list[int],
-    client: PaperlessClient,
-    config: AgentConfig,
-) -> list[int]:
-    async def _fetch_judge_candidate(doc_id: int) -> dict[str, Any] | None:
-        doc = await client.get_document_with_content(int(doc_id))
-        if doc is None:
-            return None
-        return {
-            "id": int(doc_id),
-            "title": doc.get("title") or "Untitled",
-            "content": str(doc.get("content") or "").strip()[:JUDGE_DOC_MAX_CHARS],
-        }
-
-    with start_span(
-        "paperless_ai.search.precision_judge",
-        **{
-            "paperless_ai.search.query": query,
-            "paperless_ai.search.judge_doc_count": len(doc_ids),
-            "paperless_ai.search.judge_batch_size": JUDGE_BATCH_SIZE,
-        },
-    ) as span:
-        kept_doc_ids: list[int] = []
-        failed_batches = 0
-        for start in range(0, len(doc_ids), JUDGE_BATCH_SIZE):
-            batch = doc_ids[start : start + JUDGE_BATCH_SIZE]
-            docs = [
-                doc
-                for doc in await asyncio.gather(
-                    *(_fetch_judge_candidate(int(doc_id)) for doc_id in batch)
-                )
-                if doc is not None
-            ]
-            if not docs:
-                continue
-
-            prompt = (
-                "You are filtering candidate documents for a search query. "
-                'Return strict JSON of the form {"keep_doc_ids":[...]} containing only document IDs '
-                "that are genuinely relevant to the query. Preserve the most relevant order and do not "
-                "include explanations.\n\n"
-                f"Query: {query}\n\nCandidates:\n{json.dumps(docs, ensure_ascii=True)}"
-            )
-            try:
-                response = await complete(
-                    domain="precision_search_judge",
-                    **_chat_completion_kwargs(
-                        config,
-                        [
-                            {"role": "system", "content": "Return only strict JSON."},
-                            {"role": "user", "content": prompt},
-                        ],
-                    ),
-                )
-                raw = str(response.content or "").strip()
-                parsed = json.loads(raw)
-                keep_doc_ids = [
-                    int(doc_id) for doc_id in parsed.get("keep_doc_ids", [])
-                ]
-                keep_set = set(batch)
-                kept_doc_ids.extend(
-                    [doc_id for doc_id in keep_doc_ids if doc_id in keep_set]
-                )
-            except Exception:
-                failed_batches += 1
-                kept_doc_ids.extend(batch)
-        set_span_attributes(
-            span,
-            **{
-                "paperless_ai.search.judge_kept_doc_count": len(kept_doc_ids),
-                "paperless_ai.search.judge_failed_batches": failed_batches,
-            },
-        )
-        return kept_doc_ids
+def _format_hit(doc: dict[str, Any]) -> str:
+    return (
+        f"[Doc {doc.get('id', '?')} | {doc.get('title') or 'Untitled'}]: "
+        f"{_snippet(str(doc.get('content') or ''))}"
+    )
 
 
 async def search_documents(
     query: str,
     *,
-    embedder: SearchEmbedder,
-    qdrant_url: str,
-    config: AgentConfig,
+    client: PaperlessClient,
     correspondent: str | None = None,
     document_type: str | None = None,
     storage_path: str | None = None,
     tags: list[str] | None = None,
     year: str | None = None,
     limit: int | None = None,
-    mode: RetrievalMode = "precision",
-    client: PaperlessClient | None = None,
-    qdrant_client: AsyncQdrantClient | None = None,
+    mode: str = "precision",
 ) -> ToolExecutionResult:
-    """Run hybrid retrieval against Qdrant and Paperless and return formatted snippets."""
+    """Search Paperless full text and return matching document snippets."""
     with start_span(
         "paperless_ai.tool.search_documents",
         **{
@@ -288,10 +118,15 @@ async def search_documents(
             "paperless_ai.search.query": query,
         },
     ) as span:
-        if mode not in VALID_RETRIEVAL_MODES:
+        if not query.strip():
+            content = "Provide one or more search keywords."
+            set_span_attributes(span, **{"paperless_ai.tool.validation_error": content})
+            return ToolExecutionResult(
+                content=content, summary=content, preview=content
+            )
+        if mode not in ("precision", "recall"):
             content = (
-                f"Invalid search mode {mode!r}. "
-                f"Allowed values: {', '.join(VALID_RETRIEVAL_MODES)}."
+                f"Invalid search mode {mode!r}. Allowed values: precision, recall."
             )
             set_span_attributes(span, **{"paperless_ai.tool.validation_error": content})
             return ToolExecutionResult(
@@ -303,75 +138,51 @@ async def search_documents(
             return ToolExecutionResult(
                 content=content, summary=content, preview=content
             )
-        resolved_limit = 20 if limit is None else limit
-        filters = SearchFilters(
+        if limit is not None and not 1 <= limit <= 100:
+            content = "Search limits must be between 1 and 100."
+            set_span_attributes(span, **{"paperless_ai.tool.validation_error": content})
+            return ToolExecutionResult(
+                content=content, summary=content, preview=content
+            )
+
+        result_limit = 20 if limit is None else limit
+        doc_ids = await client.search_documents_all(
+            query,
+            limit=result_limit,
             correspondent=correspondent,
             document_type=document_type,
             storage_path=storage_path,
             tags=tags,
             year=year,
         )
-        fused_ids, chunk_map = await hybrid_retrieve(
-            embedder=embedder,
-            qdrant_url=qdrant_url,
-            query=query,
-            client=client,
-            filters=filters,
-            dense_k=RETRIEVAL_MODE_DENSE_K[mode],
-            rerank_candidates=max(resolved_limit, 50),
-            mode=mode,
-            qdrant_client=qdrant_client,
-        )
         set_span_attributes(
-            span, **{"paperless_ai.tool.prejudge_doc_count": len(fused_ids)}
+            span, **{"paperless_ai.tool.keyword_doc_count": len(doc_ids)}
         )
-        if mode == "precision" and fused_ids and client is not None:
-            fused_ids = await _judge_precision_documents(
-                query=query,
-                doc_ids=fused_ids,
-                client=client,
-                config=config,
+        docs = await asyncio.gather(
+            *(
+                client.get_document_with_content(doc_id)
+                for doc_id in doc_ids[:result_limit]
             )
-        if not fused_ids:
-            return ToolExecutionResult(
-                content="No matching documents found.",
-                summary="No documents matched the search.",
-                preview="No matching documents found.",
-            )
-
-        payload_by_doc_id = await _lookup_payloads(
-            qdrant_url,
-            fused_ids[:resolved_limit],
-            resolved_limit,
-            qdrant_client=qdrant_client,
         )
-        formatted: list[str] = []
-        source_refs: list[ToolSourceRef] = []
-        for doc_id in fused_ids[:resolved_limit]:
-            payload = payload_by_doc_id.get(
-                int(doc_id),
-                {"doc_id": int(doc_id), "text": chunk_map.get(int(doc_id), "")},
-            )
-            formatted.append(_format_hit(payload))
-            source_refs.append(ToolSourceRef(doc_id=int(doc_id), source_type="search"))
-
+        results = [doc for doc in docs if doc is not None]
+        formatted = [_format_hit(doc) for doc in results]
+        source_refs = [
+            ToolSourceRef(doc_id=int(doc["id"]), source_type="search")
+            for doc in results
+        ]
         content = "\n".join(formatted) if formatted else "No matching documents found."
         set_span_attributes(
             span,
             **{
-                "paperless_ai.tool.final_doc_count": len(fused_ids),
+                "paperless_ai.tool.final_doc_count": len(results),
                 "paperless_ai.tool.returned_doc_count": len(source_refs),
             },
         )
-        if not formatted:
-            return ToolExecutionResult(
-                content=content,
-                summary="No documents matched the search.",
-                preview=content,
-            )
         return ToolExecutionResult(
             content=content,
-            summary=f"Found {len(source_refs)} matching document(s).",
+            summary=f"Found {len(results)} matching document(s)."
+            if results
+            else "No documents matched the search.",
             preview=_snippet(content, limit=420),
             source_refs=source_refs,
         )
@@ -460,22 +271,9 @@ async def execute_tool_call(
     arguments: dict[str, Any],
     *,
     client: PaperlessClient,
-    embedder: SearchEmbedder,
-    qdrant_url: str,
-    config: AgentConfig,
-    qdrant_client: AsyncQdrantClient | None = None,
 ) -> str:
     """Compatibility wrapper returning only the tool content."""
-    result = await execute_tool_call_detailed(
-        name,
-        arguments,
-        client=client,
-        embedder=embedder,
-        qdrant_url=qdrant_url,
-        config=config,
-        qdrant_client=qdrant_client,
-    )
-    return result.content
+    return (await execute_tool_call_detailed(name, arguments, client=client)).content
 
 
 async def execute_tool_call_detailed(
@@ -483,10 +281,6 @@ async def execute_tool_call_detailed(
     arguments: dict[str, Any],
     *,
     client: PaperlessClient,
-    embedder: SearchEmbedder,
-    qdrant_url: str,
-    config: AgentConfig,
-    qdrant_client: AsyncQdrantClient | None = None,
 ) -> ToolExecutionResult:
     """Dispatch a tool call with UI-friendly metadata for the chat frontend."""
     if name == "get_available_metadata":
@@ -494,18 +288,14 @@ async def execute_tool_call_detailed(
     if name == "search_documents":
         return await search_documents(
             arguments.get("query", ""),
-            embedder=embedder,
-            qdrant_url=qdrant_url,
-            config=config,
             client=client,
             correspondent=arguments.get("correspondent"),
             document_type=arguments.get("document_type"),
             storage_path=arguments.get("storage_path"),
             tags=arguments.get("tags"),
             year=arguments.get("year"),
-            limit=(None if "limit" not in arguments else int(arguments["limit"])),
+            limit=None if "limit" not in arguments else int(arguments["limit"]),
             mode=str(arguments.get("mode", "precision")),
-            qdrant_client=qdrant_client,
         )
     if name == "read_full_document":
         return await read_full_document(

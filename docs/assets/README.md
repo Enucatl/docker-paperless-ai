@@ -23,17 +23,15 @@ Architecture diagram for the document ingestion pipeline. It shows:
 - Paperless-ngx document import and workflows,
 - the thin webhook listener,
 - Redis queues and stage tags,
-- the AI worker stages: OCR, metadata extraction, embedding,
+- the AI worker stages: OCR and metadata extraction,
 - model providers or local vLLM endpoints on the GPU workstation,
-- Qdrant for chunk vectors,
 - Phoenix for traces and token/cost visibility.
 
 ### `agentic-chat-flow.png`
 
 Agentic chat architecture diagram. It shows the user query entering the
 LangGraph agent, tool fan-out, metadata and full-document reads through the
-Paperless REST API, hybrid search over Paperless/Postgres and Qdrant, local
-`bge-reranker-v2-m3` reranking, an LLM precision judge, and the final
+Paperless REST API, Paperless full-text keyword search, document inspection, and the final
 source-backed response.
 
 ### `phoenix-trace.png`
@@ -51,6 +49,6 @@ instead of picked by intuition.
 ### `full-metadata-trace.png`
 
 Phoenix trace/cost view for the chosen setup: Gemini 3.5 flash-lite extraction
-and local BAAI/bge-m3 embeddings. This supports the
+and Paperless full-text search. This supports the
 cost claim from the real backfill: about 2,000 documents, roughly 7,000 pages,
 and less than one dollar in Google API credits.

@@ -21,7 +21,6 @@ _webhook_secret: str | None = None
 _paperless_client: PaperlessClient | None = None
 _tag_ocr: str = "ai:run-ocr"
 _tag_metadata: str = "ai:run-metadata"
-_tag_embed: str = "ai:run-embed"
 
 _DOC_URL_ID_RE = re.compile(r"/documents/(\d+)(?:/|$)")
 
@@ -29,13 +28,12 @@ _DOC_URL_ID_RE = re.compile(r"/documents/(\d+)(?:/|$)")
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global _queues, _webhook_secret, _paperless_client
-    global _tag_ocr, _tag_metadata, _tag_embed
+    global _tag_ocr, _tag_metadata
 
     redis_url = os.environ.get("REDIS_URL", "redis://broker:6379/1")
     _webhook_secret = read_secret("WEBHOOK_SECRET") or None
     _tag_ocr = os.environ.get("TAG_OCR", os.environ.get("TAG_PENDING", "ai:run-ocr"))
     _tag_metadata = os.environ.get("TAG_METADATA", "ai:run-metadata")
-    _tag_embed = os.environ.get("TAG_EMBED", "ai:run-embed")
     paperless_url = os.environ.get("PAPERLESS_URL")
     paperless_token = read_secret("PAPERLESS_TOKEN")
 
@@ -48,11 +46,10 @@ async def lifespan(app: FastAPI):
         log.warning("Ingress Paperless integration disabled")
 
     log.info(
-        "Webhook ingress ready (redis=%s, tags: ocr=%r metadata=%r embed=%r)",
+        "Webhook ingress ready (redis=%s, tags: ocr=%r metadata=%r)",
         redis_url,
         _tag_ocr,
         _tag_metadata,
-        _tag_embed,
     )
     yield
     if _queues is not None:
@@ -86,8 +83,6 @@ def _route_to_stage(tags: set[str]) -> str | None:
         return TaskQueues.KEY_OCR
     if _tag_metadata in tags:
         return TaskQueues.KEY_METADATA
-    if _tag_embed in tags:
-        return TaskQueues.KEY_EMBED
     return None
 
 
@@ -145,12 +140,7 @@ async def webhook_document(request: Request) -> Response:
         tags = await _get_current_document_tags(doc_id, _parse_tags(body))
         stage = _route_to_stage(tags)
         if stage is None:
-            added = await _queues.enqueue_refresh(doc_id)
-            log.info(
-                "Webhook result: document %d → refresh (%s)",
-                doc_id,
-                "queued" if added else "already pending",
-            )
+            log.info("Webhook result: document %d ignored (no processing tag)", doc_id)
         else:
             added = await _queues.enqueue(doc_id, stage)
             log.info(
@@ -168,5 +158,5 @@ async def health() -> dict:
     if _queues is not None:
         pending = await _queues.pending_count()
     else:
-        pending = {"ocr": 0, "metadata": 0, "embed": 0, "refresh": 0}
+        pending = {"ocr": 0, "metadata": 0}
     return {"status": "ok", "pending": pending}

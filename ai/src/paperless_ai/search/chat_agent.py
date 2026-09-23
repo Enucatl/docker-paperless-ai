@@ -4,14 +4,11 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable
 
-from qdrant_client import AsyncQdrantClient
-
 from paperless_ai.core.config import AgentConfig
 from paperless_ai.inference import complete
 from paperless_common.paperless import PaperlessClient
 from paperless_common.telemetry import set_span_attributes, start_span
 from paperless_ai.search.chat_state import ChatState
-from paperless_ai.search.embedder_types import SearchEmbedder
 from paperless_ai.search.tools import (
     TOOL_SCHEMAS,
     ToolExecutionResult,
@@ -23,8 +20,16 @@ SYSTEM_PROMPT = (
     "You are an AI assistant for a Paperless-ngx repository. "
     "Use tools to search documents and inspect source text before answering specific factual questions. "
     "Always cite relevant document IDs in your answer. "
+    "Search uses Paperless full-text keywords: send short, distinctive terms rather than a natural-language sentence. "
+    "Paperless query syntax supports uppercase AND, OR, and NOT, with parentheses for grouping; "
+    "terms without an operator are implicitly combined with AND. Use OR for alternate words "
+    "(for example, zoo OR tickets OR admission), and use AND only when all concepts must appear. "
+    "Use double quotes for an exact phrase. "
+    "If a keyword search returns nothing, retry with simpler keywords or another distinctive term before concluding there are no matches. "
     "Before filtering by metadata like tags, correspondents, document types, or storage paths, "
     "call get_available_metadata to confirm the exact names. "
+    "Metadata filters require exact matches. If a filtered search returns no documents, retry "
+    "without the restrictive metadata filter before concluding that no matching documents exist. "
     "Use search_documents with mode=precision for singular lookups and fact-finding, and "
     "mode=recall for exhaustive listing requests. When using mode=recall, always pass an explicit "
     "limit large enough for the requested count. After a precision search, read the top relevant "
@@ -100,15 +105,9 @@ class ChatCopilot:
         self,
         config: AgentConfig,
         client: PaperlessClient,
-        embedder: SearchEmbedder,
-        qdrant_url: str,
-        qdrant_client: AsyncQdrantClient | None = None,
     ):
         self._config = config
         self._client = client
-        self._embedder = embedder
-        self._qdrant_url = qdrant_url
-        self._qdrant_client = qdrant_client
 
     async def _emit(
         self, callback: EventCallback | None, event: dict[str, Any]
@@ -273,10 +272,6 @@ class ChatCopilot:
                             name,
                             args,
                             client=self._client,
-                            embedder=self._embedder,
-                            qdrant_url=self._qdrant_url,
-                            config=self._config,
-                            qdrant_client=self._qdrant_client,
                         )
                         duration_ms = int((time.perf_counter() - start) * 1000)
                         set_span_attributes(

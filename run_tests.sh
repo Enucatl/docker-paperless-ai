@@ -50,12 +50,11 @@ fi
 # ---------------------------------------------------------------------------
 echo ""
 echo "=== Starting test infrastructure ==="
-# qdrant and webhook-listener are pre-started here so they are healthy by the
-# time the ai container (pytest) runs.  The ai service also declares them as
-# depends_on with condition: service_healthy as a belt-and-suspenders check.
+# webhook-listener is pre-started here so it is healthy by the time the ai
+# container (pytest) runs.
 # Phoenix is optional — don't fail if the image isn't available.
-$COMPOSE up -d db broker webserver qdrant webhook-listener phoenix 2>/dev/null || \
-    $COMPOSE up -d db broker webserver qdrant webhook-listener
+$COMPOSE up -d db broker webserver webhook-listener phoenix 2>/dev/null || \
+    $COMPOSE up -d db broker webserver webhook-listener
 
 # ---------------------------------------------------------------------------
 # 3. Wait for Paperless webserver healthcheck

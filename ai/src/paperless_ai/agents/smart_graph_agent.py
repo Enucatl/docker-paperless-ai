@@ -165,9 +165,9 @@ class _ExtractedMetadata(BaseModel):
     summary: Optional[str] = Field(
         default=None,
         description=(
-            "One or two sentences summarising the content and purpose for use as embedding context in retrieval. "
+            "One or two sentences summarising the content and purpose for document search. "
             "Start directly with the subject matter, not with phrases like 'This document is', 'This is', "
-            "or other meta framing. Be specific, factual, and useful for semantic search."
+            "or other meta framing. Be specific, factual, and useful for matching documents."
         ),
     )
 
@@ -473,7 +473,7 @@ def _select_ocr_pages(total_pages: int, config: "AgentConfig") -> list[int]:
     Rationale: Paperless-ngx Tesseract already produces full-document text for
     keyword search.  Vision OCR is only needed to capture semantically rich
     pages (cover, header, executive summary, signature block) for metadata
-    extraction and embedding.
+    extraction.
     """
     if total_pages <= config.ocr_page_limit_threshold:
         return list(range(total_pages))

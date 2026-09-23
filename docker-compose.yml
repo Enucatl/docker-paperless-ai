@@ -55,8 +55,6 @@ services:
         condition: service_healthy
       broker:
         condition: service_healthy
-      qdrant:
-        condition: service_started
     healthcheck:
       test: ["CMD", "curl", "-fs", "-S", "--max-time", "2", "http://localhost:8000"]
       interval: 30s
@@ -155,29 +153,6 @@ services:
       retries: 5
       start_period: 40s
 
-
-  # Qdrant vector database — stores document chunk embeddings for hybrid search.
-  # Always-on, lightweight (~50 MB RAM, written in Rust).
-  qdrant:
-    extends:
-      file: ../compose-security-baseline/hardening.yml
-      service: hardened-medium
-    image: qdrant/qdrant:latest
-    cpu_shares: 256
-    environment:
-      - QDRANT__TELEMETRY_DISABLED=true
-    healthcheck:
-      # Bash TCP pseudo-device: fast, no external tooling needed.
-      test: ["CMD", "bash", "-c", ":> /dev/tcp/127.0.0.1/6333"]
-      interval: 3s
-      timeout: 5s
-      retries: 15
-    networks:
-      - internal
-    volumes:
-      - qdrant_data:/qdrant/storage
-      - qdrant_snapshot:/qdrant/snapshots
-      - qdrant_tmp:/qdrant/temp
 
   # Webhook listener — receives document events from Paperless and enqueues
   # doc IDs in Redis DB 1 for the AI worker to pick up.
@@ -303,26 +278,20 @@ services:
       - INFERENCE_OCR_ENDPOINT
       - INFERENCE_METADATA_ENDPOINT
 
-      # Local search process tuning.
-      - LOCAL_SEARCH_IDLE_TIMEOUT_SECONDS=${LOCAL_SEARCH_IDLE_TIMEOUT_SECONDS:-180}
-      - LOCAL_SEARCH_WARM_ON_CHAT_LOAD=${LOCAL_SEARCH_WARM_ON_CHAT_LOAD:-true}
-      - LOCAL_SEARCH_WARM_ON_STARTUP=${LOCAL_SEARCH_WARM_ON_STARTUP:-false}
-      - LOCAL_SEARCH_START_METHOD=${LOCAL_SEARCH_START_METHOD:-spawn}
-
       # Docker secrets (_FILE variants read the key from a file, safer):
       - GOOGLE_API_KEY_FILE=/run/secrets/google_api_key
       - ANTHROPIC_API_KEY_FILE=/run/secrets/anthropic_api_key
       - OPENAI_API_KEY_FILE=/run/secrets/openai_api_key
       - OPENROUTER_API_KEY_FILE=/run/secrets/openrouter_api_key
       - HF_TOKEN_FILE=/run/secrets/hf_token
+      - TYPESAFE_API_KEY_FILE=/run/secrets/typesafe_api_key
+      - TYPESAFE_MODEL
+      - TYPESAFE_ENDPOINT
+      - PRECISION_SEARCH_NOUL_THRESHOLD
+      - RECALL_SEARCH_NOUL_THRESHOLD
 
-      # Redis queue + Qdrant + embeddings API
+      # Redis queue
       - REDIS_URL=redis://broker:6379/1
-      - QDRANT_URL=http://qdrant:6333
-      - INFERENCE_EMBEDDING_ENDPOINT
-      - INFERENCE_EMBEDDING_MODEL
-      - CHUNK_SIZE=${CHUNK_SIZE:-512}
-      - CHUNK_OVERLAP=${CHUNK_OVERLAP:-50}
 
       # Behaviour tuning (all optional)
       - POLL_INTERVAL
@@ -333,13 +302,6 @@ services:
       - INFERENCE_METADATA_REASONING_EFFORT
       - INFERENCE_METADATA_MAX_TOKENS
       - INFERENCE_METADATA_EXTRA_KWARGS
-      - INFERENCE_SITUATION_MODEL
-      - INFERENCE_SITUATION_ENDPOINT
-      - INFERENCE_SITUATION_TEMPERATURE
-      - INFERENCE_SITUATION_REASONING_EFFORT
-      - INFERENCE_SITUATION_MAX_TOKENS
-      - INFERENCE_SITUATION_CONTEXT_CHARS
-      - INFERENCE_SITUATION_EXTRA_KWARGS
       - INFERENCE_CHAT_TEMPERATURE
       - INFERENCE_CHAT_REASONING_EFFORT
       - INFERENCE_CHAT_MAX_TOKENS
@@ -353,7 +315,6 @@ services:
       - PHOENIX_CLIENT_HEADERS=api_key=local
     volumes:
       - ./ai/eval:/app/eval
-      - hf_cache:/home/app/.cache/huggingface
     networks:
       - internal
       - traefik_proxy
@@ -373,8 +334,6 @@ services:
         condition: service_healthy
       broker:
         condition: service_healthy
-      qdrant:
-        condition: service_healthy
       phoenix:
         condition: service_healthy
       db:
@@ -388,6 +347,7 @@ services:
       - openrouter_api_key
       - hf_token
       - ai_chat_postgres_password
+      - typesafe_api_key
 
   ai-cleanup:
     extends:
@@ -532,11 +492,6 @@ services:
       - TYPESAFE_MODEL
       - TYPESAFE_ENDPOINT
       - REDIS_URL=redis://broker:6379/1
-      - QDRANT_URL=http://qdrant:6333
-      - INFERENCE_EMBEDDING_ENDPOINT
-      - INFERENCE_EMBEDDING_MODEL
-      - CHUNK_SIZE=${CHUNK_SIZE:-512}
-      - CHUNK_OVERLAP=${CHUNK_OVERLAP:-50}
       - OTEL_EXPORTER_OTLP_ENDPOINT=http://phoenix:6006/v1/traces
       - PHOENIX_CLIENT_HEADERS=api_key=local
     volumes: []
@@ -546,8 +501,6 @@ services:
     depends_on:
       webserver:
         condition: service_healthy
-      qdrant:
-        condition: service_started
       phoenix:
         condition: service_healthy
 
@@ -593,9 +546,5 @@ volumes:
     external: true
     name: paperless-ai_media
   export:
-  hf_cache:
   pgdata:
   phoenixdata:
-  qdrant_data:
-  qdrant_snapshot:
-  qdrant_tmp:

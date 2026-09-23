@@ -22,11 +22,8 @@ dependencies = [
     "fastapi>=0.115",
     "uvicorn[standard]>=0.30",
     "redis[hiredis]>=5.0",
-    "qdrant-client>=1.12",
     "psycopg[binary]>=3.2",
-    "torch",
-    "sentence-transformers>=3.0",
-    "langchain-text-splitters>=1.1.1",
+    "typesafe-sdk>=0.5.7",
 ]
 
 [project.optional-dependencies]
@@ -37,7 +34,6 @@ eval = [
     "datasets",
     "nest_asyncio",
     "pandas",
-    "typesafe-sdk>=0.5.7",
 ]
 test = [
     "paperless-listener",
@@ -45,7 +41,6 @@ test = [
     "pytest-asyncio>=0.23",
 ]
 cleanup = [
-    "typesafe-sdk>=0.5.7",
     "psycopg[binary]>=3.2",
 ]
 
@@ -72,9 +67,3 @@ where = ["src"]
 paperless-common = { path = "../common" }
 paperless-listener = { path = "../listener" }
 shared-inference = { git = "https://github.com/Enucatl/shared-inference.git", branch = "main" }
-torch = { index = "pytorch-cpu" }
-
-[[tool.uv.index]]
-name = "pytorch-cpu"
-url = "https://download.pytorch.org/whl/cpu"
-explicit = true

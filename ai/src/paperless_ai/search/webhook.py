@@ -15,7 +15,6 @@ import niquests
 from fastapi import (
     FastAPI,
     HTTPException,
-    Query,
     Request,
     Response,
     WebSocket,
@@ -28,46 +27,23 @@ from paperless_ai.core.config import AgentConfig
 from paperless_common.paperless import PaperlessClient, _raise_for_status
 from paperless_common.telemetry import setup_telemetry
 from paperless_common.queue import TaskQueues
-from paperless_ai.search.retriever import (
-    SearchFilters,
-    hybrid_retrieve,
-)
 
 if TYPE_CHECKING:
     from paperless_ai.search.chat_agent import ChatCopilot
     from paperless_ai.search.chat_store import ChatStore
-    from paperless_ai.search.local_search_process import ProcessLocalSearchEmbedder
 
 log = logging.getLogger(__name__)
 
 _queues: TaskQueues | None = None
-_lazy_embedder: ProcessLocalSearchEmbedder | None = None
 _paperless_client: PaperlessClient | None = None
-_qdrant_store = None
-_qdrant_url: str = "http://qdrant:6333"
 _chat_copilot: ChatCopilot | None = None
 _chat_store: ChatStore | None = None
 _config: AgentConfig | None = None
-_local_search_idle_timeout_seconds: int = 300
-_local_search_start_method: str = "spawn"
-_local_search_warm_on_startup: bool = False
-_local_search_warm_on_chat_load: bool = True
-_local_search_warmup_task: asyncio.Task | None = None
 _worker_tasks: list[asyncio.Task] = []
-_worker_heartbeats: dict[str, float] = {
-    "ocr": 0.0,
-    "metadata": 0.0,
-    "embed": 0.0,
-    "refresh": 0.0,
-}
+_worker_heartbeats: dict[str, float] = {"ocr": 0.0, "metadata": 0.0}
 _worker_ready: bool = False
 _worker_setup_error: str | None = None
-_search_request_timeout_seconds: float = 20.0
-
-# Retrieval hyperparameters
-K = 25  # max chunks from dense search
-N = 50  # min candidate pool size before local reranking
-RRF_K = 60  # RRF smoothing constant
+PAPERLESS_SEARCH_PAGE_SIZE = 50
 
 
 def _is_retryable_paperless_error(exc: Exception) -> bool:
@@ -152,48 +128,17 @@ async def _initialize_paperless(
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global \
-        _queues, \
-        _lazy_embedder, \
-        _paperless_client, \
-        _qdrant_store, \
-        _qdrant_url, \
-        _chat_copilot, \
-        _chat_store, \
-        _config
-    global _local_search_idle_timeout_seconds, _local_search_start_method
-    global _local_search_warm_on_startup, _local_search_warm_on_chat_load
-    global _local_search_warmup_task
+    global _queues, _paperless_client, _chat_copilot, _chat_store, _config
     global _worker_tasks, _worker_heartbeats, _worker_ready, _worker_setup_error
-    global _search_request_timeout_seconds
 
     redis_url = os.environ.get("REDIS_URL", "redis://broker:6379/1")
-    _qdrant_url = os.environ.get("QDRANT_URL", "http://qdrant:6333")
     paperless_url = os.environ.get("PAPERLESS_URL")
     paperless_token = read_secret("PAPERLESS_TOKEN")
-    _local_search_idle_timeout_seconds = int(
-        os.environ.get("LOCAL_SEARCH_IDLE_TIMEOUT_SECONDS", "300")
-    )
-    _local_search_start_method = os.environ.get("LOCAL_SEARCH_START_METHOD", "spawn")
-    _local_search_warm_on_startup = (
-        os.environ.get("LOCAL_SEARCH_WARM_ON_STARTUP", "false").lower() == "true"
-    )
-    _local_search_warm_on_chat_load = (
-        os.environ.get("LOCAL_SEARCH_WARM_ON_CHAT_LOAD", "true").lower() == "true"
-    )
-    _search_request_timeout_seconds = float(
-        os.environ.get("SEARCH_REQUEST_TIMEOUT_SECONDS", "20")
-    )
     log.info(
-        "Startup config: redis=%s qdrant=%s paperless_url=%r paperless_token=%s local_search_idle_timeout=%ss local_search_start_method=%s warm_on_startup=%s warm_on_chat_load=%s",
+        "Startup config: redis=%s paperless_url=%r paperless_token=%s",
         redis_url,
-        _qdrant_url,
         paperless_url,
         "loaded" if paperless_token else "missing",
-        _local_search_idle_timeout_seconds,
-        _local_search_start_method,
-        _local_search_warm_on_startup,
-        _local_search_warm_on_chat_load,
     )
     if not paperless_url:
         raise RuntimeError("PAPERLESS_URL is not set for the copilot service")
@@ -204,8 +149,6 @@ async def lifespan(app: FastAPI):
 
     _paperless_client = PaperlessClient(paperless_url, paperless_token)
     log.info("Paperless keyword search enabled (%s)", paperless_url)
-
-    log.info("Local reranking enabled lazily for search/chat requests")
 
     _config = AgentConfig.from_env()
     setup_telemetry(service_name=_config.name, project_name=_config.name)
@@ -220,23 +163,18 @@ async def lifespan(app: FastAPI):
     await _chat_store.migrate()
     log.info("Chat history database migrations are ready")
     _queues = TaskQueues(redis_url)
-    _lazy_embedder = None
 
     from paperless_ai.core.runner import (
         clear_shutdown_request,
         close_model_probe_session,
         request_shutdown,
-        run_embed_batch,
         run_metadata_batch,
         run_ocr_batch,
-        run_refresh_batch,
     )
-    from paperless_ai.search.embedder import EmbeddingAPIEmbedder
-    from paperless_ai.search.qdrant_store import QdrantDocumentStore
 
     _worker_ready = False
     _worker_setup_error = None
-    _worker_heartbeats = {"ocr": 0.0, "metadata": 0.0, "embed": 0.0, "refresh": 0.0}
+    _worker_heartbeats = {"ocr": 0.0, "metadata": 0.0}
     _worker_tasks = []
     clear_shutdown_request()
 
@@ -247,25 +185,8 @@ async def lifespan(app: FastAPI):
         ai_result_field_id,
     ) = await _initialize_paperless(_paperless_client, _config)
 
-    store = QdrantDocumentStore(_config.qdrant_url)
-    try:
-        await store.ensure_collection()
-        log.info("Qdrant collection ready (%s)", _config.qdrant_url)
-    except Exception as exc:
-        log.warning("Qdrant not reachable: %s — embedding will be skipped", exc)
-        store = None
-    _qdrant_store = store
     _chat_copilot = None
     log.info("Chat copilot enabled lazily")
-
-    embedder = EmbeddingAPIEmbedder(_config.embedding_endpoint, _config.embedding_model)
-    if not await embedder.check_connectivity():
-        log.warning(
-            "Embedding API not reachable at %s — embedding will be skipped",
-            _config.embedding_endpoint,
-        )
-        await embedder.aclose()
-        embedder = None
 
     def _mark_worker_heartbeat(stage: str) -> None:
         _worker_heartbeats[stage] = time.time()
@@ -310,58 +231,16 @@ async def lifespan(app: FastAPI):
             if await _sleep_or_stop():
                 return
 
-    async def _embed_worker() -> None:
-        while True:
-            try:
-                success, failure = await run_embed_batch(
-                    _paperless_client,
-                    _config,
-                    _queues,
-                    store,
-                    embedder,
-                )
-                if success or failure:
-                    log.info("Embed worker: %d ok / %d failed", success, failure)
-            except Exception as exc:
-                log.error("Embed worker error: %s", exc)
-            _mark_worker_heartbeat("embed")
-            if await _sleep_or_stop():
-                return
-
-    async def _refresh_worker() -> None:
-        while True:
-            try:
-                success, failure = await run_refresh_batch(
-                    _paperless_client,
-                    _config,
-                    _queues,
-                    store,
-                )
-                if success or failure:
-                    log.info("Refresh worker: %d ok / %d failed", success, failure)
-            except Exception as exc:
-                log.error("Refresh worker error: %s", exc)
-            _mark_worker_heartbeat("refresh")
-            if await _sleep_or_stop():
-                return
-
     now = time.time()
-    _worker_heartbeats = {"ocr": now, "metadata": now, "embed": now, "refresh": now}
+    _worker_heartbeats = {"ocr": now, "metadata": now}
     _worker_tasks = [
         asyncio.create_task(_ocr_worker(), name="ocr-worker"),
         asyncio.create_task(_metadata_worker(), name="metadata-worker"),
-        asyncio.create_task(_embed_worker(), name="embed-worker"),
-        asyncio.create_task(_refresh_worker(), name="refresh-worker"),
     ]
     _worker_ready = True
-    log.info("Copilot service ready with embedded worker runtime")
-    if _local_search_warm_on_startup:
-        _schedule_local_search_warmup("startup")
+    log.info("Copilot service ready")
     yield
 
-    if _local_search_warmup_task is not None:
-        _local_search_warmup_task.cancel()
-        await asyncio.gather(_local_search_warmup_task, return_exceptions=True)
     request_shutdown()
     if _worker_tasks:
         try:
@@ -373,14 +252,7 @@ async def lifespan(app: FastAPI):
             for task in _worker_tasks:
                 task.cancel()
             await asyncio.gather(*_worker_tasks, return_exceptions=True)
-    if embedder is not None:
-        await embedder.aclose()
     await close_model_probe_session()
-    if store is not None:
-        await store.aclose()
-    _qdrant_store = None
-    if _lazy_embedder is not None:
-        await _lazy_embedder.aclose()
     if _queues is not None:
         await _queues.close()
     if _paperless_client is not None:
@@ -396,22 +268,6 @@ async def lifespan(app: FastAPI):
 app = FastAPI(lifespan=lifespan)
 
 
-def _get_lazy_embedder() -> ProcessLocalSearchEmbedder:
-    global _lazy_embedder
-    if _lazy_embedder is None:
-        from paperless_ai.search.local_search_process import ProcessLocalSearchEmbedder
-
-        _lazy_embedder = ProcessLocalSearchEmbedder(
-            idle_timeout_seconds=_local_search_idle_timeout_seconds,
-            start_method=_local_search_start_method,
-        )
-        log.info(
-            "Local search process initialized (model=%s)",
-            ProcessLocalSearchEmbedder.LOCAL_RERANKER_MODEL_NAME,
-        )
-    return _lazy_embedder
-
-
 def _get_chat_copilot() -> ChatCopilot:
     global _chat_copilot
     if _config is None or _paperless_client is None:
@@ -419,107 +275,9 @@ def _get_chat_copilot() -> ChatCopilot:
     if _chat_copilot is None:
         from paperless_ai.search.chat_agent import ChatCopilot
 
-        _chat_copilot = ChatCopilot(
-            _config,
-            _paperless_client,
-            _get_lazy_embedder(),
-            _qdrant_url,
-            qdrant_client=(
-                _qdrant_store._client if _qdrant_store is not None else None
-            ),
-        )
+        _chat_copilot = ChatCopilot(_config, _paperless_client)
         log.info("Chat copilot initialized")
     return _chat_copilot
-
-
-def _schedule_local_search_warmup(reason: str) -> None:
-    global _local_search_warmup_task
-    embedder = _get_lazy_embedder()
-    if _local_search_warmup_task is not None and not _local_search_warmup_task.done():
-        return
-
-    async def _run() -> None:
-        try:
-            log.info("Scheduling local search warmup (%s)", reason)
-            await embedder.warmup()
-            log.info("Local search warmup complete (%s)", reason)
-        except asyncio.CancelledError:
-            raise
-        except Exception as exc:
-            log.warning("Local search warmup failed (%s): %s", reason, exc)
-
-    _local_search_warmup_task = asyncio.create_task(_run())
-
-
-@app.get("/search", response_model=None)
-async def search(
-    q: str = Query(..., min_length=1, description="Search query"),
-    limit: int = Query(20, ge=1, le=100),
-    correspondent: str | None = Query(None),
-    document_type: str | None = Query(None),
-    storage_path: str | None = Query(None),
-    tags: list[str] | None = Query(None),
-    year: str | None = Query(None),
-) -> JSONResponse:
-    """Hybrid semantic + keyword search with local BGE reranking.
-
-    Two-Tower Retrieval:
-      - Dense: Local BGE-M3 query embedding in the process-backed search worker → Qdrant cosine search
-      - Keyword: Paperless full-text API
-      - Merge: Reciprocal Rank Fusion (RRF) to combine incompatible score scales
-      - Rerank: local bge-reranker-v2-m3 reorders fused candidates
-
-    Returns doc_ids in final rank order (reranker score, descending).
-    Gracefully degrades to dense-only search if Paperless is unavailable.
-    """
-    if _qdrant_store is not None and not await _qdrant_store.has_any_points():
-        return JSONResponse(content=[])
-
-    try:
-        embedder = _get_lazy_embedder()
-        filters = SearchFilters(
-            correspondent=correspondent,
-            document_type=document_type,
-            storage_path=storage_path,
-            tags=tags,
-            year=year,
-        )
-        try:
-            fused_ids, _chunk_map = await asyncio.wait_for(
-                hybrid_retrieve(
-                    embedder=embedder,
-                    qdrant_url=_qdrant_url,
-                    query=q,
-                    client=_paperless_client,
-                    filters=filters,
-                    dense_k=K,
-                    rerank_candidates=max(N, limit),
-                    rrf_k=RRF_K,
-                    qdrant_client=(
-                        _qdrant_store._client if _qdrant_store is not None else None
-                    ),
-                ),
-                timeout=_search_request_timeout_seconds,
-            )
-        except Exception as exc:
-            log.warning(
-                "Search: hybrid retrieval failed, returning empty results (%s: %s)",
-                type(exc).__name__,
-                exc,
-            )
-            return JSONResponse(content=[])
-
-        return JSONResponse(content=fused_ids[:limit])
-
-    except SystemExit, KeyboardInterrupt, GeneratorExit:
-        raise
-    except BaseException as exc:
-        log.warning(
-            "Search endpoint error (%s: %s) — returning empty results",
-            type(exc).__name__,
-            exc,
-        )
-        return JSONResponse(content=[])
 
 
 @app.get("/metadata/available")
@@ -701,8 +459,6 @@ async def delete_conversation(conversation_id: str, request: Request) -> Respons
 @app.get("/chat")
 async def chat_ui() -> HTMLResponse:
     """Serve the browser UI for the Paperless copilot."""
-    if _local_search_warm_on_chat_load:
-        _schedule_local_search_warmup("chat-ui")
     return HTMLResponse(
         r"""
 <!doctype html>
@@ -2674,7 +2430,9 @@ async def _keyword_search_safe(query: str) -> list[int]:
     if _paperless_client is None:
         return []
     try:
-        return await _paperless_client.search_documents(query, page_size=N)
+        return await _paperless_client.search_documents(
+            query, page_size=PAPERLESS_SEARCH_PAGE_SIZE
+        )
     except Exception as e:
         log.warning("Keyword search failed: %s", e)
         return []
@@ -2712,7 +2470,7 @@ async def health() -> JSONResponse:
     if _queues is not None:
         pending = await _queues.pending_count()
     else:
-        pending = {"ocr": 0, "metadata": 0, "embed": 0, "refresh": 0}
+        pending = {"ocr": 0, "metadata": 0}
 
     worker_ok, worker = _worker_health_snapshot()
     body = {

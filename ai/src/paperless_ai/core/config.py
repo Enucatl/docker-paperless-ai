@@ -59,8 +59,6 @@ class AgentConfig(BaseSettings):
         "ocr_endpoint",
         "metadata_endpoint",
         "chat_endpoint",
-        "embedding_endpoint",
-        "situation_endpoint",
         mode="before",
     )
     @classmethod
@@ -167,7 +165,6 @@ class AgentConfig(BaseSettings):
         validation_alias=AliasChoices("tag_ocr", "TAG_OCR", "TAG_PENDING"),
     )
     tag_metadata: str = "ai:run-metadata"
-    tag_embed: str = "ai:run-embed"
     dry_run: bool = False
 
     # TEMPERATURE is a generic fallback when specific ones are not set
@@ -207,34 +204,10 @@ class AgentConfig(BaseSettings):
     # Redis queue (DB 1, isolated from Paperless DB 0)
     redis_url: str = "redis://broker:6379/1"
 
-    # Qdrant vector store
-    qdrant_url: str = "http://qdrant:6333"
-
     # Paperless workflow automation
     manage_paperless_workflows: bool = True
     paperless_webhook_url: str = "http://webhook-listener:8001/webhook/document"
     webhook_secret: Optional[str] = None
-
-    # Embedding API server (vLLM OpenAI-compatible embeddings endpoint).
-    embedding_endpoint: str = Field(
-        default="http://complex.home.arpa:8102",
-        validation_alias=AliasChoices("INFERENCE_EMBEDDING_ENDPOINT"),
-    )
-    embedding_model: str = Field(
-        default="BAAI/bge-m3",
-        validation_alias=AliasChoices("INFERENCE_EMBEDDING_MODEL"),
-    )
-
-    # Text chunking for embedding
-    chunk_size: int = Field(
-        default=512,
-        validation_alias=AliasChoices("chunk_size", "CHUNK_SIZE"),
-    )
-    chunk_overlap: int = 50
-
-    # Optional path to a Python file that exports format_chunk_for_embedding.
-    # When set, this hook replaces the default situated-embedding header logic.
-    embed_hook_file: Optional[str] = None
 
     # Smart agent batch size for memory-safe vision OCR loops
     vision_batch_size: int = 5
@@ -247,9 +220,7 @@ class AgentConfig(BaseSettings):
     # When a PDF has more than ocr_page_limit_threshold pages, only the first
     # ocr_first_pages and last ocr_last_pages are sent through vision OCR.
     # Paperless-ngx Tesseract already covers the full document for keyword
-    # search; the vision pass is only needed for metadata extraction and
-    # semantic embedding, where the cover/header and final summary pages carry
-    # the vast majority of signal.
+    # search; the vision pass is only needed for metadata extraction.
     # Set ocr_page_limit_threshold=0 to always apply the limit, or a large
     # number (e.g. 9999) to effectively disable it.
     ocr_page_limit_threshold: int = 40
@@ -311,62 +282,10 @@ class AgentConfig(BaseSettings):
         ),
     )
 
-    # LLM-based chunk situating for embeddings (contextual retrieval).
-    # When situation_model is set, each chunk is prefixed with a short LLM-
-    # generated context before being sent to the embedding model.
-    # situation_context_chars caps how much of the full document text is passed
-    # to the situation model; 0 = disabled (pass the full text).
-    situation_model: Optional[str] = Field(
-        default=None,
-        validation_alias=AliasChoices("INFERENCE_SITUATION_MODEL"),
-    )
-    situation_endpoint: Optional[str] = Field(
-        default=None,
-        validation_alias=AliasChoices("INFERENCE_SITUATION_ENDPOINT"),
-    )
-    situation_temperature: float = Field(
-        default=0.0,
-        validation_alias=AliasChoices(
-            "INFERENCE_SITUATION_TEMPERATURE",
-            "SITUATION_TEMPERATURE",
-            "situation_temperature",
-        ),
-    )
-    situation_reasoning_effort: Optional[str] = Field(
-        default=None,
-        validation_alias=AliasChoices(
-            "INFERENCE_SITUATION_REASONING_EFFORT",
-            "SITUATION_REASONING_EFFORT",
-            "situation_reasoning_effort",
-        ),
-    )
-    situation_max_tokens: int = Field(
-        default=200,
-        validation_alias=AliasChoices(
-            "INFERENCE_SITUATION_MAX_TOKENS",
-            "SITUATION_MAX_TOKENS",
-            "situation_max_tokens",
-        ),
-    )
-    situation_extra_kwargs: Optional[Dict[str, Any]] = Field(
-        default=None,
-        validation_alias=AliasChoices(
-            "INFERENCE_SITUATION_EXTRA_KWARGS",
-            "SITUATION_EXTRA_KWARGS",
-            "situation_extra_kwargs",
-        ),
-    )
-    situation_context_chars: int = Field(
-        default=0, alias="INFERENCE_SITUATION_CONTEXT_CHARS"
-    )
-    situation_concurrency: int = 8
-
     @field_validator(
         "ocr_model",
         "metadata_model",
         "chat_model",
-        "embedding_model",
-        "situation_model",
         mode="before",
     )
     @classmethod
@@ -408,18 +327,6 @@ class AgentConfig(BaseSettings):
             kwargs["reasoning_effort"] = self.chat_reasoning_effort
         if self.chat_extra_kwargs:
             kwargs.update(self.chat_extra_kwargs)
-        return kwargs
-
-    def get_situation_kwargs(self) -> dict:
-        """Hyperparameter kwargs for chunk-situation requests."""
-        kwargs = {
-            "max_tokens": self.situation_max_tokens,
-            "temperature": self.situation_temperature,
-        }
-        if self.situation_reasoning_effort:
-            kwargs["reasoning_effort"] = self.situation_reasoning_effort
-        if self.situation_extra_kwargs:
-            kwargs.update(self.situation_extra_kwargs)
         return kwargs
 
     @classmethod

@@ -69,7 +69,7 @@ uv run pytest tests/ -k "not test_webhook and not test_phase_b_pipeline and not 
 
 This repository-prescribed selection is not proof that every collected case is infrastructure-free; `test_chat_history.py` may skip without a database. Report passed/skipped separately. Never point a local convenience test at the production conversation database.
 
-For checks needing PostgreSQL, Paperless, Redis, Qdrant, webhook delivery or container networking, from repository root:
+For checks needing PostgreSQL, Paperless, Redis, webhook delivery or container networking, from repository root:
 
 ```bash
 ./run_tests.sh

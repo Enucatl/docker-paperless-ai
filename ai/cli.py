@@ -3,8 +3,8 @@
 CLI entrypoint for the AI post-processing service.
 
 Modes:
-    --once       Process all pending documents once (all three stages) and exit
-    --watch      Poll continuously with three concurrent workers (default via Docker)
+    --once       Process all pending documents once and exit
+    --watch      Poll continuously with concurrent workers (default via Docker)
     --eval       Run offline evaluation against the input-only eval corpus
     --dry-run    Log what would happen without modifying any documents
     --purge-notes  Delete all AI-generated notes from previous runs
@@ -20,7 +20,6 @@ Usage:
 Pipeline stages (tag-driven):
     ai:run-ocr      → OCR worker: download PDF, run vision OCR, write content
     ai:run-metadata → Metadata worker: read content, run LLM, write title/date/correspondent
-    ai:run-embed    → Embed worker: read content+metadata, embed, upsert Qdrant
 """
 
 import argparse
@@ -69,12 +68,9 @@ async def main_async(args: argparse.Namespace) -> None:
         is_shutdown_requested,
         run_ocr_batch,
         run_metadata_batch,
-        run_embed_batch,
     )
     from paperless_common.telemetry import setup_telemetry
-    from paperless_ai.search.embedder import EmbeddingAPIEmbedder
     from paperless_common.queue import TaskQueues
-    from paperless_ai.search.qdrant_store import QdrantDocumentStore
 
     config = AgentConfig.from_env()
 
@@ -102,13 +98,7 @@ async def main_async(args: argparse.Namespace) -> None:
         config.metadata_model,
         f" (endpoint={config.metadata_endpoint})" if config.metadata_endpoint else "",
     )
-    log.info("Embedding: %s @ %s", config.embedding_model, config.embedding_endpoint)
-    log.info(
-        "Pipeline tags: ocr=%r metadata=%r embed=%r",
-        config.tag_ocr,
-        config.tag_metadata,
-        config.tag_embed,
-    )
+    log.info("Pipeline tags: ocr=%r metadata=%r", config.tag_ocr, config.tag_metadata)
     if config.dry_run:
         log.info("DRY RUN mode — no documents will be modified")
 
@@ -322,34 +312,13 @@ async def main_async(args: argparse.Namespace) -> None:
             ai_result_field_id,
         )
 
-        # Set up three-stage Redis queues
+        # Set up Redis queues
         queues = TaskQueues(config.redis_url)
         log.info("Redis task queues: %s", config.redis_url)
 
-        # Set up Qdrant store (optional — embedding skipped if unavailable)
-        store = QdrantDocumentStore(config.qdrant_url)
-        try:
-            await store.ensure_collection()
-            log.info("Qdrant collection ready (%s)", config.qdrant_url)
-        except Exception as e:
-            log.warning("Qdrant not reachable: %s — embedding will be skipped", e)
-            store = None
-
-        # Set up embeddings client (optional — embedding skipped if unavailable)
-        embedder = EmbeddingAPIEmbedder(
-            config.embedding_endpoint, config.embedding_model
-        )
-        if not await embedder.check_connectivity():
-            log.warning(
-                "Embedding API not reachable at %s — embedding will be skipped",
-                config.embedding_endpoint,
-            )
-            await embedder.aclose()
-            embedder = None
-
         try:
             if args.once:
-                # Sequential: OCR → metadata → embed (docs flow through all stages in one run)
+                # Sequential: OCR → metadata (docs flow through both stages in one run)
                 ocr_s, ocr_f = await run_ocr_batch(client, config, queues)
                 meta_s, meta_f = await run_metadata_batch(
                     client,
@@ -359,18 +328,13 @@ async def main_async(args: argparse.Namespace) -> None:
                     ai_summary_field_id,
                     ai_result_field_id,
                 )
-                embed_s, embed_f = await run_embed_batch(
-                    client, config, queues, store, embedder
-                )
                 _write_heartbeat()
                 log.info(
-                    "Done. OCR: %d/%d  Metadata: %d/%d  Embed: %d/%d",
+                    "Done. OCR: %d/%d  Metadata: %d/%d",
                     ocr_s,
                     ocr_s + ocr_f,
                     meta_s,
                     meta_s + meta_f,
-                    embed_s,
-                    embed_s + embed_f,
                 )
             else:
                 # Watch mode: three concurrent workers, each polling their queue
@@ -385,7 +349,7 @@ async def main_async(args: argparse.Namespace) -> None:
                 signal.signal(signal.SIGINT, _request_shutdown)
 
                 log.info(
-                    "Watch mode: three workers polling every %ds (SIGTERM/Ctrl+C to stop)",
+                    "Watch mode: workers polling every %ds (SIGTERM/Ctrl+C to stop)",
                     config.poll_interval,
                 )
 
@@ -427,29 +391,10 @@ async def main_async(args: argparse.Namespace) -> None:
                         except asyncio.CancelledError:
                             break
 
-                async def _embed_worker() -> None:
-                    while not is_shutdown_requested():
-                        try:
-                            s, f = await run_embed_batch(
-                                client, config, queues, store, embedder
-                            )
-                            if s or f:
-                                log.info("Embed worker: %d ok / %d failed", s, f)
-                        except Exception as e:
-                            log.error("Embed worker error: %s", e)
-                        if is_shutdown_requested():
-                            break
-                        try:
-                            await asyncio.sleep(config.poll_interval)
-                        except asyncio.CancelledError:
-                            break
-
-                await asyncio.gather(_ocr_worker(), _metadata_worker(), _embed_worker())
+                await asyncio.gather(_ocr_worker(), _metadata_worker())
                 log.info("Shutdown complete.")
         finally:
             await queues.close()
-            if embedder is not None:
-                await embedder.aclose()
 
 
 def main() -> None:

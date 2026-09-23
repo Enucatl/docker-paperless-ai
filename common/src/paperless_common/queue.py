@@ -34,8 +34,6 @@ class TaskQueues:
 
     KEY_OCR = "paperless-ai:queue:ocr"
     KEY_METADATA = "paperless-ai:queue:metadata"
-    KEY_EMBED = "paperless-ai:queue:embed"
-    KEY_REFRESH = "paperless-ai:queue:refresh"
     KEY_FAILED = "paperless-ai:queue:failed"
 
     def __init__(self, redis_url: str = "redis://broker:6379/1"):
@@ -58,12 +56,6 @@ class TaskQueues:
 
     async def enqueue_metadata(self, doc_id: int) -> bool:
         return await self.enqueue(doc_id, self.KEY_METADATA)
-
-    async def enqueue_embed(self, doc_id: int) -> bool:
-        return await self.enqueue(doc_id, self.KEY_EMBED)
-
-    async def enqueue_refresh(self, doc_id: int) -> bool:
-        return await self.enqueue(doc_id, self.KEY_REFRESH)
 
     async def peek_stage(self, stage: str) -> set[int]:
         await self.release_due(stage)
@@ -165,19 +157,13 @@ class TaskQueues:
     async def pending_count(self) -> dict[str, int]:
         await self.release_due(self.KEY_OCR)
         await self.release_due(self.KEY_METADATA)
-        await self.release_due(self.KEY_EMBED)
-        await self.release_due(self.KEY_REFRESH)
         async with self._redis.pipeline() as pipe:
             pipe.scard(self.KEY_OCR)
             pipe.scard(self.KEY_METADATA)
-            pipe.scard(self.KEY_EMBED)
-            pipe.scard(self.KEY_REFRESH)
-            ocr, metadata, embed, refresh = await pipe.execute()
+            ocr, metadata = await pipe.execute()
         return {
             "ocr": int(ocr),
             "metadata": int(metadata),
-            "embed": int(embed),
-            "refresh": int(refresh),
         }
 
     async def suppress_webhook(

@@ -27,10 +27,8 @@ import niquests
 import pytest
 
 from tests.conftest import (
-    PAPERLESS_URL,
     WEBHOOK_URL,
     _make_test_pdf,
-    _redis_client,
     _redis_queue_members,
     _redis_queue_size,
     _redis_stage_members,
@@ -61,16 +59,13 @@ def webhook_with_tags():
 
     orig_ocr = webhook_module._tag_ocr
     orig_meta = webhook_module._tag_metadata
-    orig_embed = webhook_module._tag_embed
     webhook_module._tag_ocr = "ai:run-ocr"
     webhook_module._tag_metadata = "ai:run-metadata"
-    webhook_module._tag_embed = "ai:run-embed"
     try:
         yield
     finally:
         webhook_module._tag_ocr = orig_ocr
         webhook_module._tag_metadata = orig_meta
-        webhook_module._tag_embed = orig_embed
 
 
 # ---------------------------------------------------------------------------
@@ -87,7 +82,7 @@ async def test_webhook_health(task_queues):
     assert body["status"] == "ok"
     pending = body["pending"]
     assert isinstance(pending, dict)
-    assert set(pending.keys()) >= {"ocr", "metadata", "embed", "refresh"}
+    assert set(pending.keys()) == {"ocr", "metadata"}
 
 
 # ---------------------------------------------------------------------------
@@ -238,11 +233,17 @@ async def test_webhook_accepts_correct_token(webhook_session, task_queues):
 
 async def test_webhook_health_reflects_pending_count(webhook_session, task_queues):
     """
-    Untagged webhook payloads enqueue refresh work.
+    Tagged metadata documents are counted in the pending queue.
     """
     payloads = [
-        {"doc_url": "https://paperless.home/documents/201/detail"},
-        {"doc_url": "https://paperless.home/documents/202/detail"},
+        {
+            "doc_url": "https://paperless.home/documents/201/detail",
+            "tag_list": "ai:run-metadata",
+        },
+        {
+            "doc_url": "https://paperless.home/documents/202/detail",
+            "tag_list": "ai:run-metadata",
+        },
     ]
     for p in payloads:
         await webhook_session.post(f"{WEBHOOK_URL}/webhook/document", json=p)
@@ -253,7 +254,7 @@ async def test_webhook_health_reflects_pending_count(webhook_session, task_queue
     pending = r.json()["pending"]
     total = sum(pending.values())
     assert total == 2
-    assert pending["refresh"] == 2
+    assert pending["metadata"] == 2
 
 
 # ---------------------------------------------------------------------------
@@ -275,7 +276,6 @@ async def test_webhook_routes_ocr_tag_to_ocr_queue(
     assert r.status_code == 202
     assert 301 in _redis_stage_members(TaskQueues.KEY_OCR)
     assert 301 not in _redis_stage_members(TaskQueues.KEY_METADATA)
-    assert 301 not in _redis_stage_members(TaskQueues.KEY_EMBED)
 
 
 async def test_webhook_routes_metadata_tag_to_metadata_queue(
@@ -294,26 +294,10 @@ async def test_webhook_routes_metadata_tag_to_metadata_queue(
     assert 302 not in _redis_stage_members(TaskQueues.KEY_OCR)
 
 
-async def test_webhook_routes_embed_tag_to_embed_queue(
-    webhook_session, task_queues, webhook_with_tags
-):
-    """ai:run-embed tag → queue:embed."""
-    r = await webhook_session.post(
-        f"{WEBHOOK_URL}/webhook/document",
-        json={
-            "doc_url": "https://paperless.home/documents/303/detail",
-            "tag_list": "ai:run-embed",
-        },
-    )
-    assert r.status_code == 202
-    assert 303 in _redis_stage_members(TaskQueues.KEY_EMBED)
-    assert 303 not in _redis_stage_members(TaskQueues.KEY_OCR)
-
-
 async def test_webhook_ignores_no_ai_tag(
     webhook_session, task_queues, webhook_with_tags
 ):
-    """No ai:run-* tag -> refresh queue only."""
+    """No processing tag -> the webhook is ignored."""
     r = await webhook_session.post(
         f"{WEBHOOK_URL}/webhook/document",
         json={
@@ -324,14 +308,13 @@ async def test_webhook_ignores_no_ai_tag(
     assert r.status_code == 202
     assert 304 not in _redis_stage_members(TaskQueues.KEY_OCR)
     assert 304 not in _redis_stage_members(TaskQueues.KEY_METADATA)
-    assert 304 not in _redis_stage_members(TaskQueues.KEY_EMBED)
-    assert 304 in _redis_stage_members(TaskQueues.KEY_REFRESH)
+    assert _redis_queue_members() == set()
 
 
 async def test_webhook_ignores_missing_tags_field(
     webhook_session, task_queues, webhook_with_tags
 ):
-    """Missing tag_list key -> refresh queue only."""
+    """Missing tag_list key -> no processing work is queued."""
     r = await webhook_session.post(
         f"{WEBHOOK_URL}/webhook/document",
         json={"doc_url": "https://paperless.home/documents/305/detail"},
@@ -339,42 +322,7 @@ async def test_webhook_ignores_missing_tags_field(
     assert r.status_code == 202
     assert 305 not in _redis_stage_members(TaskQueues.KEY_OCR)
     assert 305 not in _redis_stage_members(TaskQueues.KEY_METADATA)
-    assert 305 not in _redis_stage_members(TaskQueues.KEY_EMBED)
-    assert 305 in _redis_stage_members(TaskQueues.KEY_REFRESH)
-
-
-async def test_webhook_enqueues_refresh_for_untagged_updates(
-    webhook_session, task_queues, webhook_with_tags
-):
-    """Untagged updates enqueue refresh work without touching OCR/metadata/embed queues."""
-    r = await webhook_session.post(
-        f"{WEBHOOK_URL}/webhook/document",
-        json={
-            "doc_url": "https://paperless.home/documents/308/detail",
-            "tag_list": "invoice",
-        },
-    )
-    assert r.status_code == 202
-    assert 308 not in _redis_stage_members(TaskQueues.KEY_OCR)
-    assert 308 not in _redis_stage_members(TaskQueues.KEY_METADATA)
-    assert 308 not in _redis_stage_members(TaskQueues.KEY_EMBED)
-    assert 308 in _redis_stage_members(TaskQueues.KEY_REFRESH)
-
-
-async def test_webhook_ocr_tag_takes_priority_over_embed(
-    webhook_session, task_queues, webhook_with_tags
-):
-    """If both ai:run-ocr and ai:run-embed are present, ocr wins."""
-    r = await webhook_session.post(
-        f"{WEBHOOK_URL}/webhook/document",
-        json={
-            "doc_url": "https://paperless.home/documents/306/detail",
-            "tag_list": "ai:run-embed,ai:run-ocr",
-        },
-    )
-    assert r.status_code == 202
-    assert 306 in _redis_stage_members(TaskQueues.KEY_OCR)
-    assert 306 not in _redis_stage_members(TaskQueues.KEY_EMBED)
+    assert _redis_queue_members() == set()
 
 
 async def test_webhook_uses_current_paperless_tags_over_payload_snapshot(
@@ -389,12 +337,11 @@ async def test_webhook_uses_current_paperless_tags_over_payload_snapshot(
         f"{WEBHOOK_URL}/webhook/document",
         json={
             "doc_url": f"https://paperless.home/documents/{doc_id}/detail",
-            "tag_list": "ai:run-embed",
+            "tag_list": "invoice",
         },
     )
     assert r.status_code == 202
     assert doc_id in _redis_stage_members(TaskQueues.KEY_OCR)
-    assert doc_id not in _redis_stage_members(TaskQueues.KEY_EMBED)
 
 
 # ---------------------------------------------------------------------------
@@ -560,7 +507,7 @@ async def test_auto_managed_updated_workflow_routes_tagged_docs_to_ocr_queue(
     2. Create/update the auto-managed workflows via ensure_ai_workflows().
     3. Add ai:run-ocr to the existing document.
     4. Verify Paperless fires DOCUMENT_UPDATED and the webhook listener routes
-       the document to the OCR queue, not the embed queue.
+       the document to the OCR queue.
     """
     doc_id = await uploaded_document()
 
@@ -587,9 +534,6 @@ async def test_auto_managed_updated_workflow_routes_tagged_docs_to_ocr_queue(
 
     assert doc_id in _redis_stage_members(TaskQueues.KEY_OCR), (
         f"Document {doc_id} never appeared in OCR queue after adding ai:run-ocr"
-    )
-    assert doc_id not in _redis_stage_members(TaskQueues.KEY_EMBED), (
-        f"Document {doc_id} incorrectly landed in embed queue instead of OCR queue"
     )
 
 

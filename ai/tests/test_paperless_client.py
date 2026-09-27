@@ -86,6 +86,64 @@ def _paged_response(results, *, next_value=None):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("matching_algorithm,color", [(None, None), (0, "#166534")])
+async def test_get_tag_id_creation_options_and_cache_refresh(matching_algorithm, color):
+    """New tags refresh name lookups and reuse their cached ID on later calls."""
+    with patch(
+        "paperless_common.paperless.niquests.AsyncSession"
+    ) as mock_session_class:
+        session = AsyncMock()
+        mock_session_class.return_value = session
+        tag = {"id": 42, "name": "language:de"}
+        session.get.side_effect = [
+            _paged_response([]),
+            _paged_response([]),
+            _paged_response([tag]),
+        ]
+        response = MagicMock()
+        response.json.return_value = tag
+        session.post.return_value = response
+
+        async with PaperlessClient("http://test:8000", "token") as client:
+            assert await client.get_tag_names([42]) == []
+            kwargs = {} if matching_algorithm is None else {"matching_algorithm": 0}
+            if color is not None:
+                kwargs["color"] = color
+            assert await client.get_tag_id("language:de", **kwargs) == 42
+            assert await client.get_tag_id("language:de", **kwargs) == 42
+            assert await client.get_tag_names([42]) == ["language:de"]
+
+        payload = {"name": "language:de"}
+        if matching_algorithm is not None:
+            payload["matching_algorithm"] = matching_algorithm
+        if color is not None:
+            payload["color"] = color
+        session.post.assert_awaited_once_with("/api/tags/", json=payload)
+        assert session.get.await_count == 3
+
+
+@pytest.mark.asyncio
+async def test_get_tag_id_reuses_existing_tag_without_changing_matching():
+    """Existing tags retain their configuration and their IDs are cached."""
+    with patch(
+        "paperless_common.paperless.niquests.AsyncSession"
+    ) as mock_session_class:
+        session = AsyncMock()
+        mock_session_class.return_value = session
+        session.get.return_value = _paged_response(
+            [{"id": 42, "name": "language:de", "matching_algorithm": 6}]
+        )
+
+        async with PaperlessClient("http://test:8000", "token") as client:
+            assert await client.get_tag_id("language:de", matching_algorithm=0) == 42
+            assert await client.get_tag_id("language:de", matching_algorithm=0) == 42
+
+        session.get.assert_awaited_once()
+        session.post.assert_not_awaited()
+        session.patch.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_paperless_client_metadata_resolvers_use_cached_lists():
     with patch(
         "paperless_common.paperless.niquests.AsyncSession"

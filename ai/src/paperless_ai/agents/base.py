@@ -18,6 +18,7 @@ class DocumentMetadata(BaseModel):
     document_date: Optional[str] = None  # ISO 8601: YYYY-MM-DD
     correspondent: Optional[str] = None
     summary: Optional[str] = None
+    languages: list[str] | None = None
     full_ocr_transcript: str = ""
 
 

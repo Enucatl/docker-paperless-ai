@@ -11,6 +11,7 @@ Infrastructure available in the test environment (docker-compose.test.yml):
   - Webhook listener             http://webhook-listener:8001
 """
 
+import asyncio
 import io
 import json
 import os
@@ -309,7 +310,7 @@ async def _upload_document(client, pdf_bytes: bytes) -> int:
     r = await client._client.post(
         "/api/documents/post_document/",
         files={"document": (filename, pdf_bytes, "application/pdf")},
-        timeout=30,
+        timeout=10,
     )
     r.raise_for_status()
 
@@ -317,30 +318,34 @@ async def _upload_document(client, pdf_bytes: bytes) -> int:
     raw = r.text.strip()
     task_uuid = raw.strip('"')
 
-    # Poll the task until it completes (up to 120 s)
-    doc_id = None
-    for _ in range(60):
-        time.sleep(2)
-        tasks_r = await client._client.get("/api/tasks/", params={"task_id": task_uuid})
+    # Tiny native-text PDFs finish in seconds; surface consumer failures promptly.
+    deadline = time.monotonic() + 10
+    task = None
+    while time.monotonic() < deadline:
+        tasks_r = await client._client.get(
+            "/api/tasks/", params={"task_id": task_uuid}, timeout=2
+        )
         tasks_r.raise_for_status()
         tasks = tasks_r.json()
-        if tasks:
-            task = tasks[0]
-            status = task.get("status", "")
-            if status == "SUCCESS":
-                # "related_document" is an integer id when available;
-                # "result" may be a string like "Success. New document id 4 created"
-                doc_id = task.get("related_document")
-                if doc_id is None:
-                    import re
-
-                    m = re.search(r"\b(\d+)\b", str(task.get("result", "")))
-                    if m:
-                        doc_id = int(m.group(1))
-                break
-            if status == "FAILURE":
+        if isinstance(tasks, dict):
+            tasks = tasks["results"]
+        task = next((task for task in tasks if task["task_id"] == task_uuid), None)
+        if task:
+            status = task["status"].lower()
+            if status == "success":
+                # v10 uses structured results; v9 exposes related_document.
+                doc_id = (task.get("result_data") or {}).get("document_id") or task.get(
+                    "related_document"
+                )
+                if doc_id is not None:
+                    return int(doc_id)
+                raise RuntimeError(
+                    f"Paperless task completed without a document: {task}"
+                )
+            if status in {"failure", "revoked"}:
                 raise RuntimeError(f"Paperless task {task_uuid} failed: {task}")
+        await asyncio.sleep(0.1)
 
-    if doc_id is None:
-        raise RuntimeError(f"Document not indexed after 120 s (task={task_uuid})")
-    return int(doc_id)  # may already be int if from related_document
+    raise RuntimeError(
+        f"Document not indexed after 10 s (task={task_uuid}, last_response={task})"
+    )

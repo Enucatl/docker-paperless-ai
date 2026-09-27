@@ -51,8 +51,21 @@ class PaperlessClient:
     async def __aexit__(self, *_):
         await self.aclose()
 
-    async def get_tag_id(self, name: str, create: bool = True) -> int:
-        """Return tag ID by name, optionally creating it if missing."""
+    async def get_tag_id(
+        self,
+        name: str,
+        create: bool = True,
+        matching_algorithm: int | None = None,
+        color: str | None = None,
+    ) -> int:
+        """Return tag ID by name, optionally creating it if missing.
+
+        Args:
+            name: Exact tag name to resolve.
+            create: Whether to create a missing tag.
+            matching_algorithm: Matching algorithm for new tags, or API default.
+            color: Hex color for new tags, or API default.
+        """
         cached_id = self._tag_id_cache.get(name)
         if cached_id is not None:
             return cached_id
@@ -67,8 +80,14 @@ class PaperlessClient:
                 return tag_id
         if not create:
             raise ValueError(f"Tag '{name}' not found")
-        r = await self._client.post("/api/tags/", json={"name": name})
+        payload: dict[str, Any] = {"name": name}
+        if matching_algorithm is not None:
+            payload["matching_algorithm"] = matching_algorithm
+        if color is not None:
+            payload["color"] = color
+        r = await self._client.post("/api/tags/", json=payload)
         _raise_for_status(r)
+        self._tags_cache = None
         tag_id = r.json()["id"]
         self._tag_id_cache[name] = int(tag_id)
         log.info("Created tag '%s' (id=%d)", name, tag_id)

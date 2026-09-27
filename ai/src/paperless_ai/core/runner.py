@@ -48,6 +48,7 @@ def clear_shutdown_request() -> None:
 def is_shutdown_requested() -> bool:
     return _shutdown_requested
 
+
 # Tracks which local server URLs are currently known to be offline.
 # Enables log-once-on-down / log-once-on-recovery across poll cycles.
 _offline_servers: set[str] = set()
@@ -307,6 +308,8 @@ async def run_metadata_batch(
 
     strategy = _select_extraction_strategy(config)
     log.info("Metadata batch: using %s", strategy.__class__.__name__)
+    language_tag_lock = asyncio.Lock()
+    language_tag_ids: set[int] | None = None
 
     try:
         tag_metadata_id = await client.get_tag_id(config.tag_metadata, create=False)
@@ -320,6 +323,7 @@ async def run_metadata_batch(
     sem = asyncio.Semaphore(config.ocr_concurrency)
 
     async def _process_one(doc_id: int) -> bool | None:
+        nonlocal language_tag_ids
         if _shutdown_requested:
             return False
         doc = await client.get_document_with_content(doc_id)
@@ -447,6 +451,7 @@ async def run_metadata_batch(
                     else None,
                     "correspondent": extracted.correspondent,
                     "summary": extracted.summary,
+                    "languages": extracted.languages,
                 },
                 **(
                     {
@@ -466,6 +471,28 @@ async def run_metadata_batch(
         payload["tags"] = [t for t in doc.get("tags", []) if t != tag_metadata_id]
 
         try:
+            if extracted.languages is not None:
+                async with language_tag_lock:
+                    if language_tag_ids is None:
+                        language_tag_ids = {
+                            tag["id"]
+                            for tag in await client._get_all_tags(force=True)
+                            if tag["name"].startswith("language:")
+                        }
+                    detected_tag_ids = []
+                    for language in extracted.languages:
+                        tag_id = await client.get_tag_id(
+                            f"language:{language}",
+                            matching_algorithm=0,
+                            color="#166534",
+                        )
+                        language_tag_ids.add(tag_id)
+                        detected_tag_ids.append(tag_id)
+                    payload["tags"] = [
+                        tag_id
+                        for tag_id in payload["tags"]
+                        if tag_id not in language_tag_ids
+                    ] + detected_tag_ids
             await client.patch_document(doc_id, payload)
             log.info("Document %d: metadata written", doc_id)
             await queues.remove(doc_id, TaskQueues.KEY_METADATA)

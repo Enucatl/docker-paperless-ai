@@ -16,13 +16,34 @@ services:
     tmpfs:
       - /var/lib/postgresql:mode=777,uid=999,gid=999
     secrets: !reset []
+    healthcheck:
+      interval: 1s
+      start_period: 60s
 
   broker:
+    # Ephemeral Redis needs no disk persistence (the hardened user cannot write /data).
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
     volumes: !reset []
     tmpfs:
       - /data
+    healthcheck:
+      interval: 1s
+      start_period: 60s
+
+  phoenix:
+    # Keep test traces in temporary SQLite storage; no production DB account.
+    command: ["-m", "phoenix.server.main", "serve"]
+    environment: !override
+      PHOENIX_WORKING_DIR: /tmp/phoenix
+    volumes: !reset []
+    secrets: !reset []
+    healthcheck:
+      interval: 1s
 
   webserver:
+    healthcheck:
+      interval: 1s
+      start_period: 60s
     # Anonymous volumes — Docker auto-wipes them on `down -v`.
     volumes:
       - /usr/src/paperless/data
@@ -37,6 +58,8 @@ services:
       - PAPERLESS_SECRET_KEY=test-secret-key-not-for-production
       - PAPERLESS_URL=http://webserver:8000
       - PAPERLESS_OCR_LANGUAGE=eng
+      # Reuse the test consumer; Paperless otherwise respawns it after every upload.
+      - CELERY_WORKER_MAX_TASKS_PER_CHILD=100
       # Allow Paperless to POST webhooks to internal Docker hostnames
       # (webhook-listener is on the same Docker network as webserver).
       - PAPERLESS_ALLOWED_HOSTS=*
@@ -47,9 +70,9 @@ services:
   # Webhook listener — receives document events and pushes to Redis DB 1.
   webhook-listener:
     command: >
-      bash -lc '
-        python /app/fetch_paperless_token.py >/tmp/paperless-token
-        export PAPERLESS_TOKEN="$(cat /tmp/paperless-token)"
+      bash -ec '
+        PAPERLESS_TOKEN=$$(python /app/fetch_paperless_token.py)
+        export PAPERLESS_TOKEN
         exec python -m paperless_listener.server
       '
     environment:
@@ -69,12 +92,16 @@ services:
     depends_on:
       broker:
         condition: service_healthy
+      webserver:
+        condition: service_healthy
 
   ai:
+    healthcheck:
+      interval: 1s
     command: >
-      bash -lc '
-        python /app/fetch_paperless_token.py >/tmp/paperless-token
-        export PAPERLESS_TOKEN="$(cat /tmp/paperless-token)"
+      bash -ec '
+        PAPERLESS_TOKEN=$$(python /app/fetch_paperless_token.py)
+        export PAPERLESS_TOKEN
         exec python -m paperless_ai.search.copilot_server
       '
     environment:
@@ -83,6 +110,8 @@ services:
       - WEBHOOK_SECRET=test-secret-key-12345
       - WEBHOOK_SECRET_FILE=
       - MANAGE_PAPERLESS_WORKFLOWS=false
+      # Tests invoke batches directly and inspect queues before any worker drains them.
+      - POLL_INTERVAL=86400
       # The test database is ephemeral; use its existing test role instead of
       # provisioning the production-only dedicated role and secret.
       - CHAT_DATABASE_URL=postgresql://paperless@db:5432/paperless
@@ -123,7 +152,7 @@ services:
       dockerfile: ./ai/Dockerfile
       target: test
     entrypoint: []
-    command: python -m pytest -v /app/tests/
+    command: python -m pytest -q --maxfail=1 --durations=10 -o cache_dir=/tmp/pytest-cache /app/tests/
     environment:
       - PAPERLESS_URL=http://webserver:8000
       - MANAGE_PAPERLESS_WORKFLOWS=false

@@ -15,6 +15,11 @@ uv run pytest tests/ -k "not test_webhook and not test_phase_b_pipeline and not 
 For Python code changes, run `uv run ruff format .` from the affected project
 and the relevant tests.
 
+Keep the test suite fast: pytest should finish in seconds, not minutes. Mock
+inference, poll actual completion promptly, and avoid fixed sleeps or repeated
+minute-long timeouts. Report pytest duration separately from image builds and
+container startup; use `--durations=10` to investigate regressions.
+
 ## Integration tests
 
 Tests that require Paperless, Redis, webhook delivery, or container

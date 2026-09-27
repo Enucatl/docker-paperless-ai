@@ -314,14 +314,20 @@ async def test_ocr_batch_moves_poison_document_to_failed_queue(
 
 @pytest.mark.requires_redis
 async def test_metadata_batch_writes_metadata_and_transitions_tag(
-    paperless_client, task_queues
+    paperless_client, task_queues, monkeypatch
 ):
     """
     Metadata batch: reads content from Paperless, runs LLM (mocked), writes
     title/date/correspondent/custom_fields and removes the metadata tag.
     """
     from datetime import date
+    import json
+    from unittest.mock import AsyncMock
 
+    from paperless_ai.agents.smart_graph_agent import (
+        StructuredOutputStrategy,
+        _ExtractedMetadata,
+    )
     from paperless_ai.core.config import AgentConfig
     from paperless_ai.core.runner import run_metadata_batch
 
@@ -332,6 +338,19 @@ async def test_metadata_batch_writes_metadata_and_transitions_tag(
         metadata_model="gemini/gemini-2.5-flash",
         chat_model="gemini/gemini-2.5-flash",
         tag_metadata="ai:run-metadata",
+    )
+    monkeypatch.setattr(
+        StructuredOutputStrategy,
+        "extract",
+        AsyncMock(
+            return_value=_ExtractedMetadata(
+                title="Test Invoice",
+                date=date(2024, 1, 15),
+                correspondent="Acme Corp",
+                summary="Invoice from Acme Corp dated 2024-01-15 for $100.00.",
+                languages=["de", "en"],
+            )
+        ),
     )
 
     custom_field_id = await paperless_client.get_or_create_custom_field(
@@ -349,14 +368,24 @@ async def test_metadata_batch_writes_metadata_and_transitions_tag(
     tag_metadata_id = await paperless_client.get_tag_id(
         config.tag_metadata, create=True
     )
+    stale_language_id = await paperless_client.get_tag_id("language:fr")
+    unrelated_tag_id = await paperless_client.get_tag_id("integration:preserved")
+    original_content = (
+        "INVOICE\nAcme Corp\n123 Main St\nDate: January 15, 2024\n"
+        "Please pay the total amount of $100.00 within 30 days.\n"
+        "RECHNUNG\nBitte bezahlen Sie den Gesamtbetrag von $100.00 innerhalb "
+        "von 30 Tagen. Vielen Dank für Ihren Auftrag."
+    )
 
     await paperless_client.patch_document(
         doc_id,
         {
-            "content": "INVOICE\nAcme Corp\n123 Main St\nDate: January 15, 2024",
-            "tags": [tag_metadata_id],
+            "content": original_content,
+            "tags": [tag_metadata_id, stale_language_id, unrelated_tag_id],
         },
     )
+    # Cache pre-extraction counts; inventory must refresh after the document PATCH.
+    await paperless_client._get_all_tags(force=True)
     await task_queues.enqueue_metadata(doc_id)
 
     success, failure = await run_metadata_batch(
@@ -387,9 +416,34 @@ async def test_metadata_batch_writes_metadata_and_transitions_tag(
         cf_map[ai_summary_field_id]
         == "Invoice from Acme Corp dated 2024-01-15 for $100.00."
     )
+    assert json.loads(cf_map[ai_result_field_id])["ai_metadata"]["languages"] == [
+        "de",
+        "en",
+    ]
+    assert doc["content"] == original_content
 
-    # The metadata stage tag was removed.
+    # Replace stale language tags while keeping unrelated tags.
     assert tag_metadata_id not in doc["tags"]
+    assert stale_language_id not in doc["tags"]
+    assert unrelated_tag_id in doc["tags"]
+    tags = await paperless_client._get_all_tags(force=True)
+    languages = {
+        tag["name"]: tag
+        for tag in tags
+        if tag["name"].startswith("language:") and tag["document_count"] > 0
+    }
+    assert "language:fr" not in languages
+    for code in ("de", "en"):
+        tag = languages[f"language:{code}"]
+        assert tag["id"] in doc["tags"]
+        assert tag["matching_algorithm"] == 0
+        assert tag["color"] == "#166534"
+        response = await paperless_client._client.get(
+            "/api/documents/",
+            params={"tags__id__in": tag["id"], "id": doc_id},
+        )
+        response.raise_for_status()
+        assert doc_id in {result["id"] for result in response.json()["results"]}
 
     await paperless_client._client.delete(f"/api/documents/{doc_id}/")
 

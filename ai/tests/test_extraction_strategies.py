@@ -19,6 +19,7 @@ from pydantic import ValidationError
 from paperless_ai.agents.smart_graph_agent import (
     BaseExtractionStrategy,
     NuExtractStrategy,
+    SmartDocumentAgent,
     StructuredOutputStrategy,
     VisionOcrCache,
     _ExtractedMetadata,
@@ -365,6 +366,51 @@ class TestNuExtractStrategy:
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.parametrize("strategy", [StructuredOutputStrategy(), NuExtractStrategy()])
+@pytest.mark.parametrize("malformed", [False, True])
+@pytest.mark.parametrize(
+    ("fields", "expected"),
+    [
+        ({"languages": [" EN ", "de", "DE", "gsw"]}, ["de", "en", "gsw"]),
+        ({}, None),
+        ({"languages": None}, None),
+        ({"languages": []}, None),
+        ({"languages": "en"}, None),
+        ({"languages": {"en": True}}, None),
+        ({"languages": [None, 42, True, {}, [], "", "English", "e", "e1", "éé"]}, None),
+        ({"languages": ["en", "de-DE", " français ", False, "FR"]}, ["en", "fr"]),
+    ],
+)
+@pytest.mark.asyncio
+async def test_languages_survive_both_strategies_and_fallback(
+    strategy, malformed, fields, expected, mock_config
+) -> None:
+    """Both extraction paths normalize multilingual and unknown results."""
+    raw = json.dumps(fields)
+    if malformed:
+        raw = raw[:-1] + ",}" if fields else "{,}"
+    with patch(
+        "paperless_ai.agents.smart_graph_agent.complete",
+        new=AsyncMock(return_value=completion_result(raw)),
+    ) as complete:
+        result = await strategy.extract("German and English OCR text", mock_config)
+
+    assert result.languages == expected
+    kwargs = complete.await_args.kwargs
+    if isinstance(strategy, NuExtractStrategy):
+        prompt = kwargs["messages"][0]["content"][0]["text"]
+        template = json.loads(kwargs["extra_body"]["chat_template_kwargs"]["template"])
+        assert template["languages"] == ["string"]
+    else:
+        prompt = kwargs["messages"][0]["content"]
+        schema = kwargs["response_format"]["json_schema"]["schema"]
+        assert "languages" in schema["required"]
+    assert "All substantive languages" in prompt
+    assert "ISO 639-1" in prompt and "ISO 639-3" in prompt
+    assert "incidental foreign names and isolated words" in prompt
+    assert "null when uncertain" in prompt
+
+
 class TestDateFieldValidation:
     """Test date field parsing and validation in _ExtractedMetadata."""
 
@@ -405,6 +451,7 @@ class FixedMetadataStrategy(BaseExtractionStrategy):
             date="2024-01-15",
             correspondent="Acme",
             summary="Test summary.",
+            languages=[" EN ", "de"],
         )
 
 
@@ -416,7 +463,27 @@ async def test_extract_metadata_state_serializes_date_as_string(mock_config) -> 
     result = await _extract_metadata(state, mock_config, FixedMetadataStrategy())
 
     assert result["_extracted_metadata"]["date"] == "2024-01-15"
+    assert result["_extracted_metadata"]["languages"] == ["de", "en"]
     assert result["_metadata_context"] == "Sample OCR text"
+
+
+@pytest.mark.asyncio
+async def test_languages_propagate_to_public_agent_result(mock_config) -> None:
+    """Languages survive graph state conversion to the public result."""
+    state = await _extract_metadata(
+        {"extracted_text_chunks": ["Stored OCR text"]},
+        mock_config,
+        FixedMetadataStrategy(),
+    )
+    mock_config.vision_batch_size = 1
+    graph = MagicMock()
+    graph.ainvoke = AsyncMock(return_value=state)
+    with patch.object(SmartDocumentAgent, "_build_graph", return_value=graph):
+        result = await SmartDocumentAgent(mock_config).process("unused.pdf", {})
+
+    assert result.metadata.languages == ["de", "en"]
+    assert result.metadata.model_dump()["languages"] == ["de", "en"]
+    assert result.metadata.full_ocr_transcript == "Stored OCR text"
 
 
 @pytest.mark.asyncio

@@ -50,6 +50,22 @@ async def webhook_session():
 
 
 @pytest.fixture
+async def uploaded_document(paperless_client):
+    """Upload documents on demand and remove them after the test."""
+    document_ids: list[int] = []
+
+    async def upload() -> int:
+        """Return the ID of a newly uploaded test document."""
+        doc_id = await _upload_document(paperless_client, _make_test_pdf())
+        document_ids.append(doc_id)
+        return doc_id
+
+    yield upload
+    for doc_id in document_ids:
+        await paperless_client._client.delete(f"/api/documents/{doc_id}/")
+
+
+@pytest.fixture
 def webhook_with_tags():
     """
     Patch the webhook module's tag globals so tests control routing.
@@ -73,10 +89,9 @@ def webhook_with_tags():
 # ---------------------------------------------------------------------------
 
 
-async def test_webhook_health(task_queues):
+async def test_webhook_health(webhook_session, task_queues):
     """GET /health returns 200 with pending counts per stage."""
-    async with niquests.AsyncSession() as client:
-        r = await client.get(f"{WEBHOOK_URL}/health")
+    r = await webhook_session.get(f"{WEBHOOK_URL}/health")
     assert r.status_code == 200
     body = r.json()
     assert body["status"] == "ok"
@@ -98,7 +113,10 @@ async def test_webhook_enqueues_from_doc_url(webhook_session, task_queues):
     """
     r = await webhook_session.post(
         f"{WEBHOOK_URL}/webhook/document",
-        json={"doc_url": "https://paperless.home/documents/42/detail"},
+        json={
+            "doc_url": "https://paperless.home/documents/42/detail",
+            "tag_list": "ai:run-metadata",
+        },
     )
     assert r.status_code == 202
     assert 42 in _redis_queue_members()
@@ -108,7 +126,10 @@ async def test_webhook_enqueues_from_deep_doc_url(webhook_session, task_queues):
     """URL with extra path segments — ID still extracted correctly."""
     r = await webhook_session.post(
         f"{WEBHOOK_URL}/webhook/document",
-        json={"doc_url": "http://paperless.internal:8000/documents/999/"},
+        json={
+            "doc_url": "http://paperless.internal:8000/documents/999/",
+            "tag_list": "ai:run-metadata",
+        },
     )
     assert r.status_code == 202
     assert 999 in _redis_queue_members()
@@ -123,7 +144,7 @@ async def test_webhook_enqueues_from_document_id_field(webhook_session, task_que
     """POST with a plain 'document_id' integer field must enqueue that ID."""
     r = await webhook_session.post(
         f"{WEBHOOK_URL}/webhook/document",
-        json={"document_id": 77},
+        json={"document_id": 77, "tag_list": "ai:run-metadata"},
     )
     assert r.status_code == 202
     assert 77 in _redis_queue_members()
@@ -133,7 +154,7 @@ async def test_webhook_enqueues_from_id_field(webhook_session, task_queues):
     """POST with a plain 'id' integer field (last-resort fallback)."""
     r = await webhook_session.post(
         f"{WEBHOOK_URL}/webhook/document",
-        json={"id": 55},
+        json={"id": 55, "tag_list": "ai:run-metadata"},
     )
     assert r.status_code == 202
     assert 55 in _redis_queue_members()
@@ -149,7 +170,10 @@ async def test_webhook_deduplicates_same_id(webhook_session, task_queues):
     Posting the same document URL twice must result in exactly one queue entry.
     Redis SADD is idempotent — this verifies the set-based dedup works end-to-end.
     """
-    payload = {"doc_url": "https://paperless.home/documents/100/detail"}
+    payload = {
+        "doc_url": "https://paperless.home/documents/100/detail",
+        "tag_list": "ai:run-metadata",
+    }
     await webhook_session.post(f"{WEBHOOK_URL}/webhook/document", json=payload)
     await webhook_session.post(f"{WEBHOOK_URL}/webhook/document", json=payload)
 
@@ -220,7 +244,10 @@ async def test_webhook_accepts_correct_token(webhook_session, task_queues):
     """When WEBHOOK_SECRET is set, requests with correct token are accepted."""
     r = await webhook_session.post(
         f"{WEBHOOK_URL}/webhook/document",
-        json={"doc_url": "https://paperless.home/documents/42/detail"},
+        json={
+            "doc_url": "https://paperless.home/documents/42/detail",
+            "tag_list": "ai:run-metadata",
+        },
     )
     assert r.status_code == 202
     assert 42 in _redis_queue_members()
@@ -248,8 +275,7 @@ async def test_webhook_health_reflects_pending_count(webhook_session, task_queue
     for p in payloads:
         await webhook_session.post(f"{WEBHOOK_URL}/webhook/document", json=p)
 
-    async with niquests.AsyncSession() as client:
-        r = await client.get(f"{WEBHOOK_URL}/health")
+    r = await webhook_session.get(f"{WEBHOOK_URL}/health")
 
     pending = r.json()["pending"]
     total = sum(pending.values())
@@ -326,10 +352,10 @@ async def test_webhook_ignores_missing_tags_field(
 
 
 async def test_webhook_uses_current_paperless_tags_over_payload_snapshot(
-    webhook_session, task_queues, webhook_with_tags, paperless_client
+    webhook_session, task_queues, webhook_with_tags, paperless_client, uploaded_document
 ):
     """Route using current Paperless tags when webhook payload tags are stale."""
-    doc_id = await _upload_document(paperless_client, _make_test_pdf())
+    doc_id = await uploaded_document()
     tag_ocr_id = await paperless_client.get_tag_id("ai:run-ocr", create=True)
     await paperless_client.patch_document(doc_id, {"tags": [tag_ocr_id]})
 
@@ -396,6 +422,7 @@ async def _create_webhook_workflow(
     webhook-listener on the given trigger and return the workflow ID.
 
     """
+    tag_id = await client.get_tag_id("ai:run-ocr", create=True)
     payload = {
         "name": name,
         "enabled": True,
@@ -408,6 +435,7 @@ async def _create_webhook_workflow(
             }
         ],
         "actions": [
+            {"type": 1, "assign_tags": [tag_id]},
             {
                 "type": 4,  # WEBHOOK
                 "webhook": {
@@ -417,7 +445,7 @@ async def _create_webhook_workflow(
                     "params": {"doc_url": "{{doc_url}}"},
                     "headers": {"X-Webhook-Token": TEST_WEBHOOK_SECRET},
                 },
-            }
+            },
         ],
     }
     r = await client._client.post("/api/workflows/", json=payload)
@@ -427,13 +455,13 @@ async def _create_webhook_workflow(
     return r.json()["id"]
 
 
-async def _wait_for_doc_in_queue(doc_id: int, timeout: int = 60) -> bool:
+async def _wait_for_doc_in_queue(doc_id: int, timeout: int = 10) -> bool:
     """Poll Redis until doc_id appears in the pending set or timeout expires."""
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         if doc_id in _redis_queue_members():
             return True
-        await asyncio.sleep(2)
+        await asyncio.sleep(0.1)
     return False
 
 
@@ -451,7 +479,7 @@ async def test_paperless_fires_webhook_on_document_added(
     await paperless_workflow(_TRIGGER_DOCUMENT_ADDED, "test-wf-document-added")
     doc_id = await uploaded_document()
     assert await _wait_for_doc_in_queue(doc_id), (
-        f"Document {doc_id} never appeared in the Redis queue within 60 s "
+        f"Document {doc_id} never appeared in the Redis queue within 10 s "
         f"(trigger=DOCUMENT_ADDED, webhook={_PAPERLESS_FACING_WEBHOOK_ENDPOINT})"
     )
 
@@ -482,7 +510,7 @@ async def test_paperless_fires_webhook_on_document_updated(
     )
     assert r.status_code == 200, f"PATCH failed: {r.status_code} — {r.text}"
     assert await _wait_for_doc_in_queue(doc_id), (
-        f"Document {doc_id} never appeared in the Redis queue within 60 s "
+        f"Document {doc_id} never appeared in the Redis queue within 10 s "
         f"(trigger=DOCUMENT_UPDATED, webhook={_PAPERLESS_FACING_WEBHOOK_ENDPOINT}). "
         "Check that trigger type 3 is DOCUMENT_UPDATED in this Paperless version."
     )
@@ -503,30 +531,34 @@ async def test_auto_managed_updated_workflow_routes_tagged_docs_to_ocr_queue(
     """
     doc_id = await uploaded_document()
 
-    await paperless_client.ensure_ai_workflows(
+    workflow_ids = await paperless_client.ensure_ai_workflows(
         tag_ocr="ai:run-ocr",
         webhook_url=_PAPERLESS_FACING_WEBHOOK_ENDPOINT,
         webhook_secret=TEST_WEBHOOK_SECRET,
     )
 
-    tag_id = await paperless_client.get_tag_id("ai:run-ocr", create=False)
-    r = await paperless_client._client.patch(
-        f"/api/documents/{doc_id}/",
-        json={"tags": [tag_id]},
-    )
-    assert r.status_code == 200, (
-        f"Failed to add ai:run-ocr tag: {r.status_code} — {r.text}"
-    )
+    try:
+        tag_id = await paperless_client.get_tag_id("ai:run-ocr", create=False)
+        r = await paperless_client._client.patch(
+            f"/api/documents/{doc_id}/",
+            json={"tags": [tag_id]},
+        )
+        assert r.status_code == 200, (
+            f"Failed to add ai:run-ocr tag: {r.status_code} — {r.text}"
+        )
 
-    deadline = time.monotonic() + 60
-    while time.monotonic() < deadline:
-        if doc_id in _redis_stage_members(TaskQueues.KEY_OCR):
-            break
-        await asyncio.sleep(2)
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline:
+            if doc_id in _redis_stage_members(TaskQueues.KEY_OCR):
+                break
+            await asyncio.sleep(0.1)
 
-    assert doc_id in _redis_stage_members(TaskQueues.KEY_OCR), (
-        f"Document {doc_id} never appeared in OCR queue after adding ai:run-ocr"
-    )
+        assert doc_id in _redis_stage_members(TaskQueues.KEY_OCR), (
+            f"Document {doc_id} never appeared in OCR queue after adding ai:run-ocr"
+        )
+    finally:
+        for wf_id in workflow_ids:
+            await paperless_client._client.delete(f"/api/workflows/{wf_id}/")
 
 
 async def test_document_updated_deduplicates_repeated_edits(

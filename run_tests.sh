@@ -42,7 +42,9 @@ done
 # ---------------------------------------------------------------------------
 if [ "$SKIP_BUILD" = false ]; then
     echo "=== Building AI test image ==="
+    BUILD_STARTED=$SECONDS
     $COMPOSE build ai ai-test webhook-listener
+    echo "=== Build completed in $((SECONDS - BUILD_STARTED))s ==="
 fi
 
 # ---------------------------------------------------------------------------
@@ -50,6 +52,7 @@ fi
 # ---------------------------------------------------------------------------
 echo ""
 echo "=== Starting test infrastructure ==="
+STARTUP_STARTED=$SECONDS
 # webhook-listener is pre-started here so it is healthy by the time the ai
 # container (pytest) runs.
 # Phoenix is optional — don't fail if the image isn't available.
@@ -63,7 +66,7 @@ $COMPOSE up -d db broker webserver webhook-listener phoenix 2>/dev/null || \
 echo ""
 echo "=== Waiting for Paperless webserver to become healthy ==="
 WEBSERVER_ID=$($COMPOSE ps -q webserver)
-TIMEOUT=300
+TIMEOUT=60
 ELAPSED=0
 while true; do
     STATUS=$(docker inspect --format='{{.State.Health.Status}}' "$WEBSERVER_ID" 2>/dev/null || echo "unknown")
@@ -78,9 +81,10 @@ while true; do
         exit 1
     fi
     echo "  status=${STATUS}, elapsed=${ELAPSED}s..."
-    sleep 5
-    ELAPSED=$((ELAPSED + 5))
+    sleep 1
+    ELAPSED=$((ELAPSED + 1))
 done
+echo "=== Infrastructure startup completed in $((SECONDS - STARTUP_STARTED))s ==="
 
 # ---------------------------------------------------------------------------
 # 4. Run pytest inside the AI container

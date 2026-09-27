@@ -131,6 +131,31 @@ document. `ai_summary` stores the extracted 1-2 sentence summary so it can be
 shown directly in the Paperless UI or added as a list column. `ai_result`
 stores the structured JSON payload for debugging and audits.
 
+### Document languages
+
+Metadata extraction detects all substantive languages in the stored OCR text.
+It ignores incidental foreign names and isolated words, returning lowercase
+ISO 639-1 codes where available, otherwise ISO 639-3 codes. Codes are trimmed,
+deduplicated and sorted; malformed entries are discarded and an empty result
+is unknown.
+
+The reserved `language:` tag prefix holds the current classification, for example
+`language:de` and `language:en` on a bilingual document. Tags are created on demand
+with dark green (`#166534`) coloring and automatic matching disabled. A confident
+extraction replaces previous
+`language:` tags while preserving unrelated tags. Unknown results preserve the
+existing language tags. `ai_result.ai_metadata.languages` records the extraction
+result (an array or `null`), which may differ from preserved tags.
+
+- **Corpus languages:** fetch all pages of `/api/tags/` afresh and keep tags whose
+  names start with `language:` and whose `document_count` is greater than zero.
+  Do not use cached counts or count unused tags left behind by reclassification.
+- **Documents by language:** resolve the exact tag name from `/api/tags/?name=language:de`,
+  then request `/api/documents/?tags__id__in=<tag-id>`. A bilingual document
+  matches either of its language tag filters.
+
+Search prompt changes are a separate follow-up.
+
 ### Reprocessing a document
 
 Re-add the `ai:run-ocr` tag and, with Workflow B configured, the worker will
@@ -138,6 +163,24 @@ pick the document up on the next poll, restarting OCR and metadata extraction an
 title, date, and summary.
 
 To revert to Tesseract permanently, trigger a reprocess from the paperless UI (More → Reprocess document).
+
+For metadata-only reprocessing, enqueue fixed document IDs with
+`TaskQueues.enqueue_metadata` using the worker's configured Redis connection.
+The existing worker reads stored OCR text without downloading files or running
+OCR. This refreshes titles, dates, correspondents, summaries, processing dates,
+language tags and audit records under the normal extraction rules. Documents
+with empty content are skipped. Failed attempts use the normal delayed retries.
+
+For a language backfill, first deploy the worker and select exactly the newest
+10 documents without pending OCR. Page through
+`/api/documents/?ordering=-added,-id&page_size=10`, excluding documents with the
+OCR processing tag, a ready OCR job, or a delayed OCR retry. Snapshot
+their IDs, addition timestamps, metadata, tags, custom fields and OCR content
+hashes before enqueueing those fixed IDs. Report language/text agreement,
+metadata changes, unchanged content hashes and success/failure/skip per document.
+Keep empty-content documents in the pilot without substituting older documents.
+Review the pilot before snapshotting and enqueueing the remaining archive,
+excluding successful pilot documents.
 
 ### Weekly correspondent consolidation
 
@@ -235,8 +278,13 @@ even if the run is interrupted.
 ./run_tests.sh
 ```
 
-On a warm Docker cache this takes roughly 2–3 minutes (dominated by Paperless
-Django migrations and document indexing).  A fresh pull adds image download time.
+The pytest suite must finish in seconds, not minutes. Inference is mocked;
+upload and webhook fixtures check completion promptly with short deadlines.
+The harness stops at the first failure and prints the ten slowest tests. Image
+builds and container startup are separate overhead: use `--no-build` when the
+test image is current, and report those timings separately from pytest.
+On 2026-09-27 the full Docker suite passed 222 tests in 20.68 seconds (one
+opt-in live-model test skipped); infrastructure startup took another 31 seconds.
 
 #### What is tested
 

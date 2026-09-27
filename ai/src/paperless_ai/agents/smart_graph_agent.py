@@ -27,7 +27,7 @@ import datetime as _dt
 
 import fitz  # PyMuPDF
 from json_repair import repair_json
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from paperless_ai.agents.base import AgentResult, BaseDocumentAgent, DocumentMetadata
 from paperless_ai.agents.state import AgentState
@@ -170,6 +170,32 @@ class _ExtractedMetadata(BaseModel):
             "or other meta framing. Be specific, factual, and useful for matching documents."
         ),
     )
+    languages: list[str] | None = Field(
+        default=None,
+        description=(
+            "All substantive languages in the document, as lowercase ISO 639-1 codes "
+            "where available, otherwise ISO 639-3 codes. Ignore incidental foreign "
+            "names and isolated words. Return null when uncertain."
+        ),
+    )
+
+    @field_validator("languages", mode="before")
+    @classmethod
+    def normalize_languages(cls, value: object) -> list[str] | None:
+        """Keep sorted, unique two- or three-letter ASCII language codes."""
+        if not isinstance(value, list):
+            return None
+        return (
+            sorted(
+                {
+                    code.strip().lower()
+                    for code in value
+                    if isinstance(code, str)
+                    and re.fullmatch(r"[A-Za-z]{2,3}", code.strip())
+                }
+            )
+            or None
+        )
 
 
 def _field_instructions_from_schema() -> str:
@@ -372,6 +398,7 @@ class NuExtractStrategy(BaseExtractionStrategy):
             document_title_key: "string",
             date_key: "date-time",
             correspondent_key: "string",
+            "languages": ["string"],
         },
         indent=4,
     )
@@ -386,7 +413,17 @@ class NuExtractStrategy(BaseExtractionStrategy):
         messages = [
             {
                 "role": "user",
-                "content": [{"type": "text", "text": text}],
+                "content": [
+                    {
+                        "type": "text",
+                        "text": (
+                            "languages: "
+                            + _ExtractedMetadata.model_fields["languages"].description
+                            + "\n\nDocument:\n"
+                            + text
+                        ),
+                    }
+                ],
             }
         ]
         template_str = json.dumps(json.loads(self._NUEXTRACT_TEMPLATE), indent=4)
@@ -437,6 +474,7 @@ class NuExtractStrategy(BaseExtractionStrategy):
                             "title": data.get(self.document_title_key),
                             "date": data.get(self.date_key),
                             "correspondent": data.get(self.correspondent_key),
+                            "languages": data.get("languages"),
                         }
                     )
         except json.JSONDecodeError:
@@ -453,6 +491,7 @@ class NuExtractStrategy(BaseExtractionStrategy):
                 "title": data.get(self.document_title_key),
                 "date": data.get(self.date_key),
                 "correspondent": data.get(self.correspondent_key),
+                "languages": data.get("languages"),
             }
         )
 
@@ -799,6 +838,7 @@ class SmartDocumentAgent(BaseDocumentAgent):
             document_date=extracted_dict.get("date"),
             correspondent=extracted_dict.get("correspondent"),
             summary=extracted_dict.get("summary"),
+            languages=extracted_dict.get("languages"),
             full_ocr_transcript=full_text,
         )
 

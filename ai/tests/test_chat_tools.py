@@ -186,14 +186,19 @@ def test_start_span_preserves_original_exception():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "languages", [["de", "en", "it"], [], niquests.ConnectionError("offline")]
+    "languages",
+    [
+        {"it": 1361, "de": 700, "en": 305, "fr": 10, "th": 6, "pt": 3, "es": 1},
+        {},
+        niquests.ConnectionError("offline"),
+    ],
 )
 async def test_chat_copilot_supplies_fresh_languages_before_model_call(languages):
     """Every turn gets current language context without persisting it in history."""
     config = MagicMock()
     config.get_chat_kwargs.return_value = {}
     client = AsyncMock()
-    client.get_document_languages.side_effect = [languages, ["fr"]]
+    client.get_document_languages.side_effect = [languages, {"fr": 2}]
     copilot = ChatCopilot(config=config, client=client)
 
     with patch(
@@ -203,18 +208,25 @@ async def test_chat_copilot_supplies_fresh_languages_before_model_call(languages
         first = await copilot.run_turn("Find invoices")
         first_prompt = complete.await_args.kwargs["messages"][0]["content"]
         expected = (
-            ", ".join(languages)
-            if isinstance(languages, list) and languages
+            ", ".join(f"{code}: {count} documents" for code, count in languages.items())
+            if isinstance(languages, dict) and languages
             else "unknown"
         )
-        assert f"Observed document languages (ISO codes): {expected}" in first_prompt
-        assert "invoice OR Rechnung OR fattura" in first_prompt
+        assert (
+            f"Observed document languages (ISO codes and document counts): {expected}"
+            in first_prompt
+        )
+        assert "at most two languages per query" in first_prompt
+        assert "even when there are matches" in first_prompt
+        assert "remaining relevant observed languages" in first_prompt
         assert "only filter by language tags when the user requests it" in first_prompt
         assert all(message["role"] != "system" for message in first.history)
 
         await copilot.run_turn("Find more", history=first.history)
         second_prompt = complete.await_args.kwargs["messages"][0]["content"]
-        assert second_prompt.endswith("Observed document languages (ISO codes): fr.")
+        assert second_prompt.endswith(
+            "Observed document languages (ISO codes and document counts): fr: 2 documents."
+        )
         assert client.get_document_languages.await_count == 2
 
 
@@ -228,7 +240,7 @@ async def test_chat_copilot_run_turn_emits_events_and_aggregates_usage():
     config.get_chat_kwargs.return_value = {}
 
     client = AsyncMock()
-    client.get_document_languages.return_value = ["de", "en"]
+    client.get_document_languages.return_value = {"de": 700, "en": 305}
     copilot = ChatCopilot(config=config, client=client)
 
     first_response = _completion(

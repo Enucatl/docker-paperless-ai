@@ -372,6 +372,10 @@ class TestNuExtractStrategy:
     ("fields", "expected"),
     [
         ({"languages": [" EN ", "de", "DE", "gsw"]}, ["en"]),
+        ({"languages": ["xx"]}, ["und"]),
+        ({"languages": ["yy"]}, ["und"]),
+        ({"languages": ["gsw"]}, ["und"]),
+        ({"languages": ["CMN"]}, ["cmn"]),
         ({}, ["und"]),
         ({"languages": None}, ["und"]),
         ({"languages": []}, ["und"]),
@@ -408,6 +412,10 @@ async def test_languages_survive_both_strategies_and_fallback(
         prompt = kwargs["messages"][0]["content"]
         schema = kwargs["response_format"]["json_schema"]["schema"]
         assert "languages" in schema["required"]
+        from paperless_common.languages import LANGUAGES
+
+        assert set(schema["properties"]["languages"]["items"]["enum"]) == set(LANGUAGES)
+        assert len(LANGUAGES) == 51
     assert "Exactly one code" in prompt
     assert "ISO 639-1" in prompt and "ISO 639-3" in prompt
     assert "incidental foreign names and isolated words" in prompt

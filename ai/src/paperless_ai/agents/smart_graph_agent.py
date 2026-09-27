@@ -21,7 +21,7 @@ import re
 import time
 from abc import ABC, abstractmethod
 from pathlib import Path
-from typing import Optional
+from typing import Literal, Optional
 
 import datetime as _dt
 
@@ -33,6 +33,7 @@ from paperless_ai.agents.base import AgentResult, BaseDocumentAgent, DocumentMet
 from paperless_ai.agents.state import AgentState
 from paperless_ai.core.config import AgentConfig
 from paperless_ai.inference import complete
+from paperless_common.languages import LANGUAGES
 
 log = logging.getLogger(__name__)
 
@@ -170,15 +171,17 @@ class _ExtractedMetadata(BaseModel):
             "or other meta framing. Be specific, factual, and useful for matching documents."
         ),
     )
-    languages: list[str] = Field(
+    languages: list[Literal[*LANGUAGES]] = Field(
         default_factory=lambda: ["und"],
         min_length=1,
         max_length=1,
         description=(
             "Exactly one code for the document's primary substantive language, as a "
-            "lowercase ISO 639-1 code where available, otherwise ISO 639-3. Ignore "
+            "listed lowercase ISO 639-1 or ISO 639-3 code, exactly as given below. Ignore "
             "incidental foreign names and isolated words. Return a one-item list; "
-            "use 'und' when the language is undefined or unclear."
+            "use 'und' when the language is undefined or unclear or outside this list. "
+            "Choose only from: "
+            + "; ".join(f"{code}: {name}" for code, name in LANGUAGES.items())
         ),
     )
 
@@ -188,9 +191,7 @@ class _ExtractedMetadata(BaseModel):
         """Keep only the primary language, using the ISO undefined code as fallback."""
         candidates = value if isinstance(value, list) else [value]
         for candidate in candidates:
-            if isinstance(candidate, str) and re.fullmatch(
-                r"[A-Za-z]{2,3}", candidate.strip()
-            ):
+            if isinstance(candidate, str) and candidate.strip().lower() in LANGUAGES:
                 return [candidate.strip().lower()]
         return ["und"]
 

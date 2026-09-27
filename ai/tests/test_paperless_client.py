@@ -106,14 +106,17 @@ async def test_document_languages_refresh_counts_and_read_all_pages():
                 [
                     {"name": "language:en", "document_count": 3},
                     {"name": "language:gsw", "document_count": 1},
+                    {"name": "language:xx", "document_count": 999},
+                    {"name": "language:cmn", "document_count": 1},
                 ]
             ),
             _paged_response([]),
         ]
         async with PaperlessClient("http://test:8000", "token") as client:
             client._tags_cache = [{"name": "language:fr", "document_count": 10}]
-            assert await client.get_document_languages() == ["en", "gsw", "it"]
-            assert await client.get_document_languages() == []
+            counts = await client.get_document_languages()
+            assert list(counts.items()) == [("en", 3), ("it", 2), ("cmn", 1)]
+            assert list((await client.get_document_languages()).items()) == []
 
         assert [
             call.kwargs["params"]["page"] for call in session.get.await_args_list

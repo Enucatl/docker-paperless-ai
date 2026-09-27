@@ -110,10 +110,13 @@ with simpler or alternate keywords when a search returns no results. It can
 read matching OCR text before answering and cite the source documents.
 
 Before each turn, the copilot refreshes the languages observed in documents
-from `language:*` tags with positive document counts. It uses those languages
-to choose translated keyword alternatives joined with `OR`, preserving names
-and identifiers. Language tags guide wording; they only restrict results when
-the user requests a language filter. Untagged documents remain searchable,
+from supported `language:*` tags with positive document counts, ordered by
+prevalence. It starts with the most plausible language and distinctive keywords,
+using at most two languages per query and three alternatives per concept.
+It expands through separate short queries when results do not answer the question.
+Exhaustive requests cover remaining relevant languages and combine document IDs.
+Counts guide prioritization; user context takes precedence. Language tags guide
+wording; they only restrict results when the user requests a language filter. Untagged documents remain searchable,
 and an empty or unavailable language inventory is treated as unknown.
 
 ### Customising prompts
@@ -142,8 +145,10 @@ stores the structured JSON payload for debugging and audits.
 
 Metadata extraction identifies one primary substantive language in the stored
 OCR text. It ignores incidental foreign names and isolated words, returning one
-lowercase ISO 639-1 code where available, otherwise ISO 639-3. It returns `und`
-when the language is undefined or unclear.
+listed lowercase ISO 639-1 or ISO 639-3 code exactly. It returns `und`
+when the language is undefined, unclear, or outside the shared 50-language
+vocabulary in `common/src/paperless_common/languages.py`. The structured schema
+and fallback parser both enforce that vocabulary.
 
 The reserved `language:` tag prefix holds exactly one classification per
 document, such as `language:de`; unclear results use `language:und`. Tags are

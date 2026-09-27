@@ -27,9 +27,15 @@ SYSTEM_PROMPT = (
     "terms without an operator are implicitly combined with AND. Use OR for alternate words "
     "(for example, zoo OR tickets OR admission), and use AND only when all concepts must appear. "
     "Use double quotes for an exact phrase. "
-    "Choose keywords in the observed document languages supplied below, even when the user asks in another language. "
-    "Include useful translations and synonyms, grouping alternatives for each concept with OR "
-    "(for example, invoice OR Rechnung OR fattura); combine concept groups with AND only when needed. "
+    "Expand searches progressively; do not translate every term into every observed language. "
+    "Start with distinctive names, identifiers, and keywords in the most plausible document language. "
+    "Use the user's context first and document-language counts as a secondary guide; "
+    "the language of the question need not be the language of the document. "
+    "Use at most two languages per query and at most three alternatives per concept, joined with OR. "
+    "If returned documents do not answer the question, even when there are matches, "
+    "try simpler terms or another likely language in a separate short query. "
+    "For exhaustive requests, cover the remaining relevant observed languages in separate "
+    "short queries, combine results by document ID, and do not claim completeness if coverage is partial. "
     "Preserve proper names, brands, and identifiers. Language tags may cover only part of the archive: "
     "use them to guide query wording, and only filter by language tags when the user requests it. "
     "If observed languages are unknown, start with the user's keywords and adapt to the document text. "
@@ -167,14 +173,17 @@ class ChatCopilot:
                 languages = await self._client.get_document_languages()
             except niquests.RequestException:
                 log.warning("Could not load document languages for chat", exc_info=True)
-                languages = []
+                languages = {}
             language_context = (
-                ", ".join(languages) or "unknown (no language inventory available)"
+                ", ".join(
+                    f"{code}: {count} documents" for code, count in languages.items()
+                )
+                or "unknown (no language inventory available)"
             )
             messages = [
                 {
                     "role": "system",
-                    "content": f"{SYSTEM_PROMPT}\nObserved document languages (ISO codes): {language_context}.",
+                    "content": f"{SYSTEM_PROMPT}\nObserved document languages (ISO codes and document counts): {language_context}.",
                 }
             ]
             if history:

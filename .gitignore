@@ -12,6 +12,7 @@ build/
 
 # Generated test logs
 test*.log
+.codex-wake-run/
 
 # Local review artifacts
 tmp/

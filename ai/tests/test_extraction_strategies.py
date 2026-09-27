@@ -371,21 +371,24 @@ class TestNuExtractStrategy:
 @pytest.mark.parametrize(
     ("fields", "expected"),
     [
-        ({"languages": [" EN ", "de", "DE", "gsw"]}, ["de", "en", "gsw"]),
-        ({}, None),
-        ({"languages": None}, None),
-        ({"languages": []}, None),
-        ({"languages": "en"}, None),
-        ({"languages": {"en": True}}, None),
-        ({"languages": [None, 42, True, {}, [], "", "English", "e", "e1", "éé"]}, None),
-        ({"languages": ["en", "de-DE", " français ", False, "FR"]}, ["en", "fr"]),
+        ({"languages": [" EN ", "de", "DE", "gsw"]}, ["en"]),
+        ({}, ["und"]),
+        ({"languages": None}, ["und"]),
+        ({"languages": []}, ["und"]),
+        ({"languages": "en"}, ["en"]),
+        ({"languages": {"en": True}}, ["und"]),
+        (
+            {"languages": [None, 42, True, {}, [], "", "English", "e", "e1", "éé"]},
+            ["und"],
+        ),
+        ({"languages": ["en", "de-DE", " français ", False, "FR"]}, ["en"]),
     ],
 )
 @pytest.mark.asyncio
 async def test_languages_survive_both_strategies_and_fallback(
     strategy, malformed, fields, expected, mock_config
 ) -> None:
-    """Both extraction paths normalize multilingual and unknown results."""
+    """Both extraction paths keep one primary code and use und when unknown."""
     raw = json.dumps(fields)
     if malformed:
         raw = raw[:-1] + ",}" if fields else "{,}"
@@ -405,10 +408,10 @@ async def test_languages_survive_both_strategies_and_fallback(
         prompt = kwargs["messages"][0]["content"]
         schema = kwargs["response_format"]["json_schema"]["schema"]
         assert "languages" in schema["required"]
-    assert "All substantive languages" in prompt
+    assert "Exactly one code" in prompt
     assert "ISO 639-1" in prompt and "ISO 639-3" in prompt
     assert "incidental foreign names and isolated words" in prompt
-    assert "null when uncertain" in prompt
+    assert "use 'und' when the language is undefined or unclear" in prompt
 
 
 class TestDateFieldValidation:
@@ -463,7 +466,7 @@ async def test_extract_metadata_state_serializes_date_as_string(mock_config) -> 
     result = await _extract_metadata(state, mock_config, FixedMetadataStrategy())
 
     assert result["_extracted_metadata"]["date"] == "2024-01-15"
-    assert result["_extracted_metadata"]["languages"] == ["de", "en"]
+    assert result["_extracted_metadata"]["languages"] == ["en"]
     assert result["_metadata_context"] == "Sample OCR text"
 
 
@@ -481,8 +484,8 @@ async def test_languages_propagate_to_public_agent_result(mock_config) -> None:
     with patch.object(SmartDocumentAgent, "_build_graph", return_value=graph):
         result = await SmartDocumentAgent(mock_config).process("unused.pdf", {})
 
-    assert result.metadata.languages == ["de", "en"]
-    assert result.metadata.model_dump()["languages"] == ["de", "en"]
+    assert result.metadata.languages == ["en"]
+    assert result.metadata.model_dump()["languages"] == ["en"]
     assert result.metadata.full_ocr_transcript == "Stored OCR text"
 
 

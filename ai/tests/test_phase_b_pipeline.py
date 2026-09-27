@@ -416,10 +416,7 @@ async def test_metadata_batch_writes_metadata_and_transitions_tag(
         cf_map[ai_summary_field_id]
         == "Invoice from Acme Corp dated 2024-01-15 for $100.00."
     )
-    assert json.loads(cf_map[ai_result_field_id])["ai_metadata"]["languages"] == [
-        "de",
-        "en",
-    ]
+    assert json.loads(cf_map[ai_result_field_id])["ai_metadata"]["languages"] == ["de"]
     assert doc["content"] == original_content
 
     # Replace stale language tags while keeping unrelated tags.
@@ -433,7 +430,7 @@ async def test_metadata_batch_writes_metadata_and_transitions_tag(
         if tag["name"].startswith("language:") and tag["document_count"] > 0
     }
     assert "language:fr" not in languages
-    for code in ("de", "en"):
+    for code in ("de",):
         tag = languages[f"language:{code}"]
         assert tag["id"] in doc["tags"]
         assert tag["matching_algorithm"] == 0

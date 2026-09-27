@@ -1,4 +1,4 @@
 Analyze the OCR text of the document below and extract the requested metadata.
 
 Rules for extraction:
-- Use null for any field you cannot determine with confidence. Do not invent or guess information.
+- Use null for any field you cannot determine with confidence, except languages: return exactly one primary language code in a one-item list and use `und` when it is undefined or unclear. Do not invent or guess information.

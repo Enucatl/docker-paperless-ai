@@ -5,6 +5,7 @@ Handles polling, downloading, and patching documents via the API.
 """
 
 import logging
+import re
 from typing import Any
 
 import niquests
@@ -205,6 +206,18 @@ class PaperlessClient:
 
     async def _get_all_tags(self, force: bool = False) -> list[dict]:
         return await self._get_all_objects("/api/tags/", "_tags_cache", force=force)
+
+    async def get_document_languages(self) -> list[str]:
+        """Return language codes attached to documents, refreshing tag counts."""
+        return sorted(
+            {
+                tag["name"].removeprefix("language:")
+                for tag in await self._get_all_tags(force=True)
+                if re.fullmatch(r"language:[a-z]{2,3}", tag.get("name", ""))
+                and tag["name"] != "language:und"
+                and tag.get("document_count", 0) > 0
+            }
+        )
 
     async def _get_all_document_types(self, force: bool = False) -> list[dict]:
         return await self._get_all_objects(

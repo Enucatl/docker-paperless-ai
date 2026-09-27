@@ -1,6 +1,7 @@
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+import niquests
 
 from paperless_common.telemetry import start_span
 from paperless_ai.search.chat_agent import ChatCopilot
@@ -184,6 +185,40 @@ def test_start_span_preserves_original_exception():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "languages", [["de", "en", "it"], [], niquests.ConnectionError("offline")]
+)
+async def test_chat_copilot_supplies_fresh_languages_before_model_call(languages):
+    """Every turn gets current language context without persisting it in history."""
+    config = MagicMock()
+    config.get_chat_kwargs.return_value = {}
+    client = AsyncMock()
+    client.get_document_languages.side_effect = [languages, ["fr"]]
+    copilot = ChatCopilot(config=config, client=client)
+
+    with patch(
+        "paperless_ai.search.chat_agent.complete",
+        new=AsyncMock(return_value=_completion("Answer")),
+    ) as complete:
+        first = await copilot.run_turn("Find invoices")
+        first_prompt = complete.await_args.kwargs["messages"][0]["content"]
+        expected = (
+            ", ".join(languages)
+            if isinstance(languages, list) and languages
+            else "unknown"
+        )
+        assert f"Observed document languages (ISO codes): {expected}" in first_prompt
+        assert "invoice OR Rechnung OR fattura" in first_prompt
+        assert "only filter by language tags when the user requests it" in first_prompt
+        assert all(message["role"] != "system" for message in first.history)
+
+        await copilot.run_turn("Find more", history=first.history)
+        second_prompt = complete.await_args.kwargs["messages"][0]["content"]
+        assert second_prompt.endswith("Observed document languages (ISO codes): fr.")
+        assert client.get_document_languages.await_count == 2
+
+
+@pytest.mark.asyncio
 async def test_chat_copilot_run_turn_emits_events_and_aggregates_usage():
     config = MagicMock()
     config.chat_model = "openai/chat-model"
@@ -192,10 +227,9 @@ async def test_chat_copilot_run_turn_emits_events_and_aggregates_usage():
     config.metadata_endpoint = None
     config.get_chat_kwargs.return_value = {}
 
-    copilot = ChatCopilot(
-        config=config,
-        client=AsyncMock(),
-    )
+    client = AsyncMock()
+    client.get_document_languages.return_value = ["de", "en"]
+    copilot = ChatCopilot(config=config, client=client)
 
     first_response = _completion(
         "",

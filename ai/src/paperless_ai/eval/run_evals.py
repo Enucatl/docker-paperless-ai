@@ -94,6 +94,14 @@ def jev_metadata_confidence(output: Any) -> dict[str, float]:
     return _phoenix_score(output, "metadata_confidence")
 
 
+def language_accuracy(output: Any) -> dict[str, float]:
+    """Score the extracted language against the corpus label exactly."""
+    output = output or {}
+    predicted = output.get("language")
+    reference = output.get("reference_language")
+    return {"score": float(isinstance(predicted, str) and predicted == reference)}
+
+
 def _build_agent(exp_config: AgentConfig, ocr_cache: Any = None):
     """Instantiate the configured extraction agent."""
     module_path, class_name = exp_config.agent_class.rsplit(".", 1)
@@ -119,14 +127,20 @@ def _build_agent(exp_config: AgentConfig, ocr_cache: Any = None):
 
 
 def _load_entries(path: Path, split: str) -> list[dict[str, Any]]:
-    """Load input-only corpus entries for one requested split."""
+    """Load corpus entries and their expected language for one requested split."""
     data = json.loads(path.read_text(encoding="utf-8"))
     entries = data.get("entries", [])
     if split == "code-test":
         entries = [entry for entry in entries if "code-test" in entry.get("tags", [])]
     elif split != "all":
         entries = [entry for entry in entries if entry.get("split", "test") == split]
-    return [{"file_path": entry["file_path"]} for entry in entries]
+    return [
+        {
+            "file_path": entry["file_path"],
+            "language": (entry.get("metadata", {}).get("languages") or ["und"])[0],
+        }
+        for entry in entries
+    ]
 
 
 async def run_scientific_evaluation(config: AgentConfig, split: str = "test") -> None:
@@ -175,10 +189,8 @@ async def run_scientific_evaluation(config: AgentConfig, split: str = "test") ->
         return
 
     phoenix_endpoint = "http://phoenix:6006"
-    phoenix_dataset_name = f"{PHOENIX_DATASET_BASE_NAME}-{split}"
-    dataframe = pd.DataFrame(
-        [{"file_path": entry["file_path"]} for entry in existing_entries]
-    )
+    phoenix_dataset_name = f"{PHOENIX_DATASET_BASE_NAME}-language-{split}"
+    dataframe = pd.DataFrame(existing_entries)
 
     try:
         phoenix_client = AsyncClient(base_url=phoenix_endpoint)
@@ -186,10 +198,11 @@ async def run_scientific_evaluation(config: AgentConfig, split: str = "test") ->
             phoenix_dataset = await phoenix_client.datasets.create_dataset(
                 dataframe=dataframe,
                 input_keys=["file_path"],
+                output_keys=["language"],
                 name=phoenix_dataset_name,
                 dataset_description=(
-                    "Input-only document corpus; Jev scores are computed once "
-                    "inside each experiment task."
+                    "Document corpus with language reference labels; Jev metadata "
+                    "scores are computed once inside each experiment task."
                 ),
             )
             log.info(
@@ -305,6 +318,8 @@ async def run_scientific_evaluation(config: AgentConfig, split: str = "test") ->
                     correspondent=metadata.correspondent,
                     summary=metadata.summary,
                 )
+                reference_language = example.output["language"]
+                predicted_language = (metadata.languages or ["und"])[0]
                 scores = {
                     "date": evaluation.date_score,
                     "correspondent": evaluation.correspondent_score,
@@ -316,6 +331,9 @@ async def run_scientific_evaluation(config: AgentConfig, split: str = "test") ->
                     "correspondent_confidence": evaluation.correspondent_confidence,
                     "title_confidence": evaluation.title_confidence,
                     "summary_confidence": evaluation.summary_confidence,
+                    "language_accuracy": float(
+                        predicted_language == reference_language
+                    ),
                 }
                 scores["metadata_confidence"] = (
                     sum(
@@ -349,6 +367,8 @@ async def run_scientific_evaluation(config: AgentConfig, split: str = "test") ->
                     "date": metadata.document_date,
                     "title": metadata.title,
                     "summary": metadata.summary,
+                    "language": predicted_language,
+                    "reference_language": reference_language,
                     "_jev": jev_output,
                 }
 
@@ -368,6 +388,7 @@ async def run_scientific_evaluation(config: AgentConfig, split: str = "test") ->
                     jev_summary_confidence,
                     jev_document_understanding_confidence,
                     jev_metadata_confidence,
+                    language_accuracy,
                 ],
                 experiment_name=experiment_config.name,
                 experiment_description=(

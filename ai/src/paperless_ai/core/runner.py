@@ -471,28 +471,25 @@ async def run_metadata_batch(
         payload["tags"] = [t for t in doc.get("tags", []) if t != tag_metadata_id]
 
         try:
-            if extracted.languages is not None:
-                async with language_tag_lock:
-                    if language_tag_ids is None:
-                        language_tag_ids = {
-                            tag["id"]
-                            for tag in await client._get_all_tags(force=True)
-                            if tag["name"].startswith("language:")
-                        }
-                    detected_tag_ids = []
-                    for language in extracted.languages:
-                        tag_id = await client.get_tag_id(
-                            f"language:{language}",
-                            matching_algorithm=0,
-                            color="#166534",
-                        )
-                        language_tag_ids.add(tag_id)
-                        detected_tag_ids.append(tag_id)
-                    payload["tags"] = [
-                        tag_id
-                        for tag_id in payload["tags"]
-                        if tag_id not in language_tag_ids
-                    ] + detected_tag_ids
+            async with language_tag_lock:
+                if language_tag_ids is None:
+                    language_tag_ids = {
+                        tag["id"]
+                        for tag in await client._get_all_tags(force=True)
+                        if tag["name"].startswith("language:")
+                    }
+                language = (extracted.languages or ["und"])[0]
+                tag_id = await client.get_tag_id(
+                    f"language:{language}",
+                    matching_algorithm=0,
+                    color="#166534",
+                )
+                language_tag_ids.add(tag_id)
+                payload["tags"] = [
+                    existing_tag_id
+                    for existing_tag_id in payload["tags"]
+                    if existing_tag_id not in language_tag_ids
+                ] + [tag_id]
             await client.patch_document(doc_id, payload)
             log.info("Document %d: metadata written", doc_id)
             await queues.remove(doc_id, TaskQueues.KEY_METADATA)

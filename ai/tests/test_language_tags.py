@@ -42,11 +42,11 @@ async def test_language_tags_are_atomic_and_reused_across_documents(mode: str) -
         assert endpoint == "/api/tags/"
         assert json["matching_algorithm"] == 0
         assert json["color"] == "#166534"
-        if mode == "failure" and json["name"] == "language:en":
+        if mode == "failure" and json["name"] == "language:de":
             raise RuntimeError("tag service unavailable")
         created = MagicMock()
         created.json.return_value = {
-            "id": {"language:de": 20, "language:en": 21}[json["name"]]
+            "id": {"language:de": 20, "language:und": 22}[json["name"]]
         }
         return created
 
@@ -84,9 +84,7 @@ async def test_language_tags_are_atomic_and_reused_across_documents(mode: str) -
                 assert client.patch_document.await_count == 2
                 for call in client.patch_document.await_args_list:
                     payload = call.args[1]
-                    assert payload["tags"] == (
-                        [11, 12] if mode == "unknown" else [12, 20, 21]
-                    )
+                    assert payload["tags"] == [12, 22 if mode == "unknown" else 20]
                     assert "content" not in payload
                     fields = {
                         cf["field"]: cf["value"] for cf in payload["custom_fields"]
@@ -97,11 +95,11 @@ async def test_language_tags_are_atomic_and_reused_across_documents(mode: str) -
                         == extracted.languages
                     )
                 assert queues.remove.await_count == 2
-            if mode in {"unknown", "dry_run"}:
+            if mode == "dry_run":
                 session.post.assert_not_awaited()
                 client._get_all_tags.assert_not_awaited()
-            elif mode == "known":
-                assert session.post.await_count == 2
+            elif mode in {"known", "unknown"}:
+                assert session.post.await_count == 1
                 client._get_all_tags.assert_awaited_once_with(force=True)
             else:
                 assert queues.mark_failure.await_count == 2

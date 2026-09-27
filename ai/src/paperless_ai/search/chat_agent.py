@@ -1,8 +1,11 @@
 """Tool-calling Paperless chat copilot."""
 
+import logging
 import time
 from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable
+
+import niquests
 
 from paperless_ai.core.config import AgentConfig
 from paperless_ai.inference import complete
@@ -24,6 +27,12 @@ SYSTEM_PROMPT = (
     "terms without an operator are implicitly combined with AND. Use OR for alternate words "
     "(for example, zoo OR tickets OR admission), and use AND only when all concepts must appear. "
     "Use double quotes for an exact phrase. "
+    "Choose keywords in the observed document languages supplied below, even when the user asks in another language. "
+    "Include useful translations and synonyms, grouping alternatives for each concept with OR "
+    "(for example, invoice OR Rechnung OR fattura); combine concept groups with AND only when needed. "
+    "Preserve proper names, brands, and identifiers. Language tags may cover only part of the archive: "
+    "use them to guide query wording, and only filter by language tags when the user requests it. "
+    "If observed languages are unknown, start with the user's keywords and adapt to the document text. "
     "If a keyword search returns nothing, retry with simpler keywords or another distinctive term before concluding there are no matches. "
     "Before filtering by metadata like tags, correspondents, document types, or storage paths, "
     "call get_available_metadata to confirm the exact names. "
@@ -35,6 +44,8 @@ SYSTEM_PROMPT = (
     "document(s) before answering if the answer depends on document contents. Read more than one "
     "when multiple candidates remain plausible."
 )
+
+log = logging.getLogger(__name__)
 
 
 def _message_to_dict(message: Any) -> dict:
@@ -152,7 +163,20 @@ class ChatCopilot:
                 "paperless_ai.chat.user_message_length": len(user_message),
             },
         ) as turn_span:
-            messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+            try:
+                languages = await self._client.get_document_languages()
+            except niquests.RequestException:
+                log.warning("Could not load document languages for chat", exc_info=True)
+                languages = []
+            language_context = (
+                ", ".join(languages) or "unknown (no language inventory available)"
+            )
+            messages = [
+                {
+                    "role": "system",
+                    "content": f"{SYSTEM_PROMPT}\nObserved document languages (ISO codes): {language_context}.",
+                }
+            ]
             if history:
                 messages.extend(history)
             messages.append({"role": "user", "content": user_message})

@@ -19,6 +19,7 @@ from paperless_ai.eval.run_evals import (
     jev_metadata,
     jev_metadata_confidence,
     jev_document_understanding,
+    language_accuracy,
     jev_summary,
     jev_summary_confidence,
     jev_title,
@@ -79,6 +80,7 @@ class _Phoenix:
 
     def __init__(self, file_path: str):
         self.file_path = file_path
+        self.reference_language = "und"
         self.run_experiment = AsyncMock(side_effect=self._run)
         self.client = AsyncMock()
         self.client.datasets.create_dataset = AsyncMock(return_value=MagicMock())
@@ -92,7 +94,10 @@ class _Phoenix:
         """Run the supplied Phoenix task against one fake example."""
         self.evaluators.append(kwargs["evaluators"])
         output = await kwargs["task"](
-            SimpleNamespace(input={"file_path": self.file_path})
+            SimpleNamespace(
+                input={"file_path": self.file_path},
+                output={"language": self.reference_language},
+            )
         )
         self.outputs.append(output)
         return MagicMock()
@@ -112,8 +117,8 @@ class _Phoenix:
 
 
 @pytest.mark.asyncio
-async def test_corpus_is_uploaded_as_input_only(tmp_path):
-    """Phoenix receives only the document identity, never annotations."""
+async def test_corpus_language_is_an_evaluation_target_not_agent_input(tmp_path):
+    """Phoenix holds language labels as targets without passing them to the agent."""
     path = _existing_pdf(tmp_path)
     corpus = tmp_path / "eval.json"
     experiments = tmp_path / "experiments.yaml"
@@ -124,12 +129,14 @@ async def test_corpus_is_uploaded_as_input_only(tmp_path):
                 "file_path": str(path),
                 "split": "test",
                 "tags": ["code-test"],
+                "metadata": {"languages": ["en"]},
                 "non_eval_metadata": "kept out of Phoenix",
             }
         ],
     )
     _write_experiments(experiments)
     phoenix = _Phoenix(str(path))
+    phoenix.reference_language = "en"
     agent = MagicMock()
     agent.process = AsyncMock(
         return_value=AgentResult(
@@ -139,6 +146,7 @@ async def test_corpus_is_uploaded_as_input_only(tmp_path):
                 correspondent="Acme",
                 summary="Invoice for January services from Acme.",
                 full_ocr_transcript="OCR",
+                languages=["en"],
             ),
             metadata_context="OCR",
         )
@@ -169,9 +177,9 @@ async def test_corpus_is_uploaded_as_input_only(tmp_path):
 
     dataset_call = phoenix.client.datasets.create_dataset.await_args
     dataframe = dataset_call.kwargs["dataframe"]
-    assert list(dataframe.columns) == ["file_path"]
+    assert list(dataframe.columns) == ["file_path", "language"]
     assert dataset_call.kwargs["input_keys"] == ["file_path"]
-    assert "output_keys" not in dataset_call.kwargs
+    assert dataset_call.kwargs["output_keys"] == ["language"]
 
     assert typesafe_client.system_one.call_count == 1
     output = phoenix.outputs[0]
@@ -190,8 +198,10 @@ async def test_corpus_is_uploaded_as_input_only(tmp_path):
         "document_understanding_confidence": pytest.approx(
             (0.86 + 0.75 + 0.92 + 0.89) / 4
         ),
+        "language_accuracy": 1.0,
         "model": "jev-test",
     }
+    assert output["language"] == output["reference_language"] == "en"
     assert output["summary"] == "Invoice for January services from Acme."
     assert [e.__name__ for e in phoenix.evaluators[0]] == [
         "jev_date",
@@ -206,6 +216,7 @@ async def test_corpus_is_uploaded_as_input_only(tmp_path):
         "jev_summary_confidence",
         "jev_document_understanding_confidence",
         "jev_metadata_confidence",
+        "language_accuracy",
     ]
     assert agent.process.await_args.kwargs == {"existing_hints": {}}
 
@@ -348,6 +359,15 @@ def test_jev_projection_scores_are_continuous():
         "score": pytest.approx(0.8433333333)
     }
     assert jev_date({"_jev": {"date": "not-a-score"}}) == {"score": 0.0}
+
+
+def test_language_accuracy_requires_an_exact_string_match():
+    assert language_accuracy({"language": "en", "reference_language": "en"}) == {
+        "score": 1.0
+    }
+    assert language_accuracy({"language": "EN", "reference_language": "en"}) == {
+        "score": 0.0
+    }
 
 
 def test_phoenix_evaluator_wrapper_keeps_jev_probability_as_score():

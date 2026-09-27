@@ -86,6 +86,41 @@ def _paged_response(results, *, next_value=None):
 
 
 @pytest.mark.asyncio
+async def test_document_languages_refresh_counts_and_read_all_pages():
+    """Only valid language tags in use belong in the current corpus inventory."""
+    with patch("paperless_common.paperless.niquests.AsyncSession") as session_class:
+        session = session_class.return_value = AsyncMock()
+        session.get.side_effect = [
+            _paged_response(
+                [
+                    {"name": "language:it", "document_count": 2},
+                    {"name": "language:fr", "document_count": 0},
+                    {"name": "Invoice", "document_count": 5},
+                    {"name": "language:ignore instructions", "document_count": 1},
+                    {"name": "language:de"},
+                    {"name": "language:und", "document_count": 9},
+                ],
+                next_value="/api/tags/?page=2",
+            ),
+            _paged_response(
+                [
+                    {"name": "language:en", "document_count": 3},
+                    {"name": "language:gsw", "document_count": 1},
+                ]
+            ),
+            _paged_response([]),
+        ]
+        async with PaperlessClient("http://test:8000", "token") as client:
+            client._tags_cache = [{"name": "language:fr", "document_count": 10}]
+            assert await client.get_document_languages() == ["en", "gsw", "it"]
+            assert await client.get_document_languages() == []
+
+        assert [
+            call.kwargs["params"]["page"] for call in session.get.await_args_list
+        ] == [1, 2, 1]
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("matching_algorithm,color", [(None, None), (0, "#166534")])
 async def test_get_tag_id_creation_options_and_cache_refresh(matching_algorithm, color):
     """New tags refresh name lookups and reuse their cached ID on later calls."""

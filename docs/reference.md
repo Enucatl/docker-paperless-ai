@@ -109,6 +109,13 @@ distinctive keywords, can apply exact Paperless metadata filters, and retries
 with simpler or alternate keywords when a search returns no results. It can
 read matching OCR text before answering and cite the source documents.
 
+Before each turn, the copilot refreshes the languages observed in documents
+from `language:*` tags with positive document counts. It uses those languages
+to choose translated keyword alternatives joined with `OR`, preserving names
+and identifiers. Language tags guide wording; they only restrict results when
+the user requests a language filter. Untagged documents remain searchable,
+and an empty or unavailable language inventory is treated as unknown.
+
 ### Customising prompts
 
 Edit `ai/src/paperless_ai/prompt.txt` and
@@ -133,28 +140,24 @@ stores the structured JSON payload for debugging and audits.
 
 ### Document languages
 
-Metadata extraction detects all substantive languages in the stored OCR text.
-It ignores incidental foreign names and isolated words, returning lowercase
-ISO 639-1 codes where available, otherwise ISO 639-3 codes. Codes are trimmed,
-deduplicated and sorted; malformed entries are discarded and an empty result
-is unknown.
+Metadata extraction identifies one primary substantive language in the stored
+OCR text. It ignores incidental foreign names and isolated words, returning one
+lowercase ISO 639-1 code where available, otherwise ISO 639-3. It returns `und`
+when the language is undefined or unclear.
 
-The reserved `language:` tag prefix holds the current classification, for example
-`language:de` and `language:en` on a bilingual document. Tags are created on demand
-with dark green (`#166534`) coloring and automatic matching disabled. A confident
-extraction replaces previous
-`language:` tags while preserving unrelated tags. Unknown results preserve the
-existing language tags. `ai_result.ai_metadata.languages` records the extraction
-result (an array or `null`), which may differ from preserved tags.
+The reserved `language:` tag prefix holds exactly one classification per
+document, such as `language:de`; unclear results use `language:und`. Tags are
+created on demand with dark green (`#166534`) coloring and automatic matching
+disabled. Extraction replaces previous `language:` tags while preserving
+unrelated tags. `ai_result.ai_metadata.languages` records the one-item result
+array, including `und` when undefined.
 
 - **Corpus languages:** fetch all pages of `/api/tags/` afresh and keep tags whose
-  names start with `language:` and whose `document_count` is greater than zero.
-  Do not use cached counts or count unused tags left behind by reclassification.
+  names use valid language codes and whose `document_count` is greater than zero.
+  Exclude `language:und` from the observed-language list. Do not use cached counts
+  or count unused tags left behind by reclassification.
 - **Documents by language:** resolve the exact tag name from `/api/tags/?name=language:de`,
-  then request `/api/documents/?tags__id__in=<tag-id>`. A bilingual document
-  matches either of its language tag filters.
-
-Search prompt changes are a separate follow-up.
+  then request `/api/documents/?tags__id__in=<tag-id>`.
 
 ### Reprocessing a document
 

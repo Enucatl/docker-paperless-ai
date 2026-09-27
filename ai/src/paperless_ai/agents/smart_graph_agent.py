@@ -170,32 +170,29 @@ class _ExtractedMetadata(BaseModel):
             "or other meta framing. Be specific, factual, and useful for matching documents."
         ),
     )
-    languages: list[str] | None = Field(
-        default=None,
+    languages: list[str] = Field(
+        default_factory=lambda: ["und"],
+        min_length=1,
+        max_length=1,
         description=(
-            "All substantive languages in the document, as lowercase ISO 639-1 codes "
-            "where available, otherwise ISO 639-3 codes. Ignore incidental foreign "
-            "names and isolated words. Return null when uncertain."
+            "Exactly one code for the document's primary substantive language, as a "
+            "lowercase ISO 639-1 code where available, otherwise ISO 639-3. Ignore "
+            "incidental foreign names and isolated words. Return a one-item list; "
+            "use 'und' when the language is undefined or unclear."
         ),
     )
 
     @field_validator("languages", mode="before")
     @classmethod
-    def normalize_languages(cls, value: object) -> list[str] | None:
-        """Keep sorted, unique two- or three-letter ASCII language codes."""
-        if not isinstance(value, list):
-            return None
-        return (
-            sorted(
-                {
-                    code.strip().lower()
-                    for code in value
-                    if isinstance(code, str)
-                    and re.fullmatch(r"[A-Za-z]{2,3}", code.strip())
-                }
-            )
-            or None
-        )
+    def normalize_languages(cls, value: object) -> list[str]:
+        """Keep only the primary language, using the ISO undefined code as fallback."""
+        candidates = value if isinstance(value, list) else [value]
+        for candidate in candidates:
+            if isinstance(candidate, str) and re.fullmatch(
+                r"[A-Za-z]{2,3}", candidate.strip()
+            ):
+                return [candidate.strip().lower()]
+        return ["und"]
 
 
 def _field_instructions_from_schema() -> str:

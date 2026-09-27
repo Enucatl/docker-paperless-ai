@@ -1,4 +1,5 @@
 #!/bin/bash
+set -Eeuo pipefail
 
 # --- Configuration ---
 # Absolute path to the folder containing your docker-compose.yml
@@ -9,8 +10,10 @@ ZIP_NAME_PREFIX="paperless"
 
 # The service name inside your docker-compose.yml
 SERVICE="webserver"
-RETENTION_DAYS=15
-DATE=$(date --iso-8601=seconds)
+DATE=$(date -u +%Y-%m-%dT%H%M%SZ)
+EXPORT_PATH=/usr/src/paperless/export
+
+trap 'status=$?; trap - ERR; logger -s "[$LOGGER_TAG]: Backup failed at line $LINENO (exit $status)."; exit "$status"' ERR
 
 # --- Script Start ---
 logger -s "[$LOGGER_TAG]: Starting Paperless Backup via Docker Compose..."
@@ -26,6 +29,8 @@ docker compose exec -T "$SERVICE" document_exporter "$EXPORT_DIR" \
   --delete \
   --zip \
   --zip-name "${ZIP_NAME_PREFIX}-$DATE"
+docker compose exec -T "$SERVICE" python3 -c 'import os,sys,zipfile; p=sys.argv[1]; assert os.path.getsize(p) > 0, f"empty archive: {p}"; z=zipfile.ZipFile(p); bad=z.testzip(); assert bad is None, f"corrupt member {bad} in {p}"' \
+  "$EXPORT_PATH/${ZIP_NAME_PREFIX}-$DATE.zip"
 
 # 2. Data-Only Backup
 logger -s "[$LOGGER_TAG]: Creating Data-Only Backup..."
@@ -34,9 +39,7 @@ docker compose exec -T "$SERVICE" document_exporter "$EXPORT_DIR" \
   --data-only \
   --zip \
   --zip-name "${ZIP_NAME_PREFIX}-data-only-$DATE"
+docker compose exec -T "$SERVICE" python3 -c 'import os,sys,zipfile; p=sys.argv[1]; assert os.path.getsize(p) > 0, f"empty archive: {p}"; z=zipfile.ZipFile(p); bad=z.testzip(); assert bad is None, f"corrupt member {bad} in {p}"' \
+  "$EXPORT_PATH/${ZIP_NAME_PREFIX}-data-only-$DATE.zip"
 
-# 3. Cleanup Old Backups
-logger -s "[$LOGGER_TAG]: Removing backups older than $RETENTION_DAYS days..."
-docker compose exec -T "$SERVICE" find "$EXPORT_DIR" -name "paperless-*.zip" -mtime +"$RETENTION_DAYS" -delete
-
-logger -s "[$LOGGER_TAG]: Backup & Cleanup Complete."
+logger -s "[$LOGGER_TAG]: Backup Complete."

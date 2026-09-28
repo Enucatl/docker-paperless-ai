@@ -52,6 +52,7 @@ def completion_result(content: str | None) -> CompletionResult:
 def mock_config():
     """Minimal AgentConfig for testing."""
     config = MagicMock(spec=AgentConfig)
+    config.ocr_backend = "vision"
     config.metadata_model = "test-model"
     config.metadata_endpoint = None
     config.metadata_prompt = "Extract metadata from the following text:"
@@ -489,7 +490,10 @@ async def test_languages_propagate_to_public_agent_result(mock_config) -> None:
     mock_config.vision_batch_size = 1
     graph = MagicMock()
     graph.ainvoke = AsyncMock(return_value=state)
-    with patch.object(SmartDocumentAgent, "_build_graph", return_value=graph):
+    with (
+        patch.object(SmartDocumentAgent, "_build_graph", return_value=graph),
+        patch("paperless_ai.agents.smart_graph_agent._count_pdf_pages", return_value=1),
+    ):
         result = await SmartDocumentAgent(mock_config).process("unused.pdf", {})
 
     assert result.metadata.languages == ["en"]

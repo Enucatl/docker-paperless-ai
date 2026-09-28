@@ -263,6 +263,11 @@ async def run_scientific_evaluation(config: AgentConfig, split: str = "test") ->
         experiment_config.update(reset_for_experiments)
         experiment_config.update(experiment)
         experiment_config.update(fixed_jev_settings)
+        if (
+            experiment_config["ocr_backend"] == "paddleocr"
+            and "ocr_endpoint" not in experiment
+        ):
+            experiment_config["ocr_endpoint"] = config.ocr_endpoint
         experiments.append(AgentConfig(**experiment_config))
 
     log.info(
@@ -397,7 +402,12 @@ async def run_scientific_evaluation(config: AgentConfig, split: str = "test") ->
                 ),
                 experiment_metadata={
                     "agent_class": experiment_config.agent_class,
-                    "ocr_model": experiment_config.ocr_model,
+                    "ocr_backend": experiment_config.ocr_backend,
+                    "ocr_model": (
+                        "PaddleOCR-VL-1.6-0.9B"
+                        if experiment_config.ocr_backend == "paddleocr"
+                        else experiment_config.ocr_model
+                    ),
                     "metadata_model": experiment_config.metadata_model,
                     "typesafe_model": config.typesafe_model,
                     "ocr_temperature": experiment_config.ocr_temperature,
@@ -406,7 +416,11 @@ async def run_scientific_evaluation(config: AgentConfig, split: str = "test") ->
                     "metadata_reasoning_effort": experiment_config.metadata_reasoning_effort,
                 },
                 concurrency=1,
-                timeout=300,
+                timeout=(
+                    experiment_config.paddle_timeout + 300
+                    if experiment_config.ocr_backend == "paddleocr"
+                    else 300
+                ),
             )
             log.info("Experiment '%s' complete", experiment_config.name)
         except Exception:

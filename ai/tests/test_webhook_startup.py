@@ -40,7 +40,12 @@ class _PaperlessClient:
 
     async def get_or_create_custom_field(self, name: str, data_type: str) -> int:
         self.custom_field_calls.append(name)
-        return {"ai_processed": 21, "ai_summary": 22, "ai_result": 23}[name]
+        return {
+            "ai_processed": 21,
+            "ai_summary": 22,
+            "ai_result": 23,
+            "ai_ocr_output": 24,
+        }[name]
 
 
 def _config() -> SimpleNamespace:
@@ -64,12 +69,13 @@ async def test_initialize_paperless_retries_transient_setup_failure(
         client, _config(), retry_delay=0.01, max_retry_delay=0.01
     )
 
-    assert result == (21, 22, 23)
+    assert result == (21, 22, 23, 24)
     assert client.workflow_calls == 2
     assert client.custom_field_calls == [
         "ai_processed",
         "ai_summary",
         "ai_result",
+        "ai_ocr_output",
     ]
     sleep.assert_awaited_once_with(0.01)
 
@@ -84,7 +90,7 @@ async def test_initialize_paperless_retries_api_startup_failure(monkeypatch) -> 
         client, _config(), retry_delay=0.01, max_retry_delay=0.01
     )
 
-    assert result == (21, 22, 23)
+    assert result == (21, 22, 23, 24)
     assert client.api_calls == 2
     sleep.assert_awaited_once_with(0.01)
 

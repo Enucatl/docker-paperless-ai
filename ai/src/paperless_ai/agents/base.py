@@ -30,7 +30,7 @@ class AgentResult(BaseModel):
     elapsed_s: float = 0.0
     pages: int = 0
     chars: int = 0
-    ocr_method: str = "vision"  # "vision" | "native"
+    ocr_method: str = "vision"  # "vision" | "paddleocr"
 
 
 class BaseDocumentAgent(ABC):

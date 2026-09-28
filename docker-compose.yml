@@ -212,7 +212,8 @@ services:
   #
   # Paperless workflows assign ai:run-ocr and send document events to the listener.
   #
-  # See ai/README.md for full setup instructions.
+  # Stop ai before processing with the CLI; only one worker process may run.
+  # See docs/setup.md for full setup instructions.
   ai:
     extends:
       file: ../compose-security-baseline/hardening.yml
@@ -259,6 +260,8 @@ services:
       #   gpt-4o                           (cloud)
       #   ollama/llava-llama3              (local Ollama, set INFERENCE_OCR_ENDPOINT)
       #   openai/Nanonets-OCR2-3B          (local vLLM, set INFERENCE_OCR_ENDPOINT)
+      - INFERENCE_OCR_BACKEND=${INFERENCE_OCR_BACKEND:-vision}
+      - INFERENCE_PADDLE_TIMEOUT=${INFERENCE_PADDLE_TIMEOUT:-600}
       - INFERENCE_OCR_MODEL
 
       # Metadata extraction model — text-only, called once per document.
@@ -272,7 +275,8 @@ services:
       # Base URLs for local/self-hosted models (independent, can differ).
       # Examples:
       #   INFERENCE_OCR_ENDPOINT=http://workstation:11434       (Ollama)
-      #   INFERENCE_OCR_ENDPOINT=http://workstation:8000/v1     (vLLM)
+      #   INFERENCE_OCR_ENDPOINT=http://workstation:8000/v1     (vision vLLM)
+      #   INFERENCE_OCR_ENDPOINT=http://workstation:8080        (Paddle parsing API)
       - INFERENCE_OCR_ENDPOINT
       - INFERENCE_METADATA_ENDPOINT
       - INFERENCE_CHAT_ENDPOINT
@@ -376,6 +380,8 @@ services:
       - WEBHOOK_SECRET_FILE=/run/secrets/webhook_secret
       - PAPERLESS_WEBHOOK_URL=http://webhook-listener:8001/webhook/document
       - MANAGE_PAPERLESS_WORKFLOWS=false
+      - INFERENCE_OCR_BACKEND=${INFERENCE_OCR_BACKEND:-vision}
+      - INFERENCE_PADDLE_TIMEOUT=${INFERENCE_PADDLE_TIMEOUT:-600}
       - INFERENCE_OCR_MODEL
       - INFERENCE_METADATA_MODEL
       - INFERENCE_CHAT_MODEL
@@ -477,6 +483,8 @@ services:
       - AGENT_NAME=paperless-ai-eval
       - PAPERLESS_URL=http://webserver:8000
       - PAPERLESS_TOKEN_FILE=/run/secrets/paperless_token
+      - INFERENCE_OCR_BACKEND=${INFERENCE_OCR_BACKEND:-vision}
+      - INFERENCE_PADDLE_TIMEOUT=${INFERENCE_PADDLE_TIMEOUT:-600}
       - INFERENCE_OCR_MODEL
       - INFERENCE_METADATA_MODEL
       - INFERENCE_CHAT_MODEL

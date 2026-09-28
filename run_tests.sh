@@ -19,6 +19,9 @@ COMPOSE="docker compose -f docker-compose.yml -f docker-compose.test.yml"
 # Guaranteed teardown — runs on ANY exit (success, failure, signal)
 # ---------------------------------------------------------------------------
 teardown() {
+    if [ "$?" -ne 0 ]; then
+        $COMPOSE logs --no-color --tail=80 ai webhook-listener || true
+    fi
     echo ""
     echo "=== Tearing down test environment ==="
     $COMPOSE down -v --remove-orphans 2>/dev/null || true

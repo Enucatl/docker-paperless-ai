@@ -10,8 +10,8 @@ New document arrives → Paperless Workflow fires (Document Added):
                          2. Webhook → webhook-listener enqueues doc ID in Redis
 
 OCR worker          → downloads original PDF
-                    → vision LLM OCRs selected pages
-                    → writes transcript to Paperless content field
+                    → Paddle parses the full PDF, or vision OCR reads every page
+                    → writes transcript to content and Paddle JSON to ai_ocr_output
                     → tag transitions: ai:run-ocr → ai:run-metadata
 
 Metadata worker     → reads transcript from Paperless (no PDF download)
@@ -36,7 +36,7 @@ Chat query → LLM chooses short keywords → Paperless full-text search
 
 > **When using cloud models (the default), the following data is sent to the configured third-party API:**
 >
-> - **Page images** — selected pages from each processed document go to the OCR model. Long documents may be limited to configured first and last pages.
+> - **OCR input** — the vision backend sends every rendered page to its OCR model. The Paddle backend sends the complete original PDF to its configured parsing service.
 > - **Document text** — extracted text (or the first 6000 characters) goes to the metadata model.
 > - **Chat context** — your question and text from matching documents go to the chat model.
 > - **Jev evaluation** — OCR text and predicted metadata go to TypeSafe/Jev when evaluations run.
@@ -65,10 +65,12 @@ variants include `OPENROUTER_API_KEY_FILE`, `GOOGLE_API_KEY_FILE`,
 |---|---|---|
 | `PAPERLESS_URL` | `http://webserver:8000` | Paperless base URL (internal Docker network) |
 | `PAPERLESS_TOKEN` | *(required)* | API authentication token |
+| `INFERENCE_OCR_BACKEND` | `vision` | `vision` or full `paddleocr` document parsing |
+| `INFERENCE_PADDLE_TIMEOUT` | `600` | Positive Paddle request timeout in seconds |
 | `INFERENCE_OCR_MODEL` | `google/gemini-3.1-flash-lite` in `.env.example` | Vision model for OCR |
 | `INFERENCE_METADATA_MODEL` | *(required)* | OpenAI-compatible inference text model for metadata extraction |
 | `INFERENCE_CHAT_MODEL` | *(required)* | OpenAI-compatible inference chat/planning model for the browser copilot |
-| `INFERENCE_OCR_ENDPOINT` | *(none)* | Base URL for local OCR server |
+| `INFERENCE_OCR_ENDPOINT` | *(none)* | Vision server URL, or Paddle parsing base URL without `/v1` |
 | `INFERENCE_METADATA_ENDPOINT` | *(none)* | Base URL for local metadata server |
 | `INFERENCE_CHAT_ENDPOINT` | *(none)* | Base URL for the chat model server |
 | `OPENROUTER_API_KEY` | *(required for default endpoint)* | API key for OpenRouter |
@@ -100,6 +102,10 @@ variants include `OPENROUTER_API_KEY_FILE`, `GOOGLE_API_KEY_FILE`,
 | `DRY_RUN` | `false` | Log actions without modifying documents |
 
 ## Operations
+
+Run one active worker process. OCR and metadata work for the same document
+share a process-local lock; different documents can run concurrently. Stop the
+`ai` service before running a processing CLI instance, and restart it afterward.
 
 ### Chat search retrieval
 
@@ -134,12 +140,17 @@ On first run the worker creates these custom fields automatically:
 
 - `ai_processed` (Date)
 - `ai_summary` (Long text)
-- `ai_result` (Long text)
+- `ai_result` (Long text, metadata model output)
+- `ai_ocr_output` (Long text, Paddle JSON and provenance)
 
 `ai_processed` is set to the processing date on every successfully finished
 document. `ai_summary` stores the extracted 1-2 sentence summary so it can be
 shown directly in the Paperless UI or added as a list column. `ai_result`
-stores the structured JSON payload for debugging and audits.
+stores the metadata model result. `ai_ocr_output` separately stores Paddle
+document information, per-page Markdown and structured results, plus provenance.
+Metadata processing preserves it; a successful vision OCR rerun removes stale
+Paddle output. Content, OCR output and OCR stage tags are saved in one PATCH.
+See [Paddle operations](paddleocr.md) for the fixed pilot and rollback procedure.
 
 ### Document languages
 

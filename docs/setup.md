@@ -107,6 +107,7 @@ fields automatically on first successful startup:
 - `ai_processed` (Date)
 - `ai_summary` (Long text)
 - `ai_result` (Long text)
+- `ai_ocr_output` (Long text, Paddle JSON and provenance)
 
 ## 4. Start the full stack
 
@@ -133,6 +134,7 @@ After the stack is up and the workflows exist, new documents flow automatically:
    - `ai_processed`
    - `ai_summary`
    - `ai_result`
+   - `ai_ocr_output` when using Paddle
 
 The `ai` service exposes:
 
@@ -141,10 +143,13 @@ The `ai` service exposes:
 
 ### One-shot run
 
-Process all pending documents and exit (useful for ad-hoc or scheduled runs):
+Process all pending documents and exit. Stop the service first: document locks
+are process-local, so only one processing worker process may be active.
 
 ```bash
+docker compose stop ai
 docker compose run --rm --entrypoint python ai cli.py --once
+docker compose up -d ai
 ```
 
 ### Dry run
@@ -166,13 +171,20 @@ For documents that were already in Paperless before the workflows existed:
 5. Leave `ai` running, or drain the queue once with:
 
 ```bash
+docker compose stop ai
 docker compose run --rm --entrypoint python ai cli.py --once
+docker compose up -d ai
 ```
 
 If you want to do the whole library in batches, just bulk-assign `ai:run-ocr`
 to increasingly large slices of your archive.
 
 ## Models
+
+For PaddleOCR-VL-1.6, follow [Paddle setup and cutover](paddleocr.md). The
+[workstation prompt](../paddle.md) deploys the full parsing service in the GPU
+repository. Keep `INFERENCE_OCR_BACKEND=vision` until its fixed pilot passes.
+The migration does not enqueue historical documents beyond that pilot.
 
 Edit `INFERENCE_OCR_MODEL`, `INFERENCE_METADATA_MODEL`, and `INFERENCE_CHAT_MODEL` in `.env`, then recreate the service:
 

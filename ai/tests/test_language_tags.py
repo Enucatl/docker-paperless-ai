@@ -67,6 +67,9 @@ async def test_language_tags_are_atomic_and_reused_across_documents(mode: str) -
                     "custom_fields": [{"field": 99, "value": "keep"}],
                 }
             )
+            client.get_document = AsyncMock(
+                return_value=client.get_document_with_content.return_value
+            )
             client._get_all_tags = AsyncMock(
                 return_value=[
                     {"id": 11, "name": "language:fr"},

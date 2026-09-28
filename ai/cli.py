@@ -301,15 +301,19 @@ async def main_async(args: argparse.Namespace) -> None:
             ai_result_field_id = await client.get_or_create_custom_field(
                 "ai_result", data_type="longtext"
             )
+            ai_ocr_output_field_id = await client.get_or_create_custom_field(
+                "ai_ocr_output", data_type="longtext"
+            )
         except Exception as e:
             log.error("Failed to resolve custom fields: %s", e)
             sys.exit(1)
 
         log.info(
-            "Custom fields: ai_processed=%d ai_summary=%d ai_result=%d",
+            "Custom fields: ai_processed=%d ai_summary=%d ai_result=%d ai_ocr_output=%d",
             custom_field_id,
             ai_summary_field_id,
             ai_result_field_id,
+            ai_ocr_output_field_id,
         )
 
         # Set up Redis queues
@@ -319,7 +323,9 @@ async def main_async(args: argparse.Namespace) -> None:
         try:
             if args.once:
                 # Sequential: OCR → metadata (docs flow through both stages in one run)
-                ocr_s, ocr_f = await run_ocr_batch(client, config, queues)
+                ocr_s, ocr_f = await run_ocr_batch(
+                    client, config, queues, ai_ocr_output_field_id
+                )
                 meta_s, meta_f = await run_metadata_batch(
                     client,
                     config,
@@ -356,7 +362,9 @@ async def main_async(args: argparse.Namespace) -> None:
                 async def _ocr_worker() -> None:
                     while not is_shutdown_requested():
                         try:
-                            s, f = await run_ocr_batch(client, config, queues)
+                            s, f = await run_ocr_batch(
+                                client, config, queues, ai_ocr_output_field_id
+                            )
                             if s or f:
                                 log.info("OCR worker: %d ok / %d failed", s, f)
                         except Exception as e:

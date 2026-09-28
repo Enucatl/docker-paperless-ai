@@ -68,6 +68,12 @@ class AgentConfig(BaseSettings):
         stripped = str(value).strip()
         return stripped or None
 
+    ocr_backend: Literal["vision", "paddleocr"] = Field(
+        default="vision", validation_alias="INFERENCE_OCR_BACKEND"
+    )
+    paddle_timeout: float = Field(
+        default=600, gt=0, validation_alias="INFERENCE_PADDLE_TIMEOUT"
+    )
     ocr_model: str = Field(
         default="gemini-2.5-flash",
         validation_alias="INFERENCE_OCR_MODEL",
@@ -216,16 +222,6 @@ class AgentConfig(BaseSettings):
     # None = no cap (use full 300 DPI render).
     ocr_max_image_dimension: Optional[int] = None
 
-    # Page-sampling strategy for long documents.
-    # When a PDF has more than ocr_page_limit_threshold pages, only the first
-    # ocr_first_pages and last ocr_last_pages are sent through vision OCR.
-    # Paperless-ngx Tesseract already covers the full document for keyword
-    # search; the vision pass is only needed for metadata extraction.
-    # Set ocr_page_limit_threshold=0 to always apply the limit, or a large
-    # number (e.g. 9999) to effectively disable it.
-    ocr_page_limit_threshold: int = 40
-    ocr_first_pages: int = 20
-    ocr_last_pages: int = 20
     # Per-page output cap for vision OCR calls.  A single page of text rarely
     # needs more than ~2000 tokens; a hard limit prevents runaway generation
     # when a model transcribes embedded binary data (e.g. base64 images in

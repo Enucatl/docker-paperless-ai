@@ -21,6 +21,7 @@ from datetime import date, datetime, timezone
 from pathlib import Path
 from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING
+from weakref import WeakValueDictionary
 
 from paperless_ai.core.config import AgentConfig
 from paperless_ai.correspondent import CorrespondentResolver
@@ -54,14 +55,23 @@ def is_shutdown_requested() -> bool:
 _offline_servers: set[str] = set()
 _WEBHOOK_SUPPRESSION_TTL_SECONDS = 300
 _model_probe_session = None
+# ponytail: process-local locks; use distributed locks before adding workers.
+_document_locks: WeakValueDictionary[int, asyncio.Lock] = WeakValueDictionary()
 
 
-async def _check_server_reachable(base_url: str) -> bool:
+async def _check_server_reachable(
+    base_url: str, *, strict_health: bool = False
+) -> bool:
     """Return True if a local inference server responds to a lightweight probe."""
-    for path in ("/health", "/models"):
+    for path in ("/health",) if strict_health else ("/health", "/models"):
         try:
             response = await _get_model_probe_session().get(base_url.rstrip("/") + path)
-            if response.status_code < 500:
+            healthy = (
+                200 <= response.status_code < 300
+                if strict_health
+                else response.status_code < 500
+            )
+            if healthy:
                 if base_url in _offline_servers:
                     log.info("Model server back online: %s", base_url)
                     _offline_servers.discard(base_url)
@@ -135,13 +145,17 @@ async def _run_stage(
     queue_key: str,
     queues: TaskQueues,
     process_fn: Callable[[int], Awaitable[bool | None]],
+    *,
+    strict_health: bool = False,
 ) -> tuple[int, int]:
     """Shared scaffolding for the OCR and metadata pipeline stages.
 
     Handles preflight health-check, early-exit on empty queue, gather, and
     success/failure counting.  Stage-specific logic lives in process_fn.
     """
-    if preflight_url is not None and not await _check_server_reachable(preflight_url):
+    if preflight_url is not None and not await _check_server_reachable(
+        preflight_url, strict_health=strict_health
+    ):
         return 0, 0
 
     pending_ids = await queues.peek_stage(queue_key)
@@ -149,8 +163,15 @@ async def _run_stage(
         return 0, 0
 
     log.info("%s batch: %d document(s) to process", stage_label, len(pending_ids))
+
+    async def process_locked(doc_id: int) -> bool | None:
+        """Serialize both stages for this document, including reads and writes."""
+        lock = _document_locks.setdefault(doc_id, asyncio.Lock())
+        async with lock:
+            return await process_fn(doc_id)
+
     results = await asyncio.gather(
-        *(process_fn(doc_id) for doc_id in sorted(pending_ids))
+        *(process_locked(doc_id) for doc_id in sorted(pending_ids))
     )
     success = sum(1 for ok in results if ok is True)
     failure = sum(1 for ok in results if ok is False)
@@ -161,6 +182,7 @@ async def run_ocr_batch(
     client: PaperlessClient,
     config: AgentConfig,
     queues: TaskQueues,
+    ai_ocr_output_field_id: int | None = None,
 ) -> tuple[int, int]:
     """OCR stage: download PDF, run vision OCR, write content, transition tag to ai:run-metadata.
 
@@ -168,10 +190,16 @@ async def run_ocr_batch(
     advances without relying on webhook timing.
     """
     from paperless_ai.agents.smart_graph_agent import run_vision_ocr_only
+    from paperless_ai.agents.paddle_ocr import run_paddle_ocr
     from paperless_common.queue import TaskQueues
 
     if await queues.stage_size(TaskQueues.KEY_OCR) == 0:
         return 0, 0
+
+    if ai_ocr_output_field_id is None:
+        ai_ocr_output_field_id = await client.get_or_create_custom_field(
+            "ai_ocr_output", data_type="longtext"
+        )
 
     # Look up tag IDs once for the whole batch
     try:
@@ -222,9 +250,17 @@ async def run_ocr_batch(
                 del data
 
                 try:
-                    full_text, pages, elapsed = await run_vision_ocr_only(
-                        tmp_path, config
-                    )
+                    output = None
+                    if config.ocr_backend == "paddleocr":
+                        full_text, output, pages, elapsed = await run_paddle_ocr(
+                            tmp_path, config
+                        )
+                    else:
+                        full_text, pages, elapsed = await run_vision_ocr_only(
+                            tmp_path, config
+                        )
+                    if not full_text.strip():
+                        raise ValueError("OCR returned an empty transcript")
                 except Exception as e:
                     log.error("Document %d: OCR failed: %s", doc_id, e)
                     await _record_stage_failure(
@@ -253,15 +289,31 @@ async def run_ocr_batch(
             )
             return True
 
-        # Transition: remove ai:run-ocr, add ai:run-metadata — atomic with content write
-        current_tags = [t for t in doc.get("tags", []) if t != tag_ocr_id]
-        if tag_metadata_id not in current_tags:
-            current_tags.append(tag_metadata_id)
-
         try:
+            doc = await client.get_document(doc_id)
+            if doc is None:
+                raise ValueError("Document disappeared before OCR save")
+            current_tags = [t for t in doc.get("tags", []) if t != tag_ocr_id]
+            if tag_metadata_id not in current_tags:
+                current_tags.append(tag_metadata_id)
+            fields = [
+                cf
+                for cf in doc.get("custom_fields", [])
+                if cf["field"] != ai_ocr_output_field_id
+            ]
+            if output is not None:
+                fields.append(
+                    {
+                        "field": ai_ocr_output_field_id,
+                        "value": json.dumps(
+                            output, ensure_ascii=False, allow_nan=False
+                        ),
+                    }
+                )
             await _suppress_webhook(queues, doc_id)
             await client.patch_document(
-                doc_id, {"content": full_text, "tags": current_tags}
+                doc_id,
+                {"content": full_text, "tags": current_tags, "custom_fields": fields},
             )
             log.info(
                 "Document %d: content written, transitioned to metadata stage", doc_id
@@ -284,7 +336,12 @@ async def run_ocr_batch(
     # Preflight: skip the batch when the local OCR server is offline so we
     # don't download PDFs that we can't process yet.
     return await _run_stage(
-        "OCR", config.ocr_endpoint or None, TaskQueues.KEY_OCR, queues, _process_one
+        "OCR",
+        config.ocr_endpoint or None,
+        TaskQueues.KEY_OCR,
+        queues,
+        _process_one,
+        strict_health=config.ocr_backend == "paddleocr",
     )
 
 
@@ -376,15 +433,8 @@ async def run_metadata_batch(
 
         today = datetime.now(timezone.utc).date().isoformat()
         managed_fields = {custom_field_id, ai_summary_field_id, ai_result_field_id}
-        existing_cf = [
-            cf
-            for cf in doc.get("custom_fields", [])
-            if cf["field"] not in managed_fields
-        ]
-
         payload: dict = {
-            "custom_fields": existing_cf
-            + [
+            "custom_fields": [
                 {"field": custom_field_id, "value": today},
                 {
                     "field": ai_summary_field_id,
@@ -467,9 +517,6 @@ async def run_metadata_batch(
             {"field": ai_result_field_id, "value": ai_result_json}
         )
 
-        # Remove the metadata tag atomically with the metadata write.
-        payload["tags"] = [t for t in doc.get("tags", []) if t != tag_metadata_id]
-
         try:
             async with language_tag_lock:
                 if language_tag_ids is None:
@@ -485,10 +532,19 @@ async def run_metadata_batch(
                     color="#166534",
                 )
                 language_tag_ids.add(tag_id)
+                doc = await client.get_document(doc_id)
+                if doc is None:
+                    raise ValueError("Document disappeared before metadata save")
+                payload["custom_fields"] = [
+                    cf
+                    for cf in doc.get("custom_fields", [])
+                    if cf["field"] not in managed_fields
+                ] + payload["custom_fields"]
                 payload["tags"] = [
                     existing_tag_id
-                    for existing_tag_id in payload["tags"]
+                    for existing_tag_id in doc.get("tags", [])
                     if existing_tag_id not in language_tag_ids
+                    and existing_tag_id != tag_metadata_id
                 ] + [tag_id]
             await client.patch_document(doc_id, payload)
             log.info("Document %d: metadata written", doc_id)

@@ -20,8 +20,6 @@ class AgentState(TypedDict):
     is_digital_text: bool
 
     # Ordered list of 0-based page indices selected for vision OCR.
-    # May be a subset of all pages for long documents (see ocr_first_pages /
-    # ocr_last_pages / ocr_page_limit_threshold in AgentConfig).
     ocr_page_indices: list[int]
 
     # current_page is an index into ocr_page_indices, NOT a raw page number.

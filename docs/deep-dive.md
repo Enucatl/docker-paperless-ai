@@ -28,10 +28,10 @@ The ingestion path is:
 1. Paperless imports a document and assigns `ai:run-ocr`.
 2. The webhook listener receives the Paperless event and enqueues the document
    ID in Redis.
-3. The AI service downloads the original PDF, sends selected page images to
-   the OCR model, and writes the transcript to Paperless. It OCRs all pages up
-   to the configured threshold and only configured first/last pages for longer
-   documents.
+3. The AI service downloads the original PDF and processes every page. Paddle
+   receives the complete PDF; the vision backend receives rendered page images.
+   The worker writes the transcript to Paperless and, for Paddle, saves
+   structured page results in `ai_ocr_output`.
 4. The metadata stage extracts document fields from the transcript and patches
    Paperless metadata.
 5. The metadata stage removes its stage tag when processing completes.

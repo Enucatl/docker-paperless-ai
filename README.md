@@ -2,7 +2,7 @@
 
 **From a scanned page to an answer you can verify.** [paperless-ngx](https://github.com/paperless-ngx/paperless-ngx) imports and searches documents. This project adds AI reading for difficult scans, automatic organization, and a browser chat copilot without changing Paperless itself.
 
-- **Read:** a vision model transcribes selected pages and saves the text in Paperless.
+- **Read:** PaddleOCR-VL-1.6 or a vision model transcribes every page and saves searchable text in Paperless.
 - **Organize:** a text model extracts a title, date, sender, and summary.
 - **Ask:** the copilot searches Paperless, reads matching documents, and answers with citations.
 
@@ -12,7 +12,7 @@ Paperless workflows and tags start the work. A webhook listener puts document ID
 flowchart LR
     A[Document in Paperless] --> B[Workflow and webhook]
     B --> C[Redis queue]
-    C --> D[Read page images]
+    C --> D[Parse every document page]
     D --> E[Extract document details]
     E --> A
     F[Chat copilot] --> G[Paperless search]
@@ -32,6 +32,7 @@ This Compose deployment assumes an existing Traefik network, Paperless data volu
 ## Reference
 
 - [Architecture, data flow, and privacy](docs/reference.md#architecture-and-data-flow)
+- [Paddle setup, pilot cutover, and rollback](docs/paddleocr.md) · [Workstation implementation prompt](paddle.md)
 - [Configuration and Docker secrets](docs/reference.md#configuration)
 - [Daily operations and correspondent cleanup](docs/reference.md#operations)
 - [Testing and model evaluation](docs/reference.md#testing-and-evaluation)

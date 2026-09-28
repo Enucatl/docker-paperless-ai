@@ -69,7 +69,7 @@ async def _initialize_paperless(
     *,
     retry_delay: float = 1.0,
     max_retry_delay: float = 60.0,
-) -> tuple[int, int, int]:
+) -> tuple[int, int, int, int]:
     """Wait for Paperless and ensure the AI-managed resources are ready."""
     attempt = 0
     while True:
@@ -105,13 +105,22 @@ async def _initialize_paperless(
             ai_result_field_id = await client.get_or_create_custom_field(
                 "ai_result", data_type="longtext"
             )
+            ai_ocr_output_field_id = await client.get_or_create_custom_field(
+                "ai_ocr_output", data_type="longtext"
+            )
             log.info(
-                "Custom fields: ai_processed=%d ai_summary=%d ai_result=%d",
+                "Custom fields: ai_processed=%d ai_summary=%d ai_result=%d ai_ocr_output=%d",
                 custom_field_id,
                 ai_summary_field_id,
                 ai_result_field_id,
+                ai_ocr_output_field_id,
             )
-            return custom_field_id, ai_summary_field_id, ai_result_field_id
+            return (
+                custom_field_id,
+                ai_summary_field_id,
+                ai_result_field_id,
+                ai_ocr_output_field_id,
+            )
         except Exception as exc:
             if not _is_retryable_paperless_error(exc):
                 raise
@@ -182,6 +191,7 @@ async def lifespan(app: FastAPI):
         custom_field_id,
         ai_summary_field_id,
         ai_result_field_id,
+        ai_ocr_output_field_id,
     ) = await _initialize_paperless(_paperless_client, _config)
 
     _chat_copilot = None
@@ -201,7 +211,7 @@ async def lifespan(app: FastAPI):
         while True:
             try:
                 success, failure = await run_ocr_batch(
-                    _paperless_client, _config, _queues
+                    _paperless_client, _config, _queues, ai_ocr_output_field_id
                 )
                 if success or failure:
                     log.info("OCR worker: %d ok / %d failed", success, failure)

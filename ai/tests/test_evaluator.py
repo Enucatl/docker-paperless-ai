@@ -234,8 +234,9 @@ async def test_corpus_language_is_an_evaluation_target_not_agent_input(tmp_path)
 
 
 @pytest.mark.asyncio
-async def test_each_experiment_has_its_own_client(tmp_path):
-    """Jev client state is not shared between extraction experiments."""
+@pytest.mark.parametrize("ocr_backend", ["vision", "paddleocr"])
+async def test_each_experiment_has_its_own_client(tmp_path, ocr_backend):
+    """Experiments keep separate Jev clients and the configured OCR backend."""
     path = _existing_pdf(tmp_path)
     corpus = tmp_path / "eval.json"
     experiments = tmp_path / "experiments.yaml"
@@ -265,19 +266,44 @@ async def test_each_experiment_has_its_own_client(tmp_path):
 
     with patch.object(module, "EVAL_DATASET_PATH", corpus):
         with patch.object(module, "EXPERIMENTS_YAML_PATH", experiments):
-            with patch.object(module, "_build_agent", return_value=agent):
+            with patch.object(
+                module, "_build_agent", return_value=agent
+            ) as build_agent:
                 with patch("typesafe_sdk.TypeSafeClient", side_effect=clients):
                     patches = phoenix.patches()
                     for item in patches:
                         item.start()
                     try:
-                        await run_scientific_evaluation(_config(), split="test")
+                        await run_scientific_evaluation(
+                            _config().model_copy(
+                                update={
+                                    "ocr_backend": ocr_backend,
+                                    "ocr_endpoint": "http://paddle:8080",
+                                    "paddle_timeout": 650,
+                                }
+                            ),
+                            split="test",
+                        )
                     finally:
                         for item in reversed(patches):
                             item.stop()
 
     assert all(client.system_one.call_count == 1 for client in clients)
     assert all(client.close.call_count == 1 for client in clients)
+    for call in build_agent.call_args_list:
+        config = call.args[0]
+        assert config.ocr_backend == ocr_backend
+        assert config.ocr_endpoint == (
+            "http://paddle:8080" if ocr_backend == "paddleocr" else None
+        )
+        assert config.paddle_timeout == 650
+    for call in phoenix.run_experiment.await_args_list:
+        metadata = call.kwargs["experiment_metadata"]
+        assert metadata["ocr_backend"] == ocr_backend
+        assert metadata["ocr_model"] == (
+            "PaddleOCR-VL-1.6-0.9B" if ocr_backend == "paddleocr" else "ocr-test"
+        )
+        assert call.kwargs["timeout"] == (950 if ocr_backend == "paddleocr" else 300)
 
 
 @pytest.mark.asyncio

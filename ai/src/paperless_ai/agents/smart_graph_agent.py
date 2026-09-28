@@ -6,8 +6,7 @@ Graph topology:
     analyze_pdf → batched_vision_ocr (loop until all pages done) → extract_metadata → END
 
 Key design decisions:
-- Vision OCR is always used (no native text extraction) for consistent quality
-  across all PDF types. PyMuPDF native text is unreliable for scanned/mixed PDFs.
+- Paddle parses complete documents; the compatibility vision backend renders all pages.
 - PyMuPDF pixmaps are del'd immediately after base64 encoding to avoid leaks.
 - LangGraph annotated state uses operator.add to accumulate text chunks without
   holding all images in memory simultaneously.
@@ -499,28 +498,6 @@ class NuExtractStrategy(BaseExtractionStrategy):
 # ---------------------------------------------------------------------------
 
 
-def _select_ocr_pages(total_pages: int, config: "AgentConfig") -> list[int]:
-    """Return the ordered list of 0-based page indices to send through vision OCR.
-
-    For documents with total_pages <= ocr_page_limit_threshold every page is
-    selected (no change in behaviour).  For longer documents only the first
-    ocr_first_pages and last ocr_last_pages are selected — overlapping indices
-    are deduplicated while preserving order.
-
-    Rationale: Paperless-ngx Tesseract already produces full-document text for
-    keyword search.  Vision OCR is only needed to capture semantically rich
-    pages (cover, header, executive summary, signature block) for metadata
-    extraction.
-    """
-    if total_pages <= config.ocr_page_limit_threshold:
-        return list(range(total_pages))
-
-    first = set(range(min(config.ocr_first_pages, total_pages)))
-    last_start = max(total_pages - config.ocr_last_pages, 0)
-    last = set(range(last_start, total_pages))
-    return sorted(first | last)
-
-
 def _count_pdf_pages(file_path: str) -> int:
     with fitz.open(file_path) as doc:
         return len(doc)
@@ -549,22 +526,14 @@ async def _analyze_pdf(state: AgentState, config: AgentConfig) -> dict:
     many digital PDFs where the embedded text is just metadata.
     """
     file_path = state["file_path"]
-    total_pages = await asyncio.to_thread(_count_pdf_pages, file_path)
+    total_pages = state.get("total_pages") or await asyncio.to_thread(
+        _count_pdf_pages, file_path
+    )
 
-    ocr_page_indices = _select_ocr_pages(total_pages, config)
-
-    if len(ocr_page_indices) < total_pages:
-        log.info(
-            "Smart agent: %d-page document — vision OCR limited to %d pages "
-            "(first %d + last %d); threshold=%d",
-            total_pages,
-            len(ocr_page_indices),
-            config.ocr_first_pages,
-            config.ocr_last_pages,
-            config.ocr_page_limit_threshold,
-        )
-    else:
-        log.info("Smart agent: %d pages → vision OCR (all pages)", total_pages)
+    if total_pages < 1:
+        raise ValueError("PDF has no pages")
+    ocr_page_indices = list(range(total_pages))
+    log.info("Smart agent: %d pages → vision OCR (all pages)", total_pages)
 
     return {
         "total_pages": total_pages,
@@ -670,6 +639,8 @@ async def _extract_metadata(
     """Node 4: Join all text chunks and extract metadata using the provided strategy."""
     chunks = state["extracted_text_chunks"]
     full_text = "\n\n".join(chunks)
+    if not full_text.strip():
+        raise ValueError("OCR returned an empty transcript")
 
     # Use the strategy to extract metadata
     metadata_context = build_metadata_document_context(full_text)
@@ -723,6 +694,8 @@ async def run_vision_ocr_only(
         state = {**state, "current_page": update["current_page"]}
 
     full_text = "\n\n".join(all_chunks)
+    if not full_text.strip():
+        raise ValueError("OCR returned an empty transcript")
     return full_text, total_pages, round(time.time() - t_start, 1)
 
 
@@ -735,9 +708,8 @@ class SmartDocumentAgent(BaseDocumentAgent):
     """
     Memory-safe agentic document processor built on LangGraph.
 
-    Routes to native text extraction for digital PDFs, or batched vision OCR
-    for scanned/image PDFs. The vision path loops page-by-page in configurable
-    batches so only `batch_size` pages are held in memory at any time.
+    Uses the configured Paddle document parser or batched vision OCR.
+    The vision path holds only `batch_size` page images in memory at a time.
     """
 
     def __init__(
@@ -780,20 +752,32 @@ class SmartDocumentAgent(BaseDocumentAgent):
             )
 
         workflow = StateGraph(AgentState)
-        workflow.add_node("analyze_pdf", analyze_pdf)
-        workflow.add_node("batched_vision_ocr", batched_vision_ocr)
         workflow.add_node("extract_metadata", extract_metadata)
+        if config.ocr_backend == "paddleocr":
 
-        workflow.set_entry_point("analyze_pdf")
-        workflow.add_edge("analyze_pdf", "batched_vision_ocr")
-        workflow.add_conditional_edges(
-            "batched_vision_ocr",
-            route_after_vision_ocr,
-            {
-                "batched_vision_ocr": "batched_vision_ocr",
-                "extract_metadata": "extract_metadata",
-            },
-        )
+            async def paddle_ocr(state: AgentState) -> dict:
+                """Use the same complete-document parser as the production worker."""
+                from paperless_ai.agents.paddle_ocr import run_paddle_ocr
+
+                text, _, pages, _ = await run_paddle_ocr(state["file_path"], config)
+                return {"extracted_text_chunks": [text], "total_pages": pages}
+
+            workflow.add_node("paddle_ocr", paddle_ocr)
+            workflow.set_entry_point("paddle_ocr")
+            workflow.add_edge("paddle_ocr", "extract_metadata")
+        else:
+            workflow.add_node("analyze_pdf", analyze_pdf)
+            workflow.add_node("batched_vision_ocr", batched_vision_ocr)
+            workflow.set_entry_point("analyze_pdf")
+            workflow.add_edge("analyze_pdf", "batched_vision_ocr")
+            workflow.add_conditional_edges(
+                "batched_vision_ocr",
+                route_after_vision_ocr,
+                {
+                    "batched_vision_ocr": "batched_vision_ocr",
+                    "extract_metadata": "extract_metadata",
+                },
+            )
         workflow.add_edge("extract_metadata", END)
 
         return workflow.compile()
@@ -801,11 +785,16 @@ class SmartDocumentAgent(BaseDocumentAgent):
     async def process(self, file_path: str, existing_hints: dict) -> AgentResult:
         t_start = time.time()
         config = self._config
+        total_pages = (
+            await asyncio.to_thread(_count_pdf_pages, file_path)
+            if config.ocr_backend == "vision"
+            else 0
+        )
 
         initial_state: AgentState = {
             "file_path": file_path,
             "language": existing_hints.get("language"),
-            "total_pages": 0,
+            "total_pages": total_pages,
             "ocr_page_indices": [],  # populated by _analyze_pdf node
             "is_digital_text": False,
             "current_page": 0,
@@ -813,7 +802,10 @@ class SmartDocumentAgent(BaseDocumentAgent):
             "extracted_text_chunks": [],
         }
 
-        final_state = await self._graph.ainvoke(initial_state)
+        # Long transcripts must not hit LangGraph's default 25-step loop limit.
+        final_state = await self._graph.ainvoke(
+            initial_state, {"recursion_limit": max(25, total_pages + 3)}
+        )
 
         # Retrieve results stored by extract_metadata node
         extracted_dict = final_state.get("_extracted_metadata", {})
@@ -846,5 +838,5 @@ class SmartDocumentAgent(BaseDocumentAgent):
             elapsed_s=round(time.time() - t_start, 1),
             pages=final_state.get("total_pages", 0),
             chars=len(full_text),
-            ocr_method="vision",  # Always vision OCR (no native extraction)
+            ocr_method=config.ocr_backend,
         )

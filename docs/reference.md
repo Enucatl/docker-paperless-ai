@@ -219,6 +219,7 @@ one, and decisions for the older plan are ignored.
 ### Cleanup commands
 
 There is also a one-shot `ai-cleanup` service for metadata maintenance tasks.
+Both cleanup services use the AI `runtime` image target; no cleanup extra is required.
 Cleanup review artifacts live in the persistent Docker volume
 `cleanup_review_data`, mounted at `/review` by both the generator and the
 review service. The review UI reads `/review/merge-plan.json` from that volume.

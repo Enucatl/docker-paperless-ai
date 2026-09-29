@@ -373,7 +373,7 @@ services:
     build:
       context: .
       dockerfile: ./ai/Dockerfile
-      target: cleanup
+      target: runtime
     profiles: [cleanup]
     restart: no
     extra_hosts:
@@ -424,7 +424,7 @@ services:
     build:
       context: .
       dockerfile: ./ai/Dockerfile
-      target: cleanup
+      target: runtime
     profiles: [cleanup]
     restart: "no"
     entrypoint: ["uvicorn", "paperless_ai.core.cleanup_review:app", "--host", "0.0.0.0", "--port", "8000"]

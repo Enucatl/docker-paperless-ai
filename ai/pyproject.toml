@@ -27,19 +27,13 @@ dependencies = [
 [project.optional-dependencies]
 eval = [
     "arize-phoenix-client",
-    "arize-phoenix-otel",
-    "arize-phoenix-evals",
     "datasets",
-    "nest_asyncio",
     "pandas",
 ]
 test = [
     "paperless-listener",
     "pytest>=8.0",
     "pytest-asyncio>=0.23",
-]
-cleanup = [
-    "psycopg[binary]>=3.2",
 ]
 
 [tool.pytest.ini_options]

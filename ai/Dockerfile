@@ -58,15 +58,9 @@ USER root
 RUN uv sync --frozen --extra eval
 USER app
 
-FROM runtime AS cleanup
-
-USER root
-RUN uv sync --frozen --extra cleanup
-USER app
-
 FROM runtime AS test
 
 USER root
 COPY ai/tests/ tests/
-RUN uv sync --frozen --extra test --extra eval --extra cleanup
+RUN uv sync --frozen --extra test --extra eval
 USER app

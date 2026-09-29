@@ -431,13 +431,6 @@ experiments:
   - name: "baseline-flash"
     metadata_model: "inception/mercury-2.5"
     metadata_temperature: 0.75
-
-  - name: "local-nuextract"
-    ocr_endpoint: "http://vision-ocr:8000"
-    ocr_timeout: 900
-    metadata_model: "openai/numind/NuExtract-2.0-4B"
-    metadata_endpoint: "http://workstation:8101/v1"
-    metadata_temperature: 0.0
 ```
 
 ## Repository layout

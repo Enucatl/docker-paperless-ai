@@ -183,9 +183,6 @@ class AgentConfig(BaseSettings):
         default_factory=lambda: _load_prompt("metadata_prompt.txt")
     )
 
-    # Maximum number of retries when NuExtract returns invalid JSON.
-    nuextract_json_retries: int = 5
-
     # Redis queue (DB 1, isolated from Paperless DB 0)
     redis_url: str = "redis://broker:6379/1"
 

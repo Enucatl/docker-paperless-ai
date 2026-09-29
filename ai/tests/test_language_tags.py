@@ -54,7 +54,7 @@ async def test_language_tags_are_atomic_and_reused_across_documents(mode: str) -
     with (
         patch("paperless_common.paperless.niquests.AsyncSession", return_value=session),
         patch(
-            "paperless_ai.agents.smart_graph_agent._select_extraction_strategy",
+            "paperless_ai.agents.smart_graph_agent.StructuredOutputStrategy",
             return_value=strategy,
         ),
     ):

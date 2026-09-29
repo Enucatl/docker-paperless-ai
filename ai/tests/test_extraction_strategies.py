@@ -1,5 +1,5 @@
 """
-Unit tests for metadata extraction strategies (LLM vs NuExtract).
+Unit tests for metadata extraction.
 
 Tests validate graceful handling of:
 - Successful JSON extraction
@@ -18,7 +18,6 @@ from pydantic import ValidationError
 
 from paperless_ai.agents.smart_graph_agent import (
     BaseExtractionStrategy,
-    NuExtractStrategy,
     SmartDocumentAgent,
     StructuredOutputStrategy,
     _ExtractedMetadata,
@@ -55,7 +54,6 @@ def mock_config():
     config.metadata_prompt = "Extract metadata from the following text:"
     config.metadata_response_format = "auto"
     config.llm_retries = 2
-    config.nuextract_json_retries = 2
     config.get_metadata_kwargs = lambda: {}
     return config
 
@@ -292,79 +290,10 @@ class TestStructuredOutputStrategy:
 
 
 # ---------------------------------------------------------------------------
-# Tests: NuExtractStrategy
-# ---------------------------------------------------------------------------
-
-
-class TestNuExtractStrategy:
-    """Test template-based extraction with NuExtract model."""
-
-    @pytest.fixture
-    def strategy(self):
-        return NuExtractStrategy()
-
-    @pytest.mark.asyncio
-    async def test_extract_successful(self, strategy, mock_config):
-        """Successful NuExtract response with valid JSON."""
-        # NuExtract returns a specific template structure
-        raw_response = json.dumps(
-            {
-                "title_summarizing_subject_clear_concise_descriptive": "Test Invoice",
-                "document_date": "2024-01-15",
-                "issuing_organization_or_sender": "Acme Corp",
-            }
-        )
-        with patch(
-            "paperless_ai.agents.smart_graph_agent.complete", new_callable=AsyncMock
-        ) as mock_llm:
-            mock_llm.return_value = completion_result(raw_response)
-            result = await strategy.extract("Sample OCR text", mock_config)
-
-        assert result.title == "Test Invoice"
-        assert result.date == datetime.date(2024, 1, 15)
-        assert result.correspondent == "Acme Corp"
-
-    @pytest.mark.asyncio
-    async def test_extract_missing_template_fields(self, strategy, mock_config):
-        """NuExtract with missing template fields should handle gracefully."""
-        raw_response = json.dumps(
-            {
-                "title_summarizing_subject_clear_concise_descriptive": "Test",
-                # Missing date and correspondent
-            }
-        )
-        with patch(
-            "paperless_ai.agents.smart_graph_agent.complete", new_callable=AsyncMock
-        ) as mock_llm:
-            mock_llm.return_value = completion_result(raw_response)
-            result = await strategy.extract("Sample OCR text", mock_config)
-
-        assert result.title == "Test"
-        assert result.date is None
-        assert result.correspondent is None
-
-    @pytest.mark.asyncio
-    async def test_extract_malformed_json_retry(self, strategy, mock_config):
-        """NuExtract with malformed JSON on retry should fall back."""
-        # First response: invalid JSON that triggers retry
-        # The strategy will retry and potentially get fixed JSON
-        raw_response = '{"title": "Test"'  # Incomplete JSON
-        with patch(
-            "paperless_ai.agents.smart_graph_agent.complete", new_callable=AsyncMock
-        ) as mock_llm:
-            mock_llm.return_value = completion_result(raw_response)
-            result = await strategy.extract("Sample OCR text", mock_config)
-
-        # Should create metadata object (may be empty if unrepair able)
-        assert isinstance(result, _ExtractedMetadata)
-
-
-# ---------------------------------------------------------------------------
 # Tests: Date field validation
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("strategy", [StructuredOutputStrategy(), NuExtractStrategy()])
 @pytest.mark.parametrize("malformed", [False, True])
 @pytest.mark.parametrize(
     ("fields", "expected"),
@@ -387,10 +316,10 @@ class TestNuExtractStrategy:
     ],
 )
 @pytest.mark.asyncio
-async def test_languages_survive_both_strategies_and_fallback(
-    strategy, malformed, fields, expected, mock_config
+async def test_languages_survive_extraction_and_fallback(
+    malformed, fields, expected, mock_config
 ) -> None:
-    """Both extraction paths keep one primary code and use und when unknown."""
+    """Extraction keeps one primary code and uses und when unknown."""
     raw = json.dumps(fields)
     if malformed:
         raw = raw[:-1] + ",}" if fields else "{,}"
@@ -398,22 +327,19 @@ async def test_languages_survive_both_strategies_and_fallback(
         "paperless_ai.agents.smart_graph_agent.complete",
         new=AsyncMock(return_value=completion_result(raw)),
     ) as complete:
-        result = await strategy.extract("German and English OCR text", mock_config)
+        result = await StructuredOutputStrategy().extract(
+            "German and English OCR text", mock_config
+        )
 
     assert result.languages == expected
     kwargs = complete.await_args.kwargs
-    if isinstance(strategy, NuExtractStrategy):
-        prompt = kwargs["messages"][0]["content"][0]["text"]
-        template = json.loads(kwargs["extra_body"]["chat_template_kwargs"]["template"])
-        assert template["languages"] == ["string"]
-    else:
-        prompt = kwargs["messages"][0]["content"]
-        schema = kwargs["response_format"]["json_schema"]["schema"]
-        assert "languages" in schema["required"]
-        from paperless_common.languages import LANGUAGES
+    prompt = kwargs["messages"][0]["content"]
+    schema = kwargs["response_format"]["json_schema"]["schema"]
+    assert "languages" in schema["required"]
+    from paperless_common.languages import LANGUAGES
 
-        assert set(schema["properties"]["languages"]["items"]["enum"]) == set(LANGUAGES)
-        assert len(LANGUAGES) == 51
+    assert set(schema["properties"]["languages"]["items"]["enum"]) == set(LANGUAGES)
+    assert len(LANGUAGES) == 51
     assert "Exactly one code" in prompt
     assert "ISO 639-1" in prompt and "ISO 639-3" in prompt
     assert "incidental foreign names and isolated words" in prompt

@@ -350,13 +350,13 @@ async def run_metadata_batch(
 
     No PDF download. Reads the content written by the OCR stage.
     """
-    from paperless_ai.agents.smart_graph_agent import _select_extraction_strategy
+    from paperless_ai.agents.smart_graph_agent import StructuredOutputStrategy
     from paperless_common.queue import TaskQueues
 
     if await queues.stage_size(TaskQueues.KEY_METADATA) == 0:
         return 0, 0
 
-    strategy = _select_extraction_strategy(config)
+    strategy = StructuredOutputStrategy()
     log.info("Metadata batch: using %s", strategy.__class__.__name__)
     language_tag_lock = asyncio.Lock()
     language_tag_ids: set[int] | None = None

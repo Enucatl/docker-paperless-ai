@@ -218,8 +218,8 @@ async def test_metadata_preserves_fresh_ocr_output(monkeypatch) -> None:
         )
     )
     monkeypatch.setattr(
-        "paperless_ai.agents.smart_graph_agent._select_extraction_strategy",
-        lambda config: strategy,
+        "paperless_ai.agents.smart_graph_agent.StructuredOutputStrategy",
+        lambda: strategy,
     )
 
     assert await runner.run_metadata_batch(client, _config(), queues, 13, 14, 11) == (
@@ -372,8 +372,8 @@ async def test_paddle_large_json_roundtrip_metadata_preservation_and_failed_reru
             )
         )
         monkeypatch.setattr(
-            "paperless_ai.agents.smart_graph_agent._select_extraction_strategy",
-            lambda config: strategy,
+            "paperless_ai.agents.smart_graph_agent.StructuredOutputStrategy",
+            lambda: strategy,
         )
         assert await runner.run_metadata_batch(
             client,

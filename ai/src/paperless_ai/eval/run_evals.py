@@ -266,14 +266,11 @@ async def run_scientific_evaluation(config: AgentConfig, split: str = "test") ->
             ):
                 """Extract metadata, then evaluate it once with Jev."""
                 file_path = example.input["file_path"]
-                result = await _agent.process(file_path, existing_hints={})
+                result = await _agent.process(file_path)
                 metadata = result.metadata
-                document_context = getattr(result, "metadata_context", "")
-                if not document_context:
-                    document_context = getattr(metadata, "full_ocr_transcript", "")
 
                 evaluation = await _jev_evaluator.evaluate(
-                    document_context=document_context,
+                    document_context=result.metadata_context,
                     title=metadata.title,
                     date=metadata.document_date,
                     correspondent=metadata.correspondent,

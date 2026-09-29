@@ -266,16 +266,6 @@ async def get_available_metadata(*, client: PaperlessClient) -> ToolExecutionRes
         )
 
 
-async def execute_tool_call(
-    name: str,
-    arguments: dict[str, Any],
-    *,
-    client: PaperlessClient,
-) -> str:
-    """Compatibility wrapper returning only the tool content."""
-    return (await execute_tool_call_detailed(name, arguments, client=client)).content
-
-
 async def execute_tool_call_detailed(
     name: str,
     arguments: dict[str, Any],

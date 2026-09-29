@@ -29,12 +29,14 @@ const document = {
   },
 };
 const submissions = [];
+let reviewedPlanRequests = 0;
 const fetch = async (url, options) => {
   if (url === "api/decisions") {
     const decision = JSON.parse(options.body);
     submissions.push(decision);
     plan.review_decisions = [decision];
   }
+  if (url === "api/reviewed-plan") reviewedPlanRequests++;
   return { ok: true, json: async () => (url === "api/plan" ? plan : {}) };
 };
 const context = vm.createContext({ document, fetch, alert: assert.fail });
@@ -53,7 +55,9 @@ vm.runInContext(fs.readFileSync(process.argv[2], "utf8"), context);
     card.children.filter((x) => x instanceof Element).map((x) => x.tag),
     ["strong", "strong", "p", "button", "button"],
   );
+  const beforeDecision = reviewedPlanRequests;
   await card.children[5].onclick();
+  assert.equal(reviewedPlanRequests, beforeDecision + 1);
   assert.deepEqual(submissions, [
     { pair_key: "2:10|3:20", decision: "approve" },
   ]);

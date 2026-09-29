@@ -9,7 +9,6 @@ from paperless_ai.search.tools import (
     TOOL_SCHEMAS,
     ToolExecutionResult,
     ToolSourceRef,
-    execute_tool_call,
     execute_tool_call_detailed,
     get_available_metadata,
     parse_tool_arguments,
@@ -80,22 +79,6 @@ async def test_search_documents_returns_paperless_keyword_matches():
     assert [ref.doc_id for ref in result.source_refs] == [2231, 1104]
 
 
-async def test_execute_tool_call_reads_document():
-    client = AsyncMock()
-    client.get_document_with_content.return_value = {
-        "id": 7,
-        "title": "Receipt",
-        "content": "Full OCR text",
-    }
-    result = await execute_tool_call(
-        "read_full_document",
-        {"doc_id": 7, "max_chars": 8000},
-        client=client,
-    )
-
-    assert result == "[Doc 7 | Receipt]\nFull OCR text"
-
-
 @pytest.mark.asyncio
 async def test_execute_tool_call_detailed_collects_source_refs():
     client = AsyncMock()
@@ -110,6 +93,7 @@ async def test_execute_tool_call_detailed_collects_source_refs():
         client=client,
     )
 
+    assert result.content == "[Doc 7 | Receipt]\nFull OCR text"
     assert result.summary == "Read OCR text for document 7."
     assert result.source_refs == [ToolSourceRef(doc_id=7, source_type="read")]
 

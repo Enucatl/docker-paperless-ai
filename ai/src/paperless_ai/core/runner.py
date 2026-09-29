@@ -181,8 +181,12 @@ async def _run_stage(
             return await process_fn(doc_id)
 
     results = await asyncio.gather(
-        *(process_locked(doc_id) for doc_id in sorted(pending_ids))
+        *(process_locked(doc_id) for doc_id in sorted(pending_ids)),
+        return_exceptions=True,
     )
+    for result in results:
+        if isinstance(result, BaseException):
+            raise result
     success = sum(1 for ok in results if ok is True)
     failure = sum(1 for ok in results if ok is False)
     return success, failure

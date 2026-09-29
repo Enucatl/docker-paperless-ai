@@ -217,7 +217,7 @@ async def test_corpus_language_is_an_evaluation_target_not_agent_input(tmp_path)
         "jev_metadata_confidence",
         "language_accuracy",
     ]
-    assert agent.process.await_args.kwargs == {"existing_hints": {}}
+    agent.process.assert_awaited_once_with(str(path))
 
     request = typesafe_client.system_one.call_args.kwargs
     assert request["state"] == {

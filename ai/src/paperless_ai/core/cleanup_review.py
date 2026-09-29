@@ -100,7 +100,7 @@ async def _reviewed_plan(
     # later automatic round also consumed one of those members, defer that
     # broader automatic cluster rather than silently widening the manual merge.
 
-    config = AgentConfig.from_env()
+    config = AgentConfig.from_env(required_models=())
     async with PaperlessClient(config.paperless_url, config.paperless_token) as client:
         correspondents, documents = (
             await client.get_all_correspondents(),
@@ -168,7 +168,9 @@ async def _reviewed_plan(
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Initialize cleanup persistence once for all request handlers."""
-    store = await CleanupReviewStore.from_config(AgentConfig.from_env())
+    store = await CleanupReviewStore.from_config(
+        AgentConfig.from_env(required_models=())
+    )
     yield {"review_store": store}
 
 
@@ -265,7 +267,7 @@ async def apply(
     if request.confirmation != "APPLY":
         raise HTTPException(400, "Type APPLY exactly to confirm")
     plan = _load_plan()
-    config = AgentConfig.from_env()
+    config = AgentConfig.from_env(required_models=())
     store = http_request.state.review_store
     watermark = await store.get_last_manually_reviewed_correspondent_id()
     if (

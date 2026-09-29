@@ -233,7 +233,7 @@ class SmartDocumentAgent:
         self._config = config
         self._strategy = extraction_strategy or StructuredOutputStrategy()
 
-    async def process(self, file_path: str, existing_hints: dict) -> AgentResult:
+    async def process(self, file_path: str) -> AgentResult:
         """Parse a document and return metadata with its full OCR context."""
         from paperless_ai.agents.paddle_ocr import run_paddle_ocr
 

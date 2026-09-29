@@ -10,6 +10,40 @@ from paperless_ai.core import runner, runtime
 
 
 @pytest.mark.asyncio
+async def test_batch_drains_siblings_before_reporting_document_error():
+    """A failed read cannot outlive the batch's resources through a sibling."""
+    started = asyncio.Event()
+    failed = asyncio.Event()
+    release = asyncio.Event()
+    finished = asyncio.Event()
+    queues = SimpleNamespace(peek_stage=AsyncMock(return_value={1, 2}))
+
+    async def process(doc_id):
+        if doc_id == 1:
+            await started.wait()
+            failed.set()
+            raise ValueError("document read failed")
+        started.set()
+        await release.wait()
+        finished.set()
+        return True
+
+    batch = asyncio.create_task(
+        runner._run_stage("test", None, "queue", queues, process)
+    )
+    try:
+        await failed.wait()
+        with pytest.raises(TimeoutError):
+            await asyncio.wait_for(asyncio.shield(batch), timeout=0.02)
+        assert not batch.done()
+    finally:
+        release.set()
+    with pytest.raises(ValueError, match="document read failed"):
+        await batch
+    assert finished.is_set()
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("active", [False, True])
 async def test_shutdown_wakes_idle_workers_and_drains_active_batch(monkeypatch, active):
     """Stopping never starts another batch or cancels an active write."""

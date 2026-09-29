@@ -76,7 +76,7 @@ def test_cleanup_canonical_key_and_browser_rendering(monkeypatch, tmp_path):
         record_decision=AsyncMock(),
     )
     monkeypatch.setattr(cleanup_review, "_load_plan", lambda: plan)
-    monkeypatch.setattr(cleanup_review.AgentConfig, "from_env", lambda: None)
+    monkeypatch.setattr(cleanup_review.AgentConfig, "from_env", lambda **kwargs: None)
     monkeypatch.setattr(
         cleanup_review.CleanupReviewStore, "from_config", AsyncMock(return_value=store)
     )
@@ -119,7 +119,7 @@ def test_cleanup_store_initialized_once_per_lifespan(monkeypatch):
     config = cleanup_review.AgentConfig(
         paperless_url="http://paperless", paperless_token="test"
     )
-    monkeypatch.setattr(cleanup_review.AgentConfig, "from_env", lambda: config)
+    monkeypatch.setattr(cleanup_review.AgentConfig, "from_env", lambda **kwargs: config)
     initialize = AsyncMock()
     monkeypatch.setattr(cleanup_review.CleanupReviewStore, "_initialize", initialize)
     monkeypatch.setattr(
@@ -206,3 +206,18 @@ def test_cleanup_store_initialized_once_per_lifespan(monkeypatch):
             )
             assert initialize.await_count == count
             plan.candidate_pairs[0].decision = "review"
+
+
+def test_cleanup_review_starts_without_inference_models(monkeypatch):
+    """The browser only needs cleanup storage and Paperless credentials."""
+    monkeypatch.setenv("INFERENCE_METADATA_MODEL", "")
+    monkeypatch.setenv("INFERENCE_CHAT_MODEL", "")
+    store = AsyncMock()
+    initialize = AsyncMock(return_value=store)
+    monkeypatch.setattr(cleanup_review.CleanupReviewStore, "from_config", initialize)
+
+    with TestClient(cleanup_review.app) as client:
+        assert client.get("/").status_code == 200
+
+    config = initialize.await_args.args[0]
+    assert config.metadata_model == config.chat_model == ""

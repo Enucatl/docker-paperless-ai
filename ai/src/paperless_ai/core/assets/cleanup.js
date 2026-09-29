@@ -57,7 +57,6 @@ async function refresh() {
           return;
         }
         status.textContent = `Decision recorded: ${choice}`;
-        await showPlan();
         await refresh();
       };
       card.append(button);

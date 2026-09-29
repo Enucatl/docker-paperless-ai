@@ -422,7 +422,7 @@ async def test_metadata_propagates_to_public_agent_result(mock_config) -> None:
         new=AsyncMock(return_value=("Stored OCR text", {}, 3, 0.1)),
     ):
         result = await SmartDocumentAgent(mock_config, FixedMetadataStrategy()).process(
-            "unused.pdf", {}
+            "unused.pdf"
         )
 
     assert result.metadata.title == "Test"
@@ -450,9 +450,7 @@ async def test_metadata_context_is_the_complete_strategy_input(mock_config) -> N
             strategy, "extract", new=AsyncMock(return_value=_ExtractedMetadata())
         ) as extract,
     ):
-        result = await SmartDocumentAgent(mock_config, strategy).process(
-            "unused.pdf", {}
-        )
+        result = await SmartDocumentAgent(mock_config, strategy).process("unused.pdf")
 
     extract.assert_awaited_once_with(text, mock_config)
     assert result.metadata_context == text
@@ -471,7 +469,7 @@ async def test_empty_ocr_fails_before_extraction(mock_config) -> None:
         patch.object(strategy, "extract", new=AsyncMock()) as extract,
     ):
         with pytest.raises(ValueError, match="OCR returned an empty transcript"):
-            await SmartDocumentAgent(mock_config, strategy).process("unused.pdf", {})
+            await SmartDocumentAgent(mock_config, strategy).process("unused.pdf")
 
     extract.assert_not_awaited()
 

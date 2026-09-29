@@ -28,7 +28,7 @@ async def test_evaluation_uses_paddle_helper(monkeypatch):
         extract=AsyncMock(return_value=agent._ExtractedMetadata(title="Parsed"))
     )
     cfg = config(ocr_endpoint="http://paddle")
-    result = await agent.SmartDocumentAgent(cfg, strategy).process("whole.pdf", {})
+    result = await agent.SmartDocumentAgent(cfg, strategy).process("whole.pdf")
     parse.assert_awaited_once_with("whole.pdf", cfg)
     assert result.pages == 43
     assert result.ocr_method == "layout-parsing"

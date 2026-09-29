@@ -61,6 +61,9 @@ class _MemoryReviewStore:
         self.watermark = None
         self.items = {}
 
+    async def get_last_manually_reviewed_correspondent_id(self):
+        return self.watermark
+
     async def get_last_processed_correspondent_id(self):
         return self.watermark
 
@@ -895,3 +898,58 @@ def test_actionable_review_pairs_excludes_earlier_round_stale_evidence():
     )
 
     assert [item.left_members for item in actionable_review_pairs(plan)] == [[1, 2]]
+
+
+@pytest.mark.parametrize("legacy", [False, True])
+def test_nested_clusters_and_legacy_boundary_roundtrip(tmp_path: Path, legacy: bool):
+    """Both persisted cluster lists restore typed history and document IDs."""
+    cluster = {
+        "canonical_id": 2,
+        "canonical_name": "Canonical",
+        "canonical_document_count": 1,
+        "merged_ids": [1],
+        "merged_names": ["Alias"],
+        "source_document_count": 1,
+        "planned_document_ids": [101],
+        "confidence": "high",
+        "status": "approved",
+        "reasons": [],
+    }
+    if not legacy:
+        cluster.update(
+            members=[{"id": 1, "name": "Alias"}, {"id": 2, "name": "Canonical"}],
+            merge_history=[
+                dict(
+                    round=1,
+                    left_members=[1],
+                    right_members=[2],
+                    candidate_score=0.9,
+                    typesafe_score=2.0,
+                    confidence=0.95,
+                )
+            ],
+            rounds_used=1,
+            planned_document_correspondents={"101": "1"},
+        )
+    path = _write_plan(
+        tmp_path,
+        {
+            "version": 1 if legacy else 4,
+            "approved_clusters": [cluster],
+            "automatic_applied_clusters": [cluster],
+            "last_processed_correspondent_id": "20",
+            **({} if legacy else {"last_manually_reviewed_correspondent_id": 30}),
+        },
+    )
+    plan = load_merge_plan(str(path))
+    assert plan.last_manually_reviewed_correspondent_id == (20 if legacy else 30)
+    assert plan.approved_clusters == plan.automatic_applied_clusters
+    loaded = plan.approved_clusters[0]
+    assert loaded.planned_document_correspondents == ({} if legacy else {101: 1})
+    if legacy:
+        assert loaded.members == loaded.merge_history == []
+        assert loaded.rounds_used == 0
+    else:
+        assert loaded.merge_history[0].round == 1
+    write_merge_plan(plan, str(path))
+    assert load_merge_plan(str(path)) == plan

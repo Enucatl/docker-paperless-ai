@@ -80,23 +80,23 @@ def test_cleanup_canonical_key_and_browser_rendering(monkeypatch, tmp_path):
     monkeypatch.setattr(
         cleanup_review.CleanupReviewStore, "from_config", AsyncMock(return_value=store)
     )
-    client = TestClient(cleanup_review.app)
-    data = client.get("/api/plan").json()
-    key = data["review_candidates"][0]["pair_key"]
-    assert key == "2:10|3:20"
-    assert (
-        client.post(
-            "/api/decisions", json={"pair_key": key, "decision": "approve"}
-        ).status_code
-        == 200
-    )
-    assert store.record_decision.call_args.args[1:3] == (key, "approve")
-    assert (
-        client.post(
-            "/api/decisions", json={"pair_key": "10:2|20:3", "decision": "approve"}
-        ).status_code
-        == 404
-    )
+    with TestClient(cleanup_review.app) as client:
+        data = client.get("/api/plan").json()
+        key = data["review_candidates"][0]["pair_key"]
+        assert key == "2:10|3:20"
+        assert (
+            client.post(
+                "/api/decisions", json={"pair_key": key, "decision": "approve"}
+            ).status_code
+            == 200
+        )
+        assert store.record_decision.call_args.args[1:3] == (key, "approve")
+        assert (
+            client.post(
+                "/api/decisions", json={"pair_key": "10:2|20:3", "decision": "approve"}
+            ).status_code
+            == 404
+        )
     node = shutil.which("node")
     if not node:
         pytest.skip("Node is required for the browser script regression")
@@ -112,3 +112,97 @@ def test_cleanup_canonical_key_and_browser_rendering(monkeypatch, tmp_path):
         check=True,
         timeout=10,
     )
+
+
+def test_cleanup_store_initialized_once_per_lifespan(monkeypatch):
+    """Every API shares one initialized store, including apply safeguards."""
+    config = cleanup_review.AgentConfig(
+        paperless_url="http://paperless", paperless_token="test"
+    )
+    monkeypatch.setattr(cleanup_review.AgentConfig, "from_env", lambda: config)
+    initialize = AsyncMock()
+    monkeypatch.setattr(cleanup_review.CleanupReviewStore, "_initialize", initialize)
+    monkeypatch.setattr(
+        cleanup_review.CleanupReviewStore,
+        "decisions_for_plan",
+        AsyncMock(return_value=[]),
+    )
+    boundary = AsyncMock(return_value=None)
+    monkeypatch.setattr(
+        cleanup_review.CleanupReviewStore,
+        "get_last_manually_reviewed_correspondent_id",
+        boundary,
+    )
+    plan = CorrespondentMergePlan(
+        version=4,
+        generated_at="now",
+        paperless_url="http://paperless",
+        total_correspondents=2,
+        total_documents=0,
+        judge_enabled=False,
+        judged_pair_count=0,
+        approved_clusters=[],
+        orphan_correspondents=[],
+        scanned_max_correspondent_id=2,
+        candidate_pairs=[
+            CorrespondentPairDecision(
+                left_id=1,
+                left_name="A",
+                right_id=2,
+                right_name="B",
+                decision="review",
+                confidence="pending",
+                source="resolver",
+                left_members=[1],
+                right_members=[2],
+            )
+        ],
+    )
+    monkeypatch.setattr(cleanup_review, "_load_plan", lambda: plan)
+    record = AsyncMock(side_effect=ValueError("invalid decision"))
+    monkeypatch.setattr(cleanup_review.CleanupReviewStore, "record_decision", record)
+    paperless = AsyncMock()
+    monkeypatch.setattr(cleanup_review, "PaperlessClient", lambda *args: paperless)
+    apply_plan = AsyncMock(return_value={"reassigned_documents": 0})
+    monkeypatch.setattr(cleanup_review, "apply_correspondent_merge_plan", apply_plan)
+    monkeypatch.setattr(cleanup_review, "_shutdown_after_apply", AsyncMock())
+    for count in (1, 2):
+        boundary.return_value = None
+        with TestClient(cleanup_review.app) as client:
+            assert initialize.await_count == count
+            assert client.get("/api/plan").status_code == 200
+            assert client.get("/api/reviewed-plan").status_code == 200
+            assert (
+                client.post(
+                    "/api/decisions", json={"pair_key": "1|2", "decision": "invalid"}
+                ).status_code
+                == 409
+            )
+            assert (
+                client.post("/api/apply", json={"confirmation": "no"}).status_code
+                == 400
+            )
+            assert (
+                client.post("/api/apply", json={"confirmation": "APPLY"}).status_code
+                == 409
+            )
+            boundary.return_value = 2
+            assert client.get("/api/plan").json()["apply_complete"] is True
+            assert client.get("/api/reviewed-plan").json()["apply_complete"] is True
+            assert (
+                client.post("/api/apply", json={"confirmation": "APPLY"}).status_code
+                == 409
+            )
+            assert initialize.await_count == count
+            boundary.return_value = None
+            plan.candidate_pairs[0].decision = "reject"
+            assert (
+                client.post("/api/apply", json={"confirmation": "APPLY"}).status_code
+                == 200
+            )
+            assert (
+                apply_plan.call_args.kwargs["review_store"]
+                is client.app_state["review_store"]
+            )
+            assert initialize.await_count == count
+            plan.candidate_pairs[0].decision = "review"

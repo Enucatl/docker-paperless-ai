@@ -397,13 +397,13 @@ def _judge(
     answer = response.scores["identity"]
     score = float(answer.score)
     return CorrespondentPairDecision(
-        left.member_ids[0],
-        candidate.evidence_left_name,
-        right.member_ids[0],
-        candidate.evidence_right_name,
-        _route_score(score),
-        float(answer.confidence),
-        "typesafe",
+        left_id=left.member_ids[0],
+        left_name=candidate.evidence_left_name,
+        right_id=right.member_ids[0],
+        right_name=candidate.evidence_right_name,
+        decision=_route_score(score),
+        confidence=float(answer.confidence),
+        source="typesafe",
         reason="typesafe_cluster_identity",
         candidate_score=candidate.score,
         candidate_components=candidate.components.to_dict(),
@@ -455,24 +455,22 @@ async def build_correspondent_merge_plan(
             docs[int(doc["correspondent"])].append(doc)
     records = {
         int(x["id"]): CorrespondentRecord(
-            int(x["id"]),
-            str(x.get("name") or "").strip(),
-            normalize_name(str(x.get("name") or "")).normalized_string,
-            [int(d["id"]) for d in docs[int(x["id"])]],
-            [str(d.get("title") or "Untitled") for d in docs[int(x["id"])][:5]],
+            id=int(x["id"]),
+            name=str(x.get("name") or "").strip(),
+            normalized_name=normalize_name(str(x.get("name") or "")).normalized_string,
+            document_ids=[int(d["id"]) for d in docs[int(x["id"])]],
+            sample_titles=[
+                str(d.get("title") or "Untitled") for d in docs[int(x["id"])][:5]
+            ],
         )
         for x in correspondents
         if str(x.get("name") or "").strip()
     }
-    if review_store:
-        boundary_reader = getattr(
-            review_store, "get_last_manually_reviewed_correspondent_id", None
-        )
-        if boundary_reader is None:
-            boundary_reader = review_store.get_last_processed_correspondent_id
-        last_processed_id = await boundary_reader()
-    else:
-        last_processed_id = None
+    last_processed_id = (
+        await review_store.get_last_manually_reviewed_correspondent_id()
+        if review_store
+        else None
+    )
     # This is the analysis snapshot boundary, including blank-name records. A
     # record created while applying must remain outside this boundary.
     scanned_max_id = max((int(x["id"]) for x in correspondents), default=0)
@@ -552,13 +550,13 @@ async def build_correspondent_merge_plan(
                                 exc,
                             )
                             return CorrespondentPairDecision(
-                                left.member_ids[0],
-                                candidate.evidence_left_name,
-                                right.member_ids[0],
-                                candidate.evidence_right_name,
-                                "review",
-                                "error",
-                                "typesafe",
+                                left_id=left.member_ids[0],
+                                left_name=candidate.evidence_left_name,
+                                right_id=right.member_ids[0],
+                                right_name=candidate.evidence_right_name,
+                                decision="review",
+                                confidence="error",
+                                source="typesafe",
                                 reason="typesafe_error",
                                 candidate_score=candidate.score,
                                 candidate_components=candidate.components.to_dict(),
@@ -578,13 +576,13 @@ async def build_correspondent_merge_plan(
                     )
                     current.append(
                         CorrespondentPairDecision(
-                            left.member_ids[0],
-                            candidate.evidence_left_name,
-                            right.member_ids[0],
-                            candidate.evidence_right_name,
-                            "review",
-                            "pending",
-                            "resolver",
+                            left_id=left.member_ids[0],
+                            left_name=candidate.evidence_left_name,
+                            right_id=right.member_ids[0],
+                            right_name=candidate.evidence_right_name,
+                            decision="review",
+                            confidence="pending",
+                            source="resolver",
                             reason="typesafe_not_requested",
                             candidate_score=candidate.score,
                             candidate_components=candidate.components.to_dict(),
@@ -619,12 +617,12 @@ async def build_correspondent_merge_plan(
                     + history[right.key]
                     + [
                         MergeHistory(
-                            number,
-                            item.left_members,
-                            item.right_members,
-                            item.candidate_score or 0,
-                            item.typesafe_score,
-                            item.typesafe_confidence,
+                            round=number,
+                            left_members=item.left_members,
+                            right_members=item.right_members,
+                            candidate_score=item.candidate_score or 0,
+                            typesafe_score=item.typesafe_score,
+                            confidence=item.typesafe_confidence,
                         )
                     ]
                 )
@@ -644,20 +642,26 @@ async def build_correspondent_merge_plan(
         merged_ids = [i for i in cluster.member_ids if i != survivor.id]
         plans.append(
             PlannedCorrespondentCluster(
-                survivor.id,
-                await propose_canonical_name(cluster, config, records),
-                survivor.document_count,
-                merged_ids,
-                [records[i].name for i in merged_ids],
-                sum(records[i].document_count for i in merged_ids),
-                sorted({d for i in merged_ids for d in records[i].document_ids}),
-                "high",
-                "approved",
-                ["typesafe_cluster_identity"],
-                [{"id": i, "name": records[i].name} for i in cluster.member_ids],
-                history[cluster.key],
-                max((x.round for x in history[cluster.key]), default=0),
-                {
+                canonical_id=survivor.id,
+                canonical_name=await propose_canonical_name(cluster, config, records),
+                canonical_document_count=survivor.document_count,
+                merged_ids=merged_ids,
+                merged_names=[records[i].name for i in merged_ids],
+                source_document_count=sum(
+                    records[i].document_count for i in merged_ids
+                ),
+                planned_document_ids=sorted(
+                    {d for i in merged_ids for d in records[i].document_ids}
+                ),
+                confidence="high",
+                status="approved",
+                reasons=["typesafe_cluster_identity"],
+                members=[
+                    {"id": i, "name": records[i].name} for i in cluster.member_ids
+                ],
+                merge_history=history[cluster.key],
+                rounds_used=max((x.round for x in history[cluster.key]), default=0),
+                planned_document_correspondents={
                     document_id: source
                     for source in merged_ids
                     for document_id in records[source].document_ids
@@ -670,28 +674,34 @@ async def build_correspondent_merge_plan(
         for member_id in (cluster.canonical_id, *cluster.merged_ids)
     }
     orphans = [
-        OrphanCorrespondent(x.id, x.name, 0, "approved", "no_documents_assigned")
+        OrphanCorrespondent(
+            id=x.id,
+            name=x.name,
+            document_count=0,
+            status="approved",
+            reason="no_documents_assigned",
+        )
         for x in records.values()
         if x.document_count == 0
         and x.id not in planned_members
         and (last_processed_id is None or x.id > last_processed_id)
     ]
     return CorrespondentMergePlan(
-        4,
-        datetime.now(timezone.utc).isoformat(),
-        config.paperless_url,
-        len(records),
-        len(documents),
-        typesafe,
-        sum(x.source == "typesafe" for x in decisions),
-        plans,
-        orphans,
-        decisions,
-        rounds,
-        maxed,
-        scanned_max_id,
-        last_processed_id,
-        cleanup_mode,
+        version=4,
+        generated_at=datetime.now(timezone.utc).isoformat(),
+        paperless_url=config.paperless_url,
+        total_correspondents=len(records),
+        total_documents=len(documents),
+        judge_enabled=typesafe,
+        judged_pair_count=sum(x.source == "typesafe" for x in decisions),
+        approved_clusters=plans,
+        orphan_correspondents=orphans,
+        candidate_pairs=decisions,
+        rounds_used=rounds,
+        max_rounds_reached=maxed,
+        scanned_max_correspondent_id=scanned_max_id,
+        last_manually_reviewed_correspondent_id=last_processed_id,
+        cleanup_mode=cleanup_mode,
     )
 
 
@@ -861,77 +871,57 @@ body{max-width:1100px;margin:2rem auto;padding:0 1rem;background:#f6f7fb;color:#
     }
 
 
+def _load_cluster(data: dict[str, Any]) -> PlannedCorrespondentCluster:
+    """Restore nested history and integer document IDs from persisted JSON."""
+    return PlannedCorrespondentCluster(
+        **{
+            **data,
+            "merge_history": [
+                MergeHistory(**item) for item in data.get("merge_history", [])
+            ],
+            "planned_document_correspondents": {
+                int(document_id): int(correspondent_id)
+                for document_id, correspondent_id in data.get(
+                    "planned_document_correspondents", {}
+                ).items()
+            },
+        }
+    )
+
+
 def load_merge_plan(path: str) -> CorrespondentMergePlan:
     """Load plan JSON, including legacy plan fields."""
     data = json.loads(
         sys.stdin.read() if path == "-" else Path(path).read_text(encoding="utf-8")
     )
-    clusters = [
-        PlannedCorrespondentCluster(
-            **{
-                **x,
-                "members": x.get("members", []),
-                "merge_history": [
-                    MergeHistory(**item) for item in x.get("merge_history", [])
-                ],
-                "rounds_used": x.get("rounds_used", 0),
-                "planned_document_correspondents": {
-                    int(document_id): int(correspondent_id)
-                    for document_id, correspondent_id in x.get(
-                        "planned_document_correspondents", {}
-                    ).items()
-                },
-            }
-        )
-        for x in data.get("approved_clusters", [])
-    ]
+    boundary = data.get(
+        "last_manually_reviewed_correspondent_id",
+        data.get("last_processed_correspondent_id"),
+    )
     return CorrespondentMergePlan(
-        max(4, int(data["version"])),
-        str(data["generated_at"]),
-        str(data["paperless_url"]),
-        int(data["total_correspondents"]),
-        int(data["total_documents"]),
-        bool(data["judge_enabled"]),
-        int(data["judged_pair_count"]),
-        clusters,
-        [OrphanCorrespondent(**x) for x in data.get("orphan_correspondents", [])],
-        [CorrespondentPairDecision(**x) for x in data.get("candidate_pairs", [])],
-        int(data.get("rounds_used", 0)),
-        bool(data.get("max_rounds_reached", False)),
-        int(data.get("scanned_max_correspondent_id", 0)),
-        (
-            int(
-                data.get(
-                    "last_manually_reviewed_correspondent_id",
-                    data.get("last_processed_correspondent_id"),
-                )
-            )
-            if data.get(
-                "last_manually_reviewed_correspondent_id",
-                data.get("last_processed_correspondent_id"),
-            )
-            is not None
-            else None
+        version=max(4, int(data["version"])),
+        generated_at=str(data["generated_at"]),
+        paperless_url=str(data["paperless_url"]),
+        total_correspondents=int(data["total_correspondents"]),
+        total_documents=int(data["total_documents"]),
+        judge_enabled=bool(data["judge_enabled"]),
+        judged_pair_count=int(data["judged_pair_count"]),
+        approved_clusters=[_load_cluster(x) for x in data.get("approved_clusters", [])],
+        orphan_correspondents=[
+            OrphanCorrespondent(**x) for x in data.get("orphan_correspondents", [])
+        ],
+        candidate_pairs=[
+            CorrespondentPairDecision(**x) for x in data.get("candidate_pairs", [])
+        ],
+        rounds_used=int(data.get("rounds_used", 0)),
+        max_rounds_reached=bool(data.get("max_rounds_reached", False)),
+        scanned_max_correspondent_id=int(data.get("scanned_max_correspondent_id", 0)),
+        last_manually_reviewed_correspondent_id=(
+            int(boundary) if boundary is not None else None
         ),
-        str(data.get("cleanup_mode", "full")),
-        [
-            PlannedCorrespondentCluster(
-                **{
-                    **x,
-                    "members": x.get("members", []),
-                    "merge_history": [
-                        MergeHistory(**item) for item in x.get("merge_history", [])
-                    ],
-                    "rounds_used": x.get("rounds_used", 0),
-                    "planned_document_correspondents": {
-                        int(document_id): int(correspondent_id)
-                        for document_id, correspondent_id in x.get(
-                            "planned_document_correspondents", {}
-                        ).items()
-                    },
-                }
-            )
-            for x in data.get("automatic_applied_clusters", [])
+        cleanup_mode=str(data.get("cleanup_mode", "full")),
+        automatic_applied_clusters=[
+            _load_cluster(x) for x in data.get("automatic_applied_clusters", [])
         ],
     )
 

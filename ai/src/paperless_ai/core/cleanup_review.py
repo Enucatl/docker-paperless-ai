@@ -4,11 +4,12 @@ import asyncio
 import hashlib
 import os
 import signal
+from contextlib import asynccontextmanager
 from dataclasses import asdict, replace
 from pathlib import Path
 from typing import Any
 
-from fastapi import BackgroundTasks, FastAPI, HTTPException
+from fastapi import BackgroundTasks, FastAPI, HTTPException, Request
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
@@ -164,7 +165,14 @@ async def _reviewed_plan(
     return replace(plan, approved_clusters=clusters, orphan_correspondents=orphans)
 
 
-app = FastAPI(title="Correspondent cleanup review")
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Initialize cleanup persistence once for all request handlers."""
+    store = await CleanupReviewStore.from_config(AgentConfig.from_env())
+    yield {"review_store": store}
+
+
+app = FastAPI(title="Correspondent cleanup review", lifespan=lifespan)
 app.mount(
     "/assets", StaticFiles(directory=Path(__file__).with_name("assets")), name="assets"
 )
@@ -177,10 +185,10 @@ async def index() -> FileResponse:
 
 
 @app.get("/api/plan")
-async def plan() -> dict[str, Any]:
+async def plan(http_request: Request) -> dict[str, Any]:
     item = _load_plan()
     data = item.to_dict()
-    store = await CleanupReviewStore.from_config(AgentConfig.from_env())
+    store = http_request.state.review_store
     data["plan_id"] = _plan_id(item)
     data["review_decisions"] = await store.decisions_for_plan(_plan_id(item))
     data[
@@ -203,7 +211,7 @@ async def plan() -> dict[str, Any]:
 
 
 @app.post("/api/decisions")
-async def decide(request: DecisionRequest) -> dict[str, Any]:
+async def decide(request: DecisionRequest, http_request: Request) -> dict[str, Any]:
     plan = _load_plan()
     candidate = next(
         (
@@ -216,7 +224,7 @@ async def decide(request: DecisionRequest) -> dict[str, Any]:
     )
     if candidate is None:
         raise HTTPException(404, "Unknown review pair")
-    store = await CleanupReviewStore.from_config(AgentConfig.from_env())
+    store = http_request.state.review_store
     try:
         await store.record_decision(
             _plan_id(plan),
@@ -234,9 +242,9 @@ async def decide(request: DecisionRequest) -> dict[str, Any]:
 
 
 @app.get("/api/reviewed-plan")
-async def reviewed_plan() -> dict[str, Any]:
+async def reviewed_plan(http_request: Request) -> dict[str, Any]:
     plan = _load_plan()
-    store = await CleanupReviewStore.from_config(AgentConfig.from_env())
+    store = http_request.state.review_store
     watermark = await store.get_last_manually_reviewed_correspondent_id()
     if (
         plan.scanned_max_correspondent_id
@@ -252,13 +260,13 @@ async def reviewed_plan() -> dict[str, Any]:
 
 @app.post("/api/apply")
 async def apply(
-    request: ApplyRequest, background_tasks: BackgroundTasks
+    request: ApplyRequest, background_tasks: BackgroundTasks, http_request: Request
 ) -> dict[str, int]:
     if request.confirmation != "APPLY":
         raise HTTPException(400, "Type APPLY exactly to confirm")
     plan = _load_plan()
     config = AgentConfig.from_env()
-    store = await CleanupReviewStore.from_config(config)
+    store = http_request.state.review_store
     watermark = await store.get_last_manually_reviewed_correspondent_id()
     if (
         plan.scanned_max_correspondent_id

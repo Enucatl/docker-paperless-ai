@@ -75,8 +75,8 @@ class AgentConfig(BaseSettings):
             "INFERENCE_OCR_TIMEOUT", "INFERENCE_PADDLE_TIMEOUT"
         ),
     )
-    metadata_model: str = Field(validation_alias="INFERENCE_METADATA_MODEL")
-    chat_model: str = Field(validation_alias="INFERENCE_CHAT_MODEL")
+    metadata_model: str = Field(default="", validation_alias="INFERENCE_METADATA_MODEL")
+    chat_model: str = Field(default="", validation_alias="INFERENCE_CHAT_MODEL")
     ocr_endpoint: Optional[str] = Field(
         default=None,
         validation_alias="INFERENCE_OCR_ENDPOINT",
@@ -260,7 +260,20 @@ class AgentConfig(BaseSettings):
         return kwargs
 
     @classmethod
-    def from_env(cls) -> "AgentConfig":
-        """Load configuration from environment variables and Docker secrets."""
+    def from_env(
+        cls,
+        *,
+        required_models: tuple[Literal["metadata", "chat"], ...] = ("metadata", "chat"),
+    ) -> "AgentConfig":
+        """Load settings and require only the models used by the caller.
+
+        Args:
+            required_models: Model purposes needed by this process. The default
+                preserves validation for the combined search and worker service.
+        """
         _inject_secrets()  # read *_FILE env vars and inject into os.environ
-        return cls()  # pydantic-settings reads all env vars automatically
+        config = cls()
+        for purpose in required_models:
+            if not getattr(config, f"{purpose}_model").strip():
+                raise ValueError(f"INFERENCE_{purpose.upper()}_MODEL is required")
+        return config

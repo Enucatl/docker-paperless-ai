@@ -8,6 +8,8 @@ import re
 import secrets
 from contextlib import asynccontextmanager
 
+import niquests
+
 from fastapi import FastAPI, Request, Response, status
 
 from paperless_common.paperless import PaperlessClient
@@ -105,7 +107,7 @@ async def _get_current_document_tags(doc_id: int, payload_tags: set[str]) -> set
         if not isinstance(tag_ids, list):
             return payload_tags
         return set(await _paperless_client.get_tag_names(tag_ids))
-    except Exception as exc:
+    except niquests.RequestException as exc:
         log.warning(
             "Webhook: failed to resolve current tags for document %d: %s", doc_id, exc
         )

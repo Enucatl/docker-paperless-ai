@@ -9,7 +9,7 @@ from typing import Literal, Optional
 import datetime as _dt
 
 from json_repair import repair_json
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, ValidationError, field_validator
 
 from paperless_ai.agents.base import AgentResult, DocumentMetadata
 from paperless_ai.core.config import AgentConfig
@@ -223,26 +223,14 @@ class StructuredOutputStrategy:
     """Standard LLM extraction using JSON schema / response_format."""
 
     def _fallback_parse(self, raw: str) -> dict:
-        """Robust fallback parser for handling malformed JSON output.
-
-        Uses json-repair library to salvage broken JSON from LLM outputs.
-        Handles escaped quotes, non-string values, missing commas, trailing commas, etc.
-        If json-repair fails, returns an empty dict rather than raising.
-        """
+        """Parse a JSON object, repairing malformed JSON syntax when possible."""
         try:
             parsed = json.loads(raw)
-            return parsed if isinstance(parsed, dict) else {}
-        except Exception:
-            pass
-
-        # Use json-repair to salvage malformed JSON
-        try:
-            repaired = repair_json(raw)
-            parsed = json.loads(repaired)
-            return parsed if isinstance(parsed, dict) else {}
-        except Exception:
-            log.debug("Could not repair JSON output: %s", raw[:200])
-            return {}
+        except json.JSONDecodeError:
+            parsed = json.loads(repair_json(raw))
+        if not isinstance(parsed, dict) or not parsed:
+            raise ValueError("Metadata response must be a non-empty JSON object")
+        return parsed
 
     async def extract(self, text: str, config: AgentConfig) -> _ExtractedMetadata:
         """Use standard LLM with response_format tiering."""
@@ -270,20 +258,21 @@ class StructuredOutputStrategy:
             domain="metadata_extraction",
             **kwargs,
         )
-        raw = _get_completion_text(response) or "{}"
+        raw = _get_completion_text(response)
         log.info("Smart agent: metadata raw response: %s", raw)
-
-        # Try strict Pydantic validation first, then fall back to loose parsing
+        data = self._fallback_parse(raw)
+        if not _ExtractedMetadata.model_fields.keys() & data.keys():
+            raise ValueError("Metadata response contains no metadata fields")
         try:
-            return _ExtractedMetadata.model_validate_json(raw)
-        except Exception:
-            data = self._fallback_parse(raw)
-            try:
-                return _ExtractedMetadata.model_validate(data)
-            except Exception:
-                # If date is unparseable, drop it and keep the rest
-                data.pop("date", None)
-                return _ExtractedMetadata.model_validate(data)
+            return _ExtractedMetadata.model_validate(data)
+        except ValidationError as exc:
+            # Preserve the usable fields when only the optional date is invalid.
+            if any(error["loc"] != ("date",) for error in exc.errors()):
+                raise
+            data.pop("date", None)
+            if not _ExtractedMetadata.model_fields.keys() & data.keys():
+                raise
+            return _ExtractedMetadata.model_validate(data)
 
 
 class SmartDocumentAgent:

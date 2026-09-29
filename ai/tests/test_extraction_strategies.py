@@ -126,39 +126,39 @@ class TestFallbackParsing:
         raw = r'{"title": "Invoice from \"Acme Corp\"", "date": "2024-01-15"}'
         result = strategy._fallback_parse(raw)
         # json-repair should handle this gracefully
-        assert "title" in result or result == {}  # Either repairs it or returns empty
+        assert result["title"] == 'Invoice from "Acme Corp"'
 
     def test_fallback_parse_missing_commas(self, strategy):
         """JSON with missing commas should be repaired."""
         raw = '{"title": "Test" "date": "2024-01-15"}'
         result = strategy._fallback_parse(raw)
         # json-repair attempts to add the missing comma
-        assert "title" in result or result == {}
+        assert result["title"] == "Test"
 
     def test_fallback_parse_trailing_comma(self, strategy):
         """JSON with trailing comma should be repaired."""
         raw = '{"title": "Test", "date": "2024-01-15",}'
         result = strategy._fallback_parse(raw)
-        assert "title" in result or result == {}
+        assert result["title"] == "Test"
 
     def test_fallback_parse_non_string_values(self, strategy):
         """JSON with non-string values (numbers, booleans) should parse."""
         raw = '{"pages": 10, "is_important": true, "confidence": 0.95}'
         result = strategy._fallback_parse(raw)
         # All keys should be present if parsing succeeds
-        assert "pages" in result or result == {}
+        assert result == {"pages": 10, "is_important": True, "confidence": 0.95}
 
     def test_fallback_parse_null_values(self, strategy):
         """JSON with null values should parse."""
         raw = '{"title": "Test", "correspondent": null, "date": null}'
         result = strategy._fallback_parse(raw)
-        assert "title" in result or result == {}
+        assert result["title"] == "Test"
 
     def test_fallback_parse_completely_invalid(self, strategy):
-        """Completely malformed input should return empty dict gracefully."""
+        """Unrepairable output must fail extraction."""
         raw = "this is not json at all!!!"
-        result = strategy._fallback_parse(raw)
-        assert result == {}
+        with pytest.raises(ValueError):
+            strategy._fallback_parse(raw)
 
 
 # ---------------------------------------------------------------------------
@@ -250,8 +250,8 @@ class TestStructuredOutputStrategy:
             mock_llm.return_value = completion_result(raw_response)
             result = await strategy.extract("Sample OCR text", mock_config)
 
-        # Should create an _ExtractedMetadata object (may have empty fields if repair fails)
-        assert isinstance(result, _ExtractedMetadata)
+        assert result.title == "Test"
+        assert result.date == datetime.date(2024, 1, 15)
 
     @pytest.mark.asyncio
     async def test_extract_missing_fields(self, strategy, mock_config):
@@ -273,17 +273,64 @@ class TestStructuredOutputStrategy:
         assert result.correspondent is None
 
     @pytest.mark.asyncio
-    async def test_extract_empty_response(self, strategy, mock_config):
-        """Empty or null LLM response should default to empty metadata."""
+    @pytest.mark.parametrize(
+        "raw",
+        [
+            None,
+            "",
+            " ",
+            "not JSON",
+            "{}",
+            "{,}",
+            "[]",
+            '[{"title": "Test"}]',
+            "null",
+            "42",
+            '"title"',
+            '{"unknown": "value"}',
+            '{"title": 42}',
+            '{"date": "not a date"}',
+        ],
+    )
+    async def test_extract_invalid_response(self, strategy, mock_config, raw):
+        """Invalid responses must reach the stage failure/retry boundary."""
         with patch(
-            "paperless_ai.agents.smart_graph_agent.complete", new_callable=AsyncMock
-        ) as mock_llm:
-            mock_llm.return_value = completion_result(None)
-            result = await strategy.extract("Sample OCR text", mock_config)
+            "paperless_ai.agents.smart_graph_agent.complete",
+            new=AsyncMock(return_value=completion_result(raw)),
+        ):
+            with pytest.raises(ValueError):
+                await strategy.extract("Sample OCR text", mock_config)
 
-        # Should default to empty metadata
+    @pytest.mark.asyncio
+    async def test_extract_recovers_invalid_optional_date(self, strategy, mock_config):
+        """An invalid date does not discard otherwise valid metadata."""
+        with patch(
+            "paperless_ai.agents.smart_graph_agent.complete",
+            new=AsyncMock(
+                return_value=completion_result(
+                    '{"title": "Invoice", "date": "not a date"}'
+                )
+            ),
+        ):
+            result = await strategy.extract("Sample OCR text", mock_config)
+        assert result.title == "Invoice"
+        assert result.date is None
+
+    @pytest.mark.asyncio
+    async def test_extract_optional_null_fields(self, strategy, mock_config):
+        """Explicitly unknown optional fields remain valid metadata."""
+        with patch(
+            "paperless_ai.agents.smart_graph_agent.complete",
+            new=AsyncMock(
+                return_value=completion_result(
+                    '{"title": null, "date": null, "summary": null, "correspondent": null}'
+                )
+            ),
+        ):
+            result = await strategy.extract("Sample OCR text", mock_config)
         assert result.title is None
         assert result.date is None
+        assert result.summary is None
         assert result.correspondent is None
 
 
@@ -318,9 +365,9 @@ async def test_languages_survive_extraction_and_fallback(
     malformed, fields, expected, mock_config
 ) -> None:
     """Extraction keeps one primary code and uses und when unknown."""
-    raw = json.dumps(fields)
+    raw = json.dumps({"title": "Test", **fields})
     if malformed:
-        raw = raw[:-1] + ",}" if fields else "{,}"
+        raw = raw[:-1] + ",}"
     with patch(
         "paperless_ai.agents.smart_graph_agent.complete",
         new=AsyncMock(return_value=completion_result(raw)),
@@ -468,3 +515,41 @@ def test_metadata_reasoning_default_is_independent_of_ocr(monkeypatch) -> None:
     assert config.get_metadata_kwargs()["reasoning_effort"] == "high"
     config.metadata_reasoning_effort = None
     assert "reasoning_effort" not in config.get_metadata_kwargs()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("raw", [None, "{}", "not JSON", '[{"title": "Test"}]'])
+async def test_invalid_metadata_retries_without_writing(monkeypatch, mock_config, raw):
+    """An unusable model response cannot clear fields or complete the stage."""
+    from paperless_ai.core import runner
+    from paperless_common.queue import TaskQueues
+
+    runner.clear_shutdown_request()
+    mock_config.ocr_concurrency = 1
+    mock_config.stage_max_attempts = 3
+    mock_config.tag_metadata = "ai:run-metadata"
+    client = AsyncMock()
+    client.get_document_with_content.return_value = {
+        "id": 42,
+        "content": "Invoice OCR",
+        "tags": [7],
+        "custom_fields": [{"field": 2, "value": "Existing summary"}],
+    }
+    queues = AsyncMock()
+    queues.stage_size.return_value = 1
+    queues.peek_stage.return_value = {42}
+    queues.mark_failure.return_value = (1, False)
+    monkeypatch.setattr(
+        "paperless_ai.agents.smart_graph_agent.complete",
+        AsyncMock(return_value=completion_result(raw)),
+    )
+
+    assert await runner.run_metadata_batch(client, mock_config, queues, 1, 2, 3) == (
+        0,
+        1,
+    )
+    client.patch_document.assert_not_awaited()
+    queues.remove.assert_not_awaited()
+    queues.mark_failure.assert_awaited_once_with(
+        42, TaskQueues.KEY_METADATA, max_attempts=3
+    )

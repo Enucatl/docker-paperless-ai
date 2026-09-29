@@ -425,15 +425,12 @@ class PaperlessClient:
         """Resolve a list of tag IDs to human-readable tag names."""
         if not tag_ids:
             return []
-        try:
-            by_id = {
-                tag["id"]: label
-                for tag in await self._get_all_tags()
-                if (label := self._resource_label(tag)) is not None
-            }
-            return [by_id[tag_id] for tag_id in tag_ids if tag_id in by_id]
-        except Exception:
-            return []
+        by_id = {
+            tag["id"]: label
+            for tag in await self._get_all_tags()
+            if (label := self._resource_label(tag)) is not None
+        }
+        return [by_id[tag_id] for tag_id in tag_ids if tag_id in by_id]
 
     async def get_available_metadata(self) -> dict[str, list[str]]:
         """Return the exact metadata names that exist in Paperless for agent filtering."""

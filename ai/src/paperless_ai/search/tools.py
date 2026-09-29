@@ -3,7 +3,9 @@
 import asyncio
 import json
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Literal
+
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from paperless_common.paperless import PaperlessClient
 from paperless_common.telemetry import set_span_attributes, start_span
@@ -23,6 +25,39 @@ class ToolExecutionResult:
     source_refs: list[ToolSourceRef] = field(default_factory=list)
 
 
+class MetadataArguments(BaseModel):
+    """Accept only declared tool arguments without type coercion."""
+
+    model_config = ConfigDict(strict=True, extra="forbid")
+
+
+class SearchArguments(MetadataArguments):
+    """Arguments for a Paperless keyword search."""
+
+    query: str
+    correspondent: str | None = None
+    document_type: str | None = None
+    storage_path: str | None = None
+    tags: list[str] | None = None
+    year: str | None = Field(default=None, pattern=r"^[0-9]{4}$")
+    limit: int | None = Field(default=None, ge=1, le=100)
+    mode: Literal["precision", "recall"] = "precision"
+
+
+class ReadArguments(MetadataArguments):
+    """Arguments for reading one document's OCR text."""
+
+    doc_id: int
+    max_chars: int = Field(default=8000, ge=500, le=20000)
+
+
+TOOL_ARGUMENTS = {
+    "get_available_metadata": MetadataArguments,
+    "search_documents": SearchArguments,
+    "read_full_document": ReadArguments,
+}
+
+
 TOOL_SCHEMAS = [
     {
         "type": "function",
@@ -32,7 +67,7 @@ TOOL_SCHEMAS = [
                 "Return the exact correspondent, document type, storage path, and tag names "
                 "available in Paperless. Use this before applying metadata filters."
             ),
-            "parameters": {"type": "object", "properties": {}},
+            "parameters": MetadataArguments.model_json_schema(),
         },
     },
     {
@@ -49,20 +84,7 @@ TOOL_SCHEMAS = [
                 "Use mode=precision for singular lookups and mode=recall for exhaustive lists. "
                 "When mode=recall, always provide an explicit limit."
             ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "query": {"type": "string"},
-                    "correspondent": {"type": "string"},
-                    "document_type": {"type": "string"},
-                    "storage_path": {"type": "string"},
-                    "tags": {"type": "array", "items": {"type": "string"}},
-                    "year": {"type": "string", "description": "4-digit year"},
-                    "limit": {"type": "integer", "minimum": 1, "maximum": 100},
-                    "mode": {"type": "string", "enum": ["precision", "recall"]},
-                },
-                "required": ["query"],
-            },
+            "parameters": SearchArguments.model_json_schema(),
         },
     },
     {
@@ -70,14 +92,7 @@ TOOL_SCHEMAS = [
         "function": {
             "name": "read_full_document",
             "description": "Read the OCR text of a specific Paperless document by ID.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "doc_id": {"type": "integer"},
-                    "max_chars": {"type": "integer", "minimum": 500, "maximum": 20000},
-                },
-                "required": ["doc_id"],
-            },
+            "parameters": ReadArguments.model_json_schema(),
         },
     },
 ]
@@ -124,27 +139,12 @@ async def search_documents(
             return ToolExecutionResult(
                 content=content, summary=content, preview=content
             )
-        if mode not in ("precision", "recall"):
-            content = (
-                f"Invalid search mode {mode!r}. Allowed values: precision, recall."
-            )
-            set_span_attributes(span, **{"paperless_ai.tool.validation_error": content})
-            return ToolExecutionResult(
-                content=content, summary=content, preview=content
-            )
         if mode == "recall" and limit is None:
             content = "Recall searches require an explicit limit."
             set_span_attributes(span, **{"paperless_ai.tool.validation_error": content})
             return ToolExecutionResult(
                 content=content, summary=content, preview=content
             )
-        if limit is not None and not 1 <= limit <= 100:
-            content = "Search limits must be between 1 and 100."
-            set_span_attributes(span, **{"paperless_ai.tool.validation_error": content})
-            return ToolExecutionResult(
-                content=content, summary=content, preview=content
-            )
-
         result_limit = 20 if limit is None else limit
         doc_ids = await client.search_documents_all(
             query,
@@ -283,35 +283,32 @@ async def execute_tool_call_detailed(
     client: PaperlessClient,
 ) -> ToolExecutionResult:
     """Dispatch a tool call with UI-friendly metadata for the chat frontend."""
+    model = TOOL_ARGUMENTS.get(name)
+    if model is None:
+        return tool_validation_error(f"Unknown tool: {name}")
+    try:
+        arguments = model.model_validate(arguments).model_dump()
+    except ValidationError as exc:
+        return tool_validation_error(str(exc))
     if name == "get_available_metadata":
         return await get_available_metadata(client=client)
     if name == "search_documents":
-        return await search_documents(
-            arguments.get("query", ""),
-            client=client,
-            correspondent=arguments.get("correspondent"),
-            document_type=arguments.get("document_type"),
-            storage_path=arguments.get("storage_path"),
-            tags=arguments.get("tags"),
-            year=arguments.get("year"),
-            limit=None if "limit" not in arguments else int(arguments["limit"]),
-            mode=str(arguments.get("mode", "precision")),
-        )
-    if name == "read_full_document":
-        return await read_full_document(
-            int(arguments["doc_id"]),
-            client=client,
-            max_chars=int(arguments.get("max_chars", 8000)),
-        )
-    raise ValueError(f"Unknown tool: {name}")
+        return await search_documents(client=client, **arguments)
+    return await read_full_document(client=client, **arguments)
+
+
+def tool_validation_error(message: str) -> ToolExecutionResult:
+    """Return a recoverable argument error for the model to correct."""
+    content = f"Invalid tool arguments: {message}"
+    return ToolExecutionResult(content=content, summary=content, preview=content)
 
 
 def parse_tool_arguments(raw_arguments: Any) -> dict[str, Any]:
     """Parse the function arguments returned by the LLM."""
     if raw_arguments is None:
         return {}
-    if isinstance(raw_arguments, dict):
-        return raw_arguments
     if isinstance(raw_arguments, str):
-        return json.loads(raw_arguments) if raw_arguments.strip() else {}
-    raise TypeError(f"Unsupported tool argument type: {type(raw_arguments).__name__}")
+        raw_arguments = json.loads(raw_arguments) if raw_arguments.strip() else {}
+    if not isinstance(raw_arguments, dict):
+        raise ValueError("Tool arguments must be a JSON object.")
+    return raw_arguments

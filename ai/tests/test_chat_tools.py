@@ -4,7 +4,7 @@ import pytest
 import niquests
 
 from paperless_common.telemetry import start_span
-from paperless_ai.search.chat_agent import ChatCopilot
+from paperless_ai.search.chat_agent import ChatCopilot, _extract_usage
 from paperless_ai.search.tools import (
     TOOL_SCHEMAS,
     ToolExecutionResult,
@@ -139,21 +139,6 @@ async def test_search_documents_recall_requires_explicit_limit():
 
 
 @pytest.mark.asyncio
-async def test_search_documents_rejects_invalid_mode_without_retrieval():
-    result = await search_documents(
-        "youtube premium",
-        client=AsyncMock(),
-        mode="recall,precision",
-        limit=20,
-    )
-
-    assert (
-        result.summary
-        == "Invalid search mode 'recall,precision'. Allowed values: precision, recall."
-    )
-
-
-@pytest.mark.asyncio
 async def test_execute_tool_call_detailed_recall_requires_explicit_limit():
     result = await execute_tool_call_detailed(
         "search_documents",
@@ -172,10 +157,8 @@ async def test_execute_tool_call_detailed_rejects_invalid_mode():
         client=AsyncMock(),
     )
 
-    assert (
-        result.content
-        == "Invalid search mode 'recall,precision'. Allowed values: precision, recall."
-    )
+    assert "Invalid tool arguments" in result.content
+    assert "precision" in result.content and "recall" in result.content
 
 
 def test_start_span_preserves_original_exception():
@@ -309,3 +292,145 @@ async def test_chat_copilot_run_turn_emits_events_and_aggregates_usage():
         and event["model"] == "openai/chat-model"
         for event in events
     )
+
+
+@pytest.mark.parametrize("raw", ["[]", "42", '"text"', "null", "true", [], 42])
+def test_parse_tool_arguments_rejects_non_objects(raw):
+    with pytest.raises(ValueError, match="JSON object"):
+        parse_tool_arguments(raw)
+
+
+@pytest.mark.parametrize(
+    "name, arguments",
+    [
+        ("read_full_document", {"doc_id": 1, "max_chars": value})
+        for value in (499, 20001, "8000", True, None)
+    ]
+    + [
+        ("search_documents", {"query": "invoice", "limit": value})
+        for value in (0, 101, "20", True, 1.5)
+    ]
+    + [
+        ("search_documents", {"query": 42}),
+        ("search_documents", {"query": "invoice", "tags": [42]}),
+        ("search_documents", {"query": "invoice", "year": "26"}),
+        ("read_full_document", {}),
+        ("read_full_document", {"doc_id": "1"}),
+        ("get_available_metadata", {"extra": 1}),
+        ("read_full_document", []),
+        ("read_full_document", 42),
+        ("unknown_tool", {}),
+    ],
+)
+async def test_dispatch_rejects_invalid_arguments_without_client_calls(name, arguments):
+    client = AsyncMock()
+    result = await execute_tool_call_detailed(name, arguments, client=client)
+    assert "Invalid tool arguments" in result.content
+    assert not result.source_refs
+    assert client.mock_calls == []
+
+
+@pytest.mark.parametrize("max_chars", [500, 20000])
+async def test_read_accepts_advertised_bounds(max_chars):
+    client = AsyncMock()
+    client.get_document_with_content.return_value = {
+        "id": 1,
+        "title": "Invoice",
+        "content": "x" * 21000,
+    }
+    result = await execute_tool_call_detailed(
+        "read_full_document", {"doc_id": 1, "max_chars": max_chars}, client=client
+    )
+    assert result.content == "[Doc 1 | Invoice]\n" + "x" * max_chars + "\n\n[truncated]"
+    client.get_document_with_content.assert_awaited_once_with(1)
+
+
+@pytest.mark.parametrize("limit", [1, 100])
+async def test_search_accepts_advertised_bounds(limit):
+    client = AsyncMock()
+    client.search_documents_all.return_value = []
+    await execute_tool_call_detailed(
+        "search_documents",
+        {"query": "invoice", "limit": limit, "mode": "recall"},
+        client=client,
+    )
+    assert client.search_documents_all.await_args.kwargs["limit"] == limit
+
+
+@pytest.mark.parametrize(
+    "usage, expected",
+    [
+        (Usage(), None),
+        (
+            Usage(prompt_tokens=3),
+            {"prompt_tokens": 3, "completion_tokens": 0, "total_tokens": 3},
+        ),
+        (
+            Usage(completion_tokens=2),
+            {"prompt_tokens": 0, "completion_tokens": 2, "total_tokens": 2},
+        ),
+        (
+            Usage(total_tokens=7),
+            {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 7},
+        ),
+        (
+            Usage(prompt_tokens=3, completion_tokens=2),
+            {"prompt_tokens": 3, "completion_tokens": 2, "total_tokens": 5},
+        ),
+        (
+            Usage(total_tokens=0),
+            {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
+        ),
+    ],
+)
+def test_extract_usage_preserves_optional_counts(usage, expected):
+    response = _completion("Answer")
+    response.usage = usage
+    assert _extract_usage(response) == expected
+
+
+@pytest.mark.parametrize("arguments", ["{", "[]", "42", '{"doc_id":1,"max_chars":1}'])
+async def test_chat_returns_validation_errors_to_model_then_recovers(arguments):
+    config = MagicMock()
+    config.get_chat_kwargs.return_value = {}
+    client = AsyncMock()
+    client.get_document_languages.return_value = {}
+    client.get_document_with_content.return_value = {"id": 1, "content": "Invoice"}
+
+    def call(args, call_id):
+        return _completion(
+            "",
+            [
+                {
+                    "id": call_id,
+                    "function": {
+                        "name": "read_full_document",
+                        "arguments": args,
+                    },
+                }
+            ],
+        )
+
+    events = []
+
+    async def capture(event):
+        events.append(event)
+
+    with patch(
+        "paperless_ai.search.chat_agent.complete",
+        side_effect=[
+            call(arguments, "invalid"),
+            call('{"doc_id":1}', "valid"),
+            _completion("Answer"),
+        ],
+    ):
+        result = await ChatCopilot(config, client).run_turn(
+            "Find invoice", event_callback=capture
+        )
+    results = [message for message in result.history if message["role"] == "tool"]
+    assert "Invalid tool arguments" in results[0]["content"]
+    assert "Invoice" in results[1]["content"]
+    assert result.reply == "Answer"
+    assert result.usage is None
+    assert any(event["type"] == "usage" and not event["available"] for event in events)
+    client.get_document_with_content.assert_awaited_once_with(1)

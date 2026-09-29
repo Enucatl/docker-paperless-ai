@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable
 
 import niquests
+from shared_inference import CompletionResult
 
 from paperless_ai.core.config import AgentConfig
 from paperless_ai.inference import complete
@@ -16,6 +17,7 @@ from paperless_ai.search.tools import (
     ToolExecutionResult,
     execute_tool_call_detailed,
     parse_tool_arguments,
+    tool_validation_error,
 )
 
 SYSTEM_PROMPT = (
@@ -54,14 +56,6 @@ SYSTEM_PROMPT = (
 log = logging.getLogger(__name__)
 
 
-def _message_to_dict(message: Any) -> dict:
-    if isinstance(message, dict):
-        return {k: v for k, v in message.items() if v is not None}
-    if hasattr(message, "model_dump"):
-        return message.model_dump(exclude_none=True)
-    raise TypeError(f"Unsupported message type: {type(message).__name__}")
-
-
 def _snippet(text: str, limit: int = 320) -> str:
     clean = " ".join((text or "").split())
     if len(clean) <= limit:
@@ -69,31 +63,21 @@ def _snippet(text: str, limit: int = 320) -> str:
     return clean[: limit - 3].rstrip() + "..."
 
 
-def _extract_usage(response: Any) -> dict[str, int] | None:
-    usage = getattr(response, "usage", None)
-    if not usage:
+def _extract_usage(response: CompletionResult) -> dict[str, int] | None:
+    """Normalize optional token counts from the shared inference result."""
+    usage = response.usage
+    if all(
+        count is None
+        for count in (usage.prompt_tokens, usage.completion_tokens, usage.total_tokens)
+    ):
         return None
-    if hasattr(usage, "model_dump"):
-        usage = usage.model_dump(exclude_none=True)
-    elif not isinstance(usage, dict):
-        usage = {
-            "prompt_tokens": getattr(usage, "prompt_tokens", None),
-            "completion_tokens": getattr(usage, "completion_tokens", None),
-            "total_tokens": getattr(usage, "total_tokens", None),
-        }
-    prompt_tokens = usage.get("prompt_tokens")
-    completion_tokens = usage.get("completion_tokens")
-    total_tokens = usage.get("total_tokens")
-    if prompt_tokens is None and completion_tokens is None and total_tokens is None:
-        return None
-    normalized = {
-        "prompt_tokens": int(prompt_tokens or 0),
-        "completion_tokens": int(completion_tokens or 0),
-        "total_tokens": int(
-            total_tokens or (prompt_tokens or 0) + (completion_tokens or 0)
-        ),
+    return {
+        "prompt_tokens": usage.prompt_tokens or 0,
+        "completion_tokens": usage.completion_tokens or 0,
+        "total_tokens": usage.total_tokens
+        if usage.total_tokens is not None
+        else (usage.prompt_tokens or 0) + (usage.completion_tokens or 0),
     }
-    return normalized
 
 
 @dataclass
@@ -235,7 +219,7 @@ class ChatCopilot:
                         },
                     )
 
-                assistant_message = _message_to_dict(response.message)
+                assistant_message = response.message
                 messages.append(assistant_message)
                 tool_calls = assistant_message.get("tool_calls") or []
                 set_span_attributes(
@@ -276,7 +260,12 @@ class ChatCopilot:
                 for tool_call in tool_calls:
                     function = tool_call.get("function", {})
                     name = str(function.get("name") or "unknown_tool")
-                    args = parse_tool_arguments(function.get("arguments"))
+                    argument_error = None
+                    try:
+                        args = parse_tool_arguments(function.get("arguments"))
+                    except ValueError as exc:
+                        args = function.get("arguments")
+                        argument_error = tool_validation_error(str(exc))
                     await self._emit(
                         event_callback,
                         {
@@ -294,7 +283,7 @@ class ChatCopilot:
                             "paperless_ai.tool.call_id": str(tool_call.get("id") or ""),
                         },
                     ) as tool_span:
-                        result = await execute_tool_call_detailed(
+                        result = argument_error or await execute_tool_call_detailed(
                             name,
                             args,
                             client=self._client,

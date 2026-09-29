@@ -29,6 +29,10 @@ Test matrix:
 
 """
 
+import asyncio
+import json
+from unittest.mock import AsyncMock
+
 import pytest
 
 pytestmark = pytest.mark.usefixtures("mock_document_service")
@@ -119,6 +123,83 @@ async def test_task_queues_mark_failure_moves_to_failed_queue(task_queues):
     assert (retry_count, moved) == (3, True)
     assert await task_queues.peek_stage(TaskQueues.KEY_OCR) == set()
     assert await task_queues.peek_stage(TaskQueues.KEY_FAILED) == {55}
+
+
+@pytest.mark.requires_redis
+async def test_queue_inspection_does_not_release_due_retries(task_queues, monkeypatch):
+    """Health and count reads leave due retries delayed until explicitly released."""
+    from paperless_ai.search import webhook
+    from paperless_listener import app as listener
+
+    monkeypatch.setattr(webhook, "_queues", task_queues)
+    monkeypatch.setattr(listener, "_queues", task_queues)
+    for stage in (TaskQueues.KEY_OCR, TaskQueues.KEY_METADATA):
+        await task_queues.mark_failure(55, stage, max_attempts=3, base_delay_seconds=0)
+        assert await task_queues.peek_stage(stage) == set()
+        assert await task_queues.stage_size(stage) == 0
+        assert await task_queues.stage_work_count(stage) == 1
+
+    assert await task_queues.pending_count() == {"ocr": 0, "metadata": 0}
+    assert (await listener.health())["pending"] == {"ocr": 0, "metadata": 0}
+    assert json.loads((await webhook.health()).body)["pending"] == {
+        "ocr": 0,
+        "metadata": 0,
+    }
+    for stage in (TaskQueues.KEY_OCR, TaskQueues.KEY_METADATA):
+        assert await task_queues.release_due(stage) == 1
+        assert await task_queues.stage_work_count(stage) == 1
+        await task_queues.remove(55, stage)
+        assert await task_queues.stage_work_count(stage) == 0
+
+
+@pytest.mark.requires_redis
+async def test_retry_promotion_cannot_resurrect_removed_work(task_queues, monkeypatch):
+    """A removal between client-side selection and promotion must not be lost."""
+    stage = TaskQueues.KEY_OCR
+    await task_queues.mark_failure(55, stage, max_attempts=3, base_delay_seconds=0)
+    select_due = task_queues._redis.zrangebyscore
+
+    async def select_then_remove(*args, **kwargs):
+        """Force the stale-selection race if selection leaves the Redis script."""
+        due = await select_due(*args, **kwargs)
+        await task_queues.remove(55, stage)
+        return due
+
+    monkeypatch.setattr(task_queues._redis, "zrangebyscore", select_then_remove)
+    await asyncio.gather(task_queues.release_due(stage), task_queues.remove(55, stage))
+    assert await task_queues.stage_work_count(stage) == 0
+    assert await task_queues.release_due(stage) == 0
+
+    await task_queues.mark_failure(56, stage, max_attempts=3, base_delay_seconds=0)
+    released = await asyncio.gather(
+        task_queues.release_due(stage), task_queues.release_due(stage)
+    )
+    assert sum(released) == 1
+    assert await task_queues.peek_stage(stage) == {56}
+
+
+@pytest.mark.requires_redis
+@pytest.mark.parametrize("stage", [TaskQueues.KEY_OCR, TaskQueues.KEY_METADATA])
+async def test_batches_release_due_retries(task_queues, stage):
+    """A batch promotes due retries while future retries still prevent draining."""
+    from paperless_ai.core.config import AgentConfig
+    from paperless_ai.core.runner import run_ocr_batch, run_metadata_batch
+
+    client = AsyncMock()
+    client.get_document.return_value = None
+    client.get_document_with_content.return_value = None
+    config = AgentConfig(ocr_endpoint="http://document-service.invalid")
+    await task_queues.mark_failure(55, stage, max_attempts=3, base_delay_seconds=0)
+    await task_queues.mark_failure(56, stage, max_attempts=3, base_delay_seconds=3600)
+
+    if stage == TaskQueues.KEY_OCR:
+        assert await run_ocr_batch(client, config, task_queues, 1) == (0, 0)
+        client.get_document.assert_awaited_once_with(55)
+    else:
+        assert await run_metadata_batch(client, config, task_queues, 1, 2, 3) == (0, 0)
+        client.get_document_with_content.assert_awaited_once_with(55)
+    assert await task_queues.stage_size(stage) == 0
+    assert await task_queues.stage_work_count(stage) == 1
 
 
 # ---------------------------------------------------------------------------

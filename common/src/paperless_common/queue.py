@@ -58,12 +58,10 @@ class TaskQueues:
         return await self.enqueue(doc_id, self.KEY_METADATA)
 
     async def peek_stage(self, stage: str) -> set[int]:
-        await self.release_due(stage)
         members = await self._redis.smembers(stage)
         return {int(member) for member in members}
 
     async def stage_size(self, stage: str) -> int:
-        await self.release_due(stage)
         return int(await self._redis.scard(stage))
 
     async def stage_work_count(self, stage: str) -> int:
@@ -139,24 +137,27 @@ class TaskQueues:
         return retry_count, moved_to_failed
 
     async def release_due(self, stage: str, *, now: float | None = None) -> int:
-        """Move due delayed retries back into the ready stage set."""
-        delayed_key = _delayed_key(stage)
-        due = await self._redis.zrangebyscore(
-            delayed_key, min=0, max=now if now is not None else time.time()
+        """Atomically move due delayed retries back into the ready stage set."""
+        added = await self._redis.eval(
+            """
+            local due = redis.call("ZRANGEBYSCORE", KEYS[1], 0, ARGV[1])
+            local added = 0
+            for _, doc_id in ipairs(due) do
+                redis.call("ZREM", KEYS[1], doc_id)
+                added = added + redis.call("SADD", KEYS[2], doc_id)
+            end
+            return added
+            """,
+            2,
+            _delayed_key(stage),
+            stage,
+            now if now is not None else time.time(),
         )
-        if not due:
-            return 0
-
-        async with self._redis.pipeline(transaction=True) as pipe:
-            pipe.zrem(delayed_key, *due)
-            pipe.sadd(stage, *due)
-            removed, added = await pipe.execute()
-        log.debug("Released %d delayed retry item(s) into %s", int(removed), stage)
+        if added:
+            log.debug("Released %d delayed retry item(s) into %s", int(added), stage)
         return int(added)
 
     async def pending_count(self) -> dict[str, int]:
-        await self.release_due(self.KEY_OCR)
-        await self.release_due(self.KEY_METADATA)
         async with self._redis.pipeline() as pipe:
             pipe.scard(self.KEY_OCR)
             pipe.scard(self.KEY_METADATA)

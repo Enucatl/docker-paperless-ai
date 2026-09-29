@@ -551,3 +551,45 @@ async def test_snapshot_id_caches_expire_between_operations():
                         await snapshot.get_or_create_custom_field("Name") == identifier
                     )
             assert session.get.await_count == 4
+
+
+@pytest.mark.asyncio
+async def test_pagination_keeps_search_limit_dedup_and_uncached_document_lists():
+    """Limits count unique IDs and document listings start fresh on every call."""
+    async with PaperlessClient("http://unused", "token") as client:
+        client._client.get = AsyncMock(
+            side_effect=[
+                _paged_response([{"id": 1}, {"id": 1}], next_value="next"),
+                _paged_response([{"id": 1}, {"id": 2}, {"id": 3}], next_value="next"),
+                _paged_response([{"id": 4}], next_value="next"),
+                _paged_response([{"id": 5}]),
+                _paged_response([{"id": 6}]),
+            ]
+        )
+        assert await client.search_documents_all("invoice", limit=2) == [1, 2]
+        assert client._client.get.await_count == 2
+        assert await client.iter_all_documents() == [{"id": 4}, {"id": 5}]
+        assert await client.iter_all_documents() == [{"id": 6}]
+        params = [call.kwargs["params"] for call in client._client.get.await_args_list]
+        assert [p["page"] for p in params] == [1, 2, 1, 2, 1]
+        assert [p["page_size"] for p in params] == [2, 2, 100, 100, 100]
+
+
+@pytest.mark.asyncio
+async def test_custom_field_pagination_stops_at_match_and_caches_id():
+    """An existing field on page two prevents creation and further page reads."""
+    async with PaperlessClient("http://unused", "token") as client:
+        client._client.get = AsyncMock(
+            side_effect=[
+                _paged_response([], next_value="next"),
+                _paged_response(
+                    [{"id": 8, "name": "target", "data_type": "date"}],
+                    next_value="next",
+                ),
+            ]
+        )
+        client._client.post = AsyncMock()
+        assert await client.get_or_create_custom_field("target") == 8
+        assert await client.get_or_create_custom_field("target") == 8
+        assert client._client.get.await_count == 2
+        client._client.post.assert_not_awaited()

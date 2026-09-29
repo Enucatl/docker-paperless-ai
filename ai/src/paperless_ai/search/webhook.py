@@ -174,58 +174,53 @@ def _document_preview_url(doc_id: int) -> str:
 
 
 async def _build_chat_sources(source_flags: dict[int, dict[str, bool]]) -> list[dict]:
-    client = _paperless_client.metadata_snapshot() if _paperless_client else None
-    items: list[dict] = []
-    for doc_id, flags in sorted(
-        source_flags.items(),
-        key=lambda item: (not item[1].get("inspected", False), item[0]),
-    ):
-        try:
-            metadata = (
-                await client.get_document_chat_metadata(doc_id)
-                if client is not None
-                else None
-            )
-        except Exception as exc:
-            if not _is_unavailable_chat_source_error(exc):
-                raise
-            log.info("Could not refresh chat source %d: %s", doc_id, exc)
-            metadata = None
-        items.append(
+    """Build sorted live cards through the same refresh path as saved cards."""
+    return await _restore_chat_sources(
+        [
             {
-                **(metadata or {"id": doc_id, "title": f"Document {doc_id}"}),
+                "id": doc_id,
+                "title": f"Document {doc_id}",
                 "matched": bool(flags.get("matched")),
                 "inspected": bool(flags.get("inspected")),
+            }
+            for doc_id, flags in sorted(
+                source_flags.items(),
+                key=lambda item: (not item[1].get("inspected", False), item[0]),
+            )
+        ]
+    )
+
+
+async def _restore_chat_sources(sources: list[dict]) -> list[dict]:
+    """Refresh cards with one request-local lookup per distinct document."""
+    client = _paperless_client.metadata_snapshot() if _paperless_client else None
+    documents: dict[int, dict | None] = {}
+    items: list[dict] = []
+    for source in sources:
+        doc_id = source["id"]
+        if doc_id not in documents:
+            try:
+                documents[doc_id] = (
+                    await client.get_document_chat_metadata(doc_id)
+                    if client is not None
+                    else None
+                )
+            except Exception as exc:
+                if not _is_unavailable_chat_source_error(exc):
+                    raise
+                log.info("Could not refresh chat source %s: %s", doc_id, exc)
+                documents[doc_id] = None
+        metadata = documents[doc_id]
+        items.append(
+            {
+                **source,
+                **(metadata or {}),
                 "available": metadata is not None,
                 "detail_url": _document_detail_url(doc_id),
                 "thumb_url": _document_thumb_url(doc_id),
                 "preview_url": _document_preview_url(doc_id),
             }
         )
-    return items
-
-
-async def _restore_chat_sources(sources: list[dict]) -> list[dict]:
-    """Refresh persisted source cards while retaining deleted-document snapshots."""
-    client = _paperless_client.metadata_snapshot() if _paperless_client else None
-    items: list[dict] = []
-    for source in sources:
-        try:
-            metadata = (
-                await client.get_document_chat_metadata(source["id"])
-                if client is not None
-                else None
-            )
-        except Exception as exc:
-            if not _is_unavailable_chat_source_error(exc):
-                raise
-            log.info("Could not refresh chat source %s: %s", source["id"], exc)
-            metadata = None
-        item = {**source, **(metadata or {}), "available": metadata is not None}
-        item["detail_url"] = _document_detail_url(source["id"])
-        item["thumb_url"] = _document_thumb_url(source["id"])
-        item["preview_url"] = _document_preview_url(source["id"])
-        items.append(item)
     return items
 
 
@@ -298,8 +293,17 @@ async def load_conversation(conversation_id: str, request: Request) -> JSONRespo
     )
     if conversation is None:
         raise HTTPException(status_code=404, detail="Conversation not found")
+    sources = iter(
+        await _restore_chat_sources(
+            [
+                source
+                for message in conversation["messages"]
+                for source in message["sources"]
+            ]
+        )
+    )
     for message in conversation["messages"]:
-        message["sources"] = await _restore_chat_sources(message["sources"])
+        message["sources"] = [next(sources) for _ in message["sources"]]
     return JSONResponse(content=conversation)
 
 

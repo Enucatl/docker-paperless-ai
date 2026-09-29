@@ -130,3 +130,51 @@ async def test_source_programming_errors_propagate(monkeypatch):
 
     with pytest.raises(ValueError, match="bug"):
         await webhook._build_chat_sources({1: {"matched": True}})
+
+
+@pytest.mark.asyncio
+async def test_history_refresh_fetches_each_document_once_per_load(monkeypatch):
+    """Repeated unavailable cards retain their own snapshots and flags."""
+    import copy
+    import json
+    from unittest.mock import Mock
+
+    conversation = {
+        "messages": [
+            {"sources": []},
+            {"sources": [{"id": 1, "title": "First", "matched": True}, {"id": 2}]},
+            {"sources": [{"id": 1, "title": "Second", "inspected": True}, {"id": 2}]},
+        ]
+    }
+    store = SimpleNamespace(
+        load_conversation=AsyncMock(
+            side_effect=lambda *args: copy.deepcopy(conversation)
+        )
+    )
+    client = SimpleNamespace(
+        get_document_chat_metadata=AsyncMock(
+            side_effect=[
+                niquests.ConnectionError("offline"),
+                {"id": 2, "title": "Live"},
+            ]
+            * 2
+        )
+    )
+    owner = SimpleNamespace(metadata_snapshot=Mock(return_value=client))
+    monkeypatch.setattr(webhook, "_paperless_client", owner)
+    monkeypatch.setattr(webhook, "_chat_store", store)
+    for _ in range(2):
+        response = await webhook.load_conversation(
+            "00000000-0000-0000-0000-000000000001", SimpleNamespace(headers={})
+        )
+        messages = json.loads(response.body)["messages"]
+        first, second = messages[1]["sources"], messages[2]["sources"]
+        assert first[0]["title"] == "First" and first[0]["matched"]
+        assert second[0]["title"] == "Second" and second[0]["inspected"]
+        assert not first[0]["available"] and not second[0]["available"]
+        assert first[1]["title"] == second[1]["title"] == "Live"
+        assert first[1]["available"] and second[1]["available"]
+    assert [
+        call.args[0] for call in client.get_document_chat_metadata.await_args_list
+    ] == [1, 2, 1, 2]
+    assert owner.metadata_snapshot.call_count == 2

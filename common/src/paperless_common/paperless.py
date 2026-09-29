@@ -7,6 +7,7 @@ Handles polling, downloading, and patching documents via the API.
 import asyncio
 import logging
 from copy import copy
+from collections.abc import AsyncIterator
 from typing import Any
 
 from paperless_common.languages import LANGUAGES
@@ -177,6 +178,20 @@ class PaperlessClient:
         _raise_for_status(r)
         return r.content
 
+    async def _iter_pages(
+        self, endpoint: str, params: dict[str, Any]
+    ) -> AsyncIterator[dict]:
+        """Yield uncached response pages, leaving collection and limits to callers."""
+        page = params.get("page", 1)
+        while True:
+            r = await self._client.get(endpoint, params={**params, "page": page})
+            _raise_for_status(r)
+            data = r.json()
+            yield data
+            if not data.get("next"):
+                break
+            page += 1
+
     async def _get_all_objects(
         self,
         endpoint: str,
@@ -190,17 +205,8 @@ class PaperlessClient:
                 return cached
 
             items: list[dict] = []
-            page = 1
-            while True:
-                r = await self._client.get(
-                    endpoint, params={"page": page, "page_size": 250}
-                )
-                _raise_for_status(r)
-                data = r.json()
+            async for data in self._iter_pages(endpoint, {"page_size": 250}):
                 items.extend(data["results"])
-                if not data.get("next"):
-                    break
-                page += 1
 
             setattr(self, cache_attr, items)
             log.info("Loaded %d object(s) from %s", len(items), endpoint)
@@ -313,38 +319,22 @@ class PaperlessClient:
 
     async def iter_all_documents(self) -> list[dict]:
         """Page through all documents and return them."""
-        docs, page = [], 1
-        while True:
-            r = await self._client.get(
-                "/api/documents/", params={"page": page, "page_size": 100}
-            )
-            _raise_for_status(r)
-            data = r.json()
-            docs.extend(data["results"])
-            if not data.get("next"):
-                break
-            page += 1
-        return docs
+        return [
+            doc
+            async for data in self._iter_pages("/api/documents/", {"page_size": 100})
+            for doc in data["results"]
+        ]
 
     async def iter_all_documents_brief(self) -> list[dict]:
         """Page through all documents with only the fields needed for cleanup tasks."""
-        docs, page = [], 1
-        while True:
-            r = await self._client.get(
+        return [
+            doc
+            async for data in self._iter_pages(
                 "/api/documents/",
-                params={
-                    "page": page,
-                    "page_size": 250,
-                    "fields": "id,title,correspondent",
-                },
+                {"page_size": 250, "fields": "id,title,correspondent"},
             )
-            _raise_for_status(r)
-            data = r.json()
-            docs.extend(data["results"])
-            if not data.get("next"):
-                break
-            page += 1
-        return docs
+            for doc in data["results"]
+        ]
 
     async def count_documents_for_correspondent(self, correspondent_id: int) -> int:
         r = await self._client.get(
@@ -366,13 +356,7 @@ class PaperlessClient:
         if cached_id is not None:
             return cached_id
         # Page through all fields — the ?name= filter is not reliable in all paperless versions
-        page = 1
-        while True:
-            r = await self._client.get(
-                "/api/custom_fields/", params={"page": page, "page_size": 250}
-            )
-            _raise_for_status(r)
-            data = r.json()
+        async for data in self._iter_pages("/api/custom_fields/", {"page_size": 250}):
             for field in data["results"]:
                 if field["name"] == name:
                     existing_type = field.get("data_type")
@@ -392,9 +376,6 @@ class PaperlessClient:
                     self._custom_field_id_cache[name] = int(field["id"])
                     log.info("Found custom field '%s' (id=%d)", name, field["id"])
                     return field["id"]
-            if not data.get("next"):
-                break
-            page += 1
         r = await self._client.post(
             "/api/custom_fields/", json={"name": name, "data_type": data_type}
         )
@@ -627,33 +608,28 @@ class PaperlessClient:
                 "paperless_ai.search.filter.tag_count": len(tags or []),
             },
         ) as span:
-            page = 1
+            params = await self._build_search_params(
+                query,
+                correspondent=correspondent,
+                document_type=document_type,
+                storage_path=storage_path,
+                tags=tags,
+                year=year,
+                page_size=min(250, limit) if limit else 250,
+            )
+            if params is None:
+                set_span_attributes(
+                    span,
+                    **{
+                        "paperless_ai.search.filter_resolution_failed": True,
+                        "paperless_ai.search.keyword_result_count": 0,
+                    },
+                )
+                return []
             pages_fetched = 0
             doc_ids: list[int] = []
             seen: set[int] = set()
-            while True:
-                params = await self._build_search_params(
-                    query,
-                    correspondent=correspondent,
-                    document_type=document_type,
-                    storage_path=storage_path,
-                    tags=tags,
-                    year=year,
-                    page_size=min(250, limit) if limit else 250,
-                    page=page,
-                )
-                if params is None:
-                    set_span_attributes(
-                        span,
-                        **{
-                            "paperless_ai.search.filter_resolution_failed": True,
-                            "paperless_ai.search.keyword_result_count": 0,
-                        },
-                    )
-                    return []
-                r = await self._client.get("/api/documents/", params=params)
-                _raise_for_status(r)
-                data = r.json()
+            async for data in self._iter_pages("/api/documents/", params):
                 pages_fetched += 1
                 for doc in data.get("results", []):
                     doc_id = int(doc["id"])
@@ -664,9 +640,6 @@ class PaperlessClient:
                             break
                 if limit is not None and len(doc_ids) >= limit:
                     break
-                if not data.get("next"):
-                    break
-                page += 1
             set_span_attributes(
                 span,
                 **{

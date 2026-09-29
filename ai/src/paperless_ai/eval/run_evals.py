@@ -1,6 +1,5 @@
 """Run metadata extraction experiments and Jev semantic evaluation."""
 
-import importlib
 import json
 import logging
 import sys
@@ -10,6 +9,7 @@ from typing import Any
 import yaml
 import pandas as pd
 
+from paperless_ai.agents.smart_graph_agent import SmartDocumentAgent
 from paperless_ai.core.config import AgentConfig
 from paperless_common.telemetry import setup_telemetry
 
@@ -100,15 +100,6 @@ def language_accuracy(output: Any) -> dict[str, float]:
     predicted = output.get("language")
     reference = output.get("reference_language")
     return {"score": float(isinstance(predicted, str) and predicted == reference)}
-
-
-def _build_agent(exp_config: AgentConfig):
-    """Instantiate the configured extraction agent."""
-    module_path, class_name = exp_config.agent_class.rsplit(".", 1)
-    module = importlib.import_module(module_path)
-    agent_class = getattr(module, class_name)
-
-    return agent_class(exp_config)
 
 
 def _load_entries(path: Path, split: str) -> list[dict[str, Any]]:
@@ -222,7 +213,6 @@ async def run_scientific_evaluation(config: AgentConfig, split: str = "test") ->
 
     reset_for_experiments = {
         "name": None,
-        "agent_class": "paperless_ai.agents.smart_graph_agent.SmartDocumentAgent",
         "metadata_model": "gemini/gemini-2.5-flash",
         "chat_model": "gemini/gemini-2.5-flash",
         "metadata_endpoint": None,
@@ -266,7 +256,7 @@ async def run_scientific_evaluation(config: AgentConfig, split: str = "test") ->
                 base_url=config.typesafe_endpoint,
             )
             jev_evaluator = JevMetadataEvaluator(jev_client, config.typesafe_model)
-            agent = _build_agent(experiment_config)
+            agent = SmartDocumentAgent(experiment_config)
 
             async def task(
                 example,
@@ -369,11 +359,10 @@ async def run_scientific_evaluation(config: AgentConfig, split: str = "test") ->
                 ],
                 experiment_name=experiment_config.name,
                 experiment_description=(
-                    f"{experiment_config.agent_class.split('.')[-1]} | "
+                    "SmartDocumentAgent | "
                     f"{experiment_config.metadata_model} | Jev {config.typesafe_model}"
                 ),
                 experiment_metadata={
-                    "agent_class": experiment_config.agent_class,
                     "ocr_method": "layout-parsing",
                     "ocr_endpoint": experiment_config.ocr_endpoint,
                     "metadata_model": experiment_config.metadata_model,

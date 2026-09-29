@@ -4,7 +4,7 @@ Batch runner: orchestrates the Redis-driven document processing pipeline.
 Flow per document:
   1. Fetch document metadata from Paperless API
   2. Download original PDF to a temp file
-  3. Run SmartDocumentAgent (document OCR + metadata extraction)
+  3. Run document OCR and metadata extraction
   4. PATCH Paperless (title, date, correspondent, content, custom fields)
   5. SREM doc_id from Redis queue (only on full success)
 

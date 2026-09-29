@@ -163,7 +163,7 @@ async def test_corpus_language_is_an_evaluation_target_not_agent_input(tmp_path)
 
     with patch.object(module, "EVAL_DATASET_PATH", corpus):
         with patch.object(module, "EXPERIMENTS_YAML_PATH", experiments):
-            with patch.object(module, "_build_agent", return_value=agent):
+            with patch.object(module, "SmartDocumentAgent", return_value=agent):
                 with patch("typesafe_sdk.TypeSafeClient", return_value=typesafe_client):
                     patches = phoenix.patches()
                     for item in patches:
@@ -273,7 +273,7 @@ async def test_each_experiment_has_its_own_client(tmp_path, ocr_endpoint):
     with patch.object(module, "EVAL_DATASET_PATH", corpus):
         with patch.object(module, "EXPERIMENTS_YAML_PATH", experiments):
             with patch.object(
-                module, "_build_agent", return_value=agent
+                module, "SmartDocumentAgent", return_value=agent
             ) as build_agent:
                 with patch("typesafe_sdk.TypeSafeClient", side_effect=clients):
                     patches = phoenix.patches()
@@ -332,7 +332,7 @@ async def test_jev_failure_fails_the_experiment_without_zero_scores(tmp_path, ca
 
     with patch.object(module, "EVAL_DATASET_PATH", corpus):
         with patch.object(module, "EXPERIMENTS_YAML_PATH", experiments):
-            with patch.object(module, "_build_agent", return_value=agent):
+            with patch.object(module, "SmartDocumentAgent", return_value=agent):
                 with patch("typesafe_sdk.TypeSafeClient", return_value=typesafe_client):
                     patches = phoenix.patches()
                     for item in patches:

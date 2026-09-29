@@ -63,7 +63,6 @@ def setup_telemetry(
         from opentelemetry.sdk.resources import Resource
         from opentelemetry.sdk import trace as trace_sdk
         from opentelemetry.sdk.trace.export import SimpleSpanProcessor
-        from openinference.instrumentation.langchain import LangChainInstrumentor
         from openinference.semconv.resource import ResourceAttributes
     except ImportError as exc:
         log.warning("Telemetry packages not available: %s — skipping", exc)
@@ -87,7 +86,6 @@ def setup_telemetry(
     tracer_provider.add_span_processor(SimpleSpanProcessor(exporter))
     trace.set_tracer_provider(tracer_provider)
 
-    LangChainInstrumentor().instrument(tracer_provider=tracer_provider)
     _configured = True
     log.info(
         "Telemetry configured → %s (service=%s project=%s)",

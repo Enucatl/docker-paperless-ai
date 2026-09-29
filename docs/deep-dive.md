@@ -140,9 +140,9 @@ metadata model comparison and its limitations.
 ## Observability and Cost Management
 
 Telemetry is exported through OpenTelemetry when `OTEL_EXPORTER_OTLP_ENDPOINT`
-is set. The shared telemetry helper instruments LangChain, and the application
-adds spans around chat turns, retrieval, and tool execution. Phoenix shows these
-spans and evaluation experiments. Token usage appears when a provider returns it.
+is set. The application adds spans around document parsing, metadata extraction,
+chat turns, retrieval, and tool execution. Phoenix shows these spans and evaluation
+experiments. Token usage appears when a provider returns it.
 
 The shared inference client routes model calls to OpenRouter or configured
 OpenAI-compatible endpoints.

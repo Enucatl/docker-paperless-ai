@@ -4,7 +4,6 @@ import json
 import logging
 import re
 import time
-from abc import ABC, abstractmethod
 from typing import Literal, Optional
 
 import datetime as _dt
@@ -12,11 +11,11 @@ import datetime as _dt
 from json_repair import repair_json
 from pydantic import BaseModel, Field, field_validator
 
-from paperless_ai.agents.base import AgentResult, BaseDocumentAgent, DocumentMetadata
-from paperless_ai.agents.state import AgentState
+from paperless_ai.agents.base import AgentResult, DocumentMetadata
 from paperless_ai.core.config import AgentConfig
 from paperless_ai.inference import complete
 from paperless_common.languages import LANGUAGES
+from paperless_common.telemetry import start_span
 
 log = logging.getLogger(__name__)
 
@@ -220,13 +219,8 @@ def _metadata_response_format_tier(config: AgentConfig) -> tuple[str, object | N
     return system_prompt, None
 
 
-# ---------------------------------------------------------------------------
-# Extraction Strategy Pattern: separate LLM extraction from orchestration
-# ---------------------------------------------------------------------------
-
-
-class BaseExtractionStrategy(ABC):
-    """Abstract base for metadata extraction strategies."""
+class StructuredOutputStrategy:
+    """Standard LLM extraction using JSON schema / response_format."""
 
     def _fallback_parse(self, raw: str) -> dict:
         """Robust fallback parser for handling malformed JSON output.
@@ -249,15 +243,6 @@ class BaseExtractionStrategy(ABC):
         except Exception:
             log.debug("Could not repair JSON output: %s", raw[:200])
             return {}
-
-    @abstractmethod
-    async def extract(self, text: str, config: AgentConfig) -> _ExtractedMetadata:
-        """Extract metadata from text using this strategy."""
-        pass
-
-
-class StructuredOutputStrategy(BaseExtractionStrategy):
-    """Standard LLM extraction using JSON schema / response_format."""
 
     async def extract(self, text: str, config: AgentConfig) -> _ExtractedMetadata:
         """Use standard LLM with response_format tiering."""
@@ -301,106 +286,44 @@ class StructuredOutputStrategy(BaseExtractionStrategy):
                 return _ExtractedMetadata.model_validate(data)
 
 
-# ---------------------------------------------------------------------------
-# Graph node implementations (plain async functions — no class needed)
-# ---------------------------------------------------------------------------
-
-
-async def _extract_metadata(
-    state: AgentState, config: AgentConfig, strategy: BaseExtractionStrategy
-) -> dict:
-    """Node 4: Join all text chunks and extract metadata using the provided strategy."""
-    chunks = state["extracted_text_chunks"]
-    full_text = "\n\n".join(chunks)
-    if not full_text.strip():
-        raise ValueError("OCR returned an empty transcript")
-
-    # Use the strategy to extract metadata
-    metadata_context = build_metadata_document_context(full_text)
-    extracted = await strategy.extract(metadata_context, config)
-
-    # Store final metadata back into state for the agent to read after graph completion
-    return {
-        "_extracted_metadata": extracted.model_dump(mode="json"),
-        "_full_text": full_text,
-        "_metadata_context": metadata_context,
-    }
-
-
-class SmartDocumentAgent(BaseDocumentAgent):
+class SmartDocumentAgent:
     """Complete-document parsing followed by metadata extraction."""
 
     def __init__(
         self,
         config: AgentConfig,
-        extraction_strategy: Optional[BaseExtractionStrategy] = None,
+        extraction_strategy: Optional[StructuredOutputStrategy] = None,
     ):
         self._config = config
         self._strategy = extraction_strategy or StructuredOutputStrategy()
-        self._graph = self._build_graph()
-
-    def _build_graph(self):
-        try:
-            from langgraph.graph import END, StateGraph
-        except ImportError as e:
-            raise ImportError(
-                "langgraph is required for SmartDocumentAgent: pip install langgraph"
-            ) from e
-
-        config = self._config
-        strategy = self._strategy
-
-        async def parse_document(state: AgentState) -> dict:
-            """Use the same complete-document parser as the production worker."""
-            from paperless_ai.agents.paddle_ocr import run_paddle_ocr
-
-            text, _, pages, _ = await run_paddle_ocr(state["file_path"], config)
-            return {"extracted_text_chunks": [text], "total_pages": pages}
-
-        async def extract_metadata(state: AgentState) -> dict:
-            """Extract metadata from the complete transcript."""
-            return await _extract_metadata(state, config, strategy)
-
-        workflow = StateGraph(AgentState)
-        workflow.add_node("parse_document", parse_document)
-        workflow.add_node("extract_metadata", extract_metadata)
-        workflow.set_entry_point("parse_document")
-        workflow.add_edge("parse_document", "extract_metadata")
-        workflow.add_edge("extract_metadata", END)
-
-        return workflow.compile()
 
     async def process(self, file_path: str, existing_hints: dict) -> AgentResult:
-        t_start = time.time()
-        initial_state: AgentState = {
-            "file_path": file_path,
-            "total_pages": 0,
-            "extracted_text_chunks": [],
-        }
-        final_state = await self._graph.ainvoke(initial_state)
+        """Parse a document and return metadata with its full OCR context."""
+        from paperless_ai.agents.paddle_ocr import run_paddle_ocr
 
-        # Retrieve results stored by extract_metadata node
-        extracted_dict = final_state.get("_extracted_metadata", {})
-        full_text = final_state.get(
-            "_full_text", "\n\n".join(final_state.get("extracted_text_chunks", []))
-        )
-        metadata_context = final_state.get(
-            "_metadata_context", build_metadata_document_context(full_text)
-        )
+        t_start = time.time()
+        with start_span("parse_document"):
+            full_text, _, pages, _ = await run_paddle_ocr(file_path, self._config)
+        if not full_text.strip():
+            raise ValueError("OCR returned an empty transcript")
+
+        metadata_context = build_metadata_document_context(full_text)
+        with start_span("extract_metadata"):
+            extracted = await self._strategy.extract(metadata_context, self._config)
 
         log.info(
             "Smart agent: done — title=%r date=%r correspondent=%r",
-            extracted_dict.get("title"),
-            extracted_dict.get("date"),
-            extracted_dict.get("correspondent"),
+            extracted.title,
+            extracted.date,
+            extracted.correspondent,
         )
 
         metadata = DocumentMetadata(
-            title=extracted_dict.get("title"),
-            document_date=extracted_dict.get("date"),
-            correspondent=extracted_dict.get("correspondent"),
-            summary=extracted_dict.get("summary"),
-            languages=extracted_dict.get("languages"),
+            title=extracted.title,
+            document_date=extracted.date.isoformat() if extracted.date else None,
+            correspondent=extracted.correspondent,
+            summary=extracted.summary,
+            languages=extracted.languages,
             full_ocr_transcript=full_text,
         )
 
@@ -408,7 +331,7 @@ class SmartDocumentAgent(BaseDocumentAgent):
             metadata=metadata,
             metadata_context=metadata_context,
             elapsed_s=round(time.time() - t_start, 1),
-            pages=final_state.get("total_pages", 0),
+            pages=pages,
             chars=len(full_text),
             ocr_method="layout-parsing",
         )

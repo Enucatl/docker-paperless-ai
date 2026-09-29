@@ -206,9 +206,6 @@ class AgentConfig(BaseSettings):
         ),
     )
 
-    # Dotted import path to the agent class to use in eval experiments.
-    agent_class: str = "paperless_ai.agents.smart_graph_agent.SmartDocumentAgent"
-
     # Extra kwargs to forward to OpenAI-compatible inference for metadata extraction calls.
     metadata_extra_kwargs: Optional[Dict[str, Any]] = Field(
         default=None,

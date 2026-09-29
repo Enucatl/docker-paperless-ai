@@ -17,12 +17,10 @@ import pytest
 from pydantic import ValidationError
 
 from paperless_ai.agents.smart_graph_agent import (
-    BaseExtractionStrategy,
     SmartDocumentAgent,
     StructuredOutputStrategy,
     _ExtractedMetadata,
     build_metadata_document_context,
-    _extract_metadata,
 )
 from paperless_ai.core.config import AgentConfig
 from shared_inference import CompletionResult, Usage
@@ -377,7 +375,7 @@ class TestDateFieldValidation:
             )
 
 
-class FixedMetadataStrategy(BaseExtractionStrategy):
+class FixedMetadataStrategy:
     """Test strategy that returns a Pydantic date field."""
 
     async def extract(self, text: str, config: AgentConfig) -> _ExtractedMetadata:
@@ -391,69 +389,65 @@ class FixedMetadataStrategy(BaseExtractionStrategy):
 
 
 @pytest.mark.asyncio
-async def test_extract_metadata_state_serializes_date_as_string(mock_config) -> None:
-    """LangGraph state stores JSON-safe metadata for DocumentMetadata."""
-    state = {"extracted_text_chunks": ["Sample OCR text"]}
-
-    result = await _extract_metadata(state, mock_config, FixedMetadataStrategy())
-
-    assert result["_extracted_metadata"]["date"] == "2024-01-15"
-    assert result["_extracted_metadata"]["languages"] == ["en"]
-    assert result["_metadata_context"] == "Sample OCR text"
-
-
-@pytest.mark.asyncio
-async def test_languages_propagate_to_public_agent_result(mock_config) -> None:
-    """Languages survive graph state conversion to the public result."""
-    state = await _extract_metadata(
-        {"extracted_text_chunks": ["Stored OCR text"]},
-        mock_config,
-        FixedMetadataStrategy(),
-    )
-    graph = MagicMock()
-    graph.ainvoke = AsyncMock(return_value=state)
-    with (
-        patch.object(SmartDocumentAgent, "_build_graph", return_value=graph),
+async def test_metadata_propagates_to_public_agent_result(mock_config) -> None:
+    """Direct extraction preserves fields, serializes dates, and reports OCR stats."""
+    with patch(
+        "paperless_ai.agents.paddle_ocr.run_paddle_ocr",
+        new=AsyncMock(return_value=("Stored OCR text", {}, 3, 0.1)),
     ):
-        result = await SmartDocumentAgent(mock_config).process("unused.pdf", {})
+        result = await SmartDocumentAgent(mock_config, FixedMetadataStrategy()).process(
+            "unused.pdf", {}
+        )
 
+    assert result.metadata.title == "Test"
+    assert result.metadata.document_date == "2024-01-15"
+    assert result.metadata.correspondent == "Acme"
+    assert result.metadata.summary == "Test summary."
     assert result.metadata.languages == ["en"]
-    assert result.metadata.model_dump()["languages"] == ["en"]
     assert result.metadata.full_ocr_transcript == "Stored OCR text"
+    assert result.metadata_context == "Stored OCR text"
+    assert result.pages == 3
+    assert result.chars == len("Stored OCR text")
 
 
 @pytest.mark.asyncio
-async def test_metadata_context_is_the_strategy_input(mock_config) -> None:
-    """The context returned for Jev is exactly the extraction strategy input."""
-    seen: list[str] = []
-
-    class CapturingStrategy(BaseExtractionStrategy):
-        async def extract(self, text: str, config: AgentConfig) -> _ExtractedMetadata:
-            seen.append(text)
-            return _ExtractedMetadata()
-
-    state = {"extracted_text_chunks": ["A" * 7000]}
-    result = await _extract_metadata(state, mock_config, CapturingStrategy())
-
-    assert seen == [result["_metadata_context"]]
-
-
-@pytest.mark.asyncio
-async def test_metadata_context_preserves_the_complete_ocr_transcript(
-    mock_config,
-) -> None:
-    """Metadata extraction receives all OCR text unless explicitly bounded."""
+async def test_metadata_context_is_the_complete_strategy_input(mock_config) -> None:
+    """Jev and extraction receive the same complete OCR transcript."""
     text = "A" * 7000
+    strategy = StructuredOutputStrategy()
+    with (
+        patch(
+            "paperless_ai.agents.paddle_ocr.run_paddle_ocr",
+            new=AsyncMock(return_value=(text, {}, 1, 0.1)),
+        ),
+        patch.object(
+            strategy, "extract", new=AsyncMock(return_value=_ExtractedMetadata())
+        ) as extract,
+    ):
+        result = await SmartDocumentAgent(mock_config, strategy).process(
+            "unused.pdf", {}
+        )
 
-    class CapturingStrategy(BaseExtractionStrategy):
-        async def extract(self, text: str, config: AgentConfig) -> _ExtractedMetadata:
-            return _ExtractedMetadata()
+    extract.assert_awaited_once_with(text, mock_config)
+    assert result.metadata_context == text
+    assert result.metadata.document_date is None
 
-    result = await _extract_metadata(
-        {"extracted_text_chunks": [text]}, mock_config, CapturingStrategy()
-    )
 
-    assert result["_metadata_context"] == text
+@pytest.mark.asyncio
+async def test_empty_ocr_fails_before_extraction(mock_config) -> None:
+    """Do not send an empty OCR transcript to metadata inference."""
+    strategy = StructuredOutputStrategy()
+    with (
+        patch(
+            "paperless_ai.agents.paddle_ocr.run_paddle_ocr",
+            new=AsyncMock(return_value=(" \n", {}, 1, 0.1)),
+        ),
+        patch.object(strategy, "extract", new=AsyncMock()) as extract,
+    ):
+        with pytest.raises(ValueError, match="OCR returned an empty transcript"):
+            await SmartDocumentAgent(mock_config, strategy).process("unused.pdf", {})
+
+    extract.assert_not_awaited()
 
 
 def test_metadata_reasoning_default_is_independent_of_ocr(monkeypatch) -> None:

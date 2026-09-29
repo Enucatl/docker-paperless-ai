@@ -55,7 +55,7 @@ corresponding dataset splits. If rebuilt datasets retain stale paths, run
   the search/webhook runtime.
 - `ai/src/paperless_ai/core/`: configuration, runner, and Paperless client
   compatibility layer.
-- `ai/src/paperless_ai/agents/`: OCR and metadata LangGraph pipelines.
+- `ai/src/paperless_ai/agents/`: OCR and metadata extraction.
 - `ai/src/paperless_ai/eval/`: evaluation datasets, experiments, and metrics.
 - `common/src/paperless_common/`: shared Paperless, queue, secrets, and
   telemetry helpers.

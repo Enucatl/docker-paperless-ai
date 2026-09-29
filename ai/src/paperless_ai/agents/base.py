@@ -1,11 +1,5 @@
-"""
-Base types and abstract class for document processing agents.
+"""Document metadata and processing results."""
 
-All agents accept a file path on disk (memory-safe) and return an AgentResult
-containing extracted DocumentMetadata and basic telemetry.
-"""
-
-from abc import ABC, abstractmethod
 from typing import Optional
 
 from pydantic import BaseModel
@@ -31,22 +25,3 @@ class AgentResult(BaseModel):
     pages: int = 0
     chars: int = 0
     ocr_method: str = "layout-parsing"
-
-
-class BaseDocumentAgent(ABC):
-    """Abstract base class for all document processing agents."""
-
-    @abstractmethod
-    async def process(self, file_path: str, existing_hints: dict) -> AgentResult:
-        """
-        Process a document file and return extracted metadata.
-
-        Args:
-            file_path: Absolute path to the document file on disk.
-            existing_hints: Dict with optional keys 'title', 'date', 'correspondent'
-                            pre-populated from Paperless for the LLM's context.
-
-        Returns:
-            AgentResult with populated metadata and telemetry fields.
-        """
-        ...

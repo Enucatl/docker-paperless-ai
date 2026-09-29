@@ -33,21 +33,31 @@ if TYPE_CHECKING:
 log = logging.getLogger(__name__)
 
 # Set by SIGTERM/SIGINT handler in cli.py; checked between documents.
-_shutdown_requested = False
+_shutdown_requested = asyncio.Event()
 
 
 def request_shutdown() -> None:
-    global _shutdown_requested
-    _shutdown_requested = True
+    """Stop new work and wake polling workers."""
+    _shutdown_requested.set()
 
 
 def clear_shutdown_request() -> None:
+    """Start a fresh lifecycle, possibly on a new event loop."""
     global _shutdown_requested
-    _shutdown_requested = False
+    _shutdown_requested = asyncio.Event()
 
 
 def is_shutdown_requested() -> bool:
-    return _shutdown_requested
+    """Return whether the current lifecycle is stopping."""
+    return _shutdown_requested.is_set()
+
+
+async def wait_for_shutdown(timeout: float | None = None) -> None:
+    """Wait for shutdown, or for the next polling interval."""
+    try:
+        await asyncio.wait_for(_shutdown_requested.wait(), timeout=timeout)
+    except TimeoutError:
+        pass
 
 
 # Tracks which local server URLs are currently known to be offline.
@@ -225,7 +235,7 @@ async def run_ocr_batch(
     sem = asyncio.Semaphore(config.ocr_concurrency)
 
     async def _process_one(doc_id: int) -> bool | None:
-        if _shutdown_requested:
+        if is_shutdown_requested():
             return False
         doc = await client.get_document(doc_id)
         if doc is None:
@@ -374,7 +384,7 @@ async def run_metadata_batch(
 
     async def _process_one(doc_id: int) -> bool | None:
         nonlocal language_tag_ids
-        if _shutdown_requested:
+        if is_shutdown_requested():
             return False
         doc = await client.get_document_with_content(doc_id)
         if doc is None:

@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock
 import niquests
 import pytest
 
-from paperless_ai.search import webhook
+from paperless_ai.core import runtime
 
 
 class _Response:
@@ -63,9 +63,9 @@ async def test_initialize_paperless_retries_transient_setup_failure(
 ) -> None:
     client = _PaperlessClient(workflow_failures=1)
     sleep = AsyncMock()
-    monkeypatch.setattr(webhook.asyncio, "sleep", sleep)
+    monkeypatch.setattr(runtime.asyncio, "sleep", sleep)
 
-    result = await webhook._initialize_paperless(
+    result = await runtime.initialize_paperless(
         client, _config(), retry_delay=0.01, max_retry_delay=0.01
     )
 
@@ -84,9 +84,9 @@ async def test_initialize_paperless_retries_transient_setup_failure(
 async def test_initialize_paperless_retries_api_startup_failure(monkeypatch) -> None:
     client = _PaperlessClient(api_failures=1)
     sleep = AsyncMock()
-    monkeypatch.setattr(webhook.asyncio, "sleep", sleep)
+    monkeypatch.setattr(runtime.asyncio, "sleep", sleep)
 
-    result = await webhook._initialize_paperless(
+    result = await runtime.initialize_paperless(
         client, _config(), retry_delay=0.01, max_retry_delay=0.01
     )
 
@@ -110,9 +110,19 @@ async def test_initialize_paperless_does_not_retry_authentication_failure(
         _client=SimpleNamespace(get=AsyncMock(side_effect=AuthenticationError()))
     )
     sleep = AsyncMock()
-    monkeypatch.setattr(webhook.asyncio, "sleep", sleep)
+    monkeypatch.setattr(runtime.asyncio, "sleep", sleep)
 
     with pytest.raises(AuthenticationError):
-        await webhook._initialize_paperless(client, _config())
+        await runtime.initialize_paperless(client, _config())
 
     sleep.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_initialize_paperless_preserves_disabled_workflows() -> None:
+    """The integration harness can disable workflow management."""
+    config = _config()
+    config.manage_paperless_workflows = False
+    client = _PaperlessClient()
+    assert await runtime.initialize_paperless(client, config) == (21, 22, 23, 24)
+    assert client.workflow_calls == 0

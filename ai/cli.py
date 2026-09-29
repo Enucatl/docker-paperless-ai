@@ -65,13 +65,18 @@ async def main_async(args: argparse.Namespace) -> None:
     from paperless_ai.core.runner import (
         purge_ai_notes,
         request_shutdown,
-        is_shutdown_requested,
+        clear_shutdown_request,
+        wait_for_shutdown,
+        close_model_probe_session,
         run_ocr_batch,
         run_metadata_batch,
     )
     from paperless_common.telemetry import setup_telemetry
     from paperless_common.queue import TaskQueues
 
+    from paperless_ai.core.runtime import initialize_paperless, workers
+
+    clear_shutdown_request()
     config = AgentConfig.from_env()
 
     if args.dry_run:
@@ -270,47 +275,13 @@ async def main_async(args: argparse.Namespace) -> None:
             )
             return
 
-        if config.manage_paperless_workflows:
-            try:
-                added_wf_id, updated_wf_id = await client.ensure_ai_workflows(
-                    tag_ocr=config.tag_ocr,
-                    webhook_url=config.paperless_webhook_url,
-                    webhook_secret=config.webhook_secret,
-                )
-                log.info(
-                    "Paperless workflows ready: document_added=%d document_updated=%d",
-                    added_wf_id,
-                    updated_wf_id,
-                )
-            except Exception as e:
-                log.error("Failed to ensure Paperless workflows: %s", e)
-                sys.exit(1)
-
-        # Set up custom fields
-        try:
-            custom_field_id = await client.get_or_create_custom_field(
-                "ai_processed", data_type="date"
-            )
-            ai_summary_field_id = await client.get_or_create_custom_field(
-                "ai_summary", data_type="longtext"
-            )
-            ai_result_field_id = await client.get_or_create_custom_field(
-                "ai_result", data_type="longtext"
-            )
-            ai_ocr_output_field_id = await client.get_or_create_custom_field(
-                "ai_ocr_output", data_type="longtext"
-            )
-        except Exception as e:
-            log.error("Failed to resolve custom fields: %s", e)
-            sys.exit(1)
-
-        log.info(
-            "Custom fields: ai_processed=%d ai_summary=%d ai_result=%d ai_ocr_output=%d",
+        field_ids = await initialize_paperless(client, config)
+        (
             custom_field_id,
             ai_summary_field_id,
             ai_result_field_id,
             ai_ocr_output_field_id,
-        )
+        ) = field_ids
 
         # Set up Redis queues
         queues = TaskQueues(config.redis_url)
@@ -339,7 +310,7 @@ async def main_async(args: argparse.Namespace) -> None:
                     meta_s + meta_f,
                 )
             else:
-                # Watch mode: three concurrent workers, each polling their queue
+                # Watch mode: two concurrent workers, each polling their queue
                 def _request_shutdown(signum: int, frame: object) -> None:
                     log.info(
                         "Received %s — will stop after current document completes",
@@ -355,49 +326,13 @@ async def main_async(args: argparse.Namespace) -> None:
                     config.poll_interval,
                 )
 
-                async def _ocr_worker() -> None:
-                    while not is_shutdown_requested():
-                        try:
-                            s, f = await run_ocr_batch(
-                                client, config, queues, ai_ocr_output_field_id
-                            )
-                            if s or f:
-                                log.info("OCR worker: %d ok / %d failed", s, f)
-                        except Exception as e:
-                            log.error("OCR worker error: %s", e)
-                        _write_heartbeat()
-                        if is_shutdown_requested():
-                            break
-                        try:
-                            await asyncio.sleep(config.poll_interval)
-                        except asyncio.CancelledError:
-                            break
-
-                async def _metadata_worker() -> None:
-                    while not is_shutdown_requested():
-                        try:
-                            s, f = await run_metadata_batch(
-                                client,
-                                config,
-                                queues,
-                                custom_field_id,
-                                ai_summary_field_id,
-                                ai_result_field_id,
-                            )
-                            if s or f:
-                                log.info("Metadata worker: %d ok / %d failed", s, f)
-                        except Exception as e:
-                            log.error("Metadata worker error: %s", e)
-                        if is_shutdown_requested():
-                            break
-                        try:
-                            await asyncio.sleep(config.poll_interval)
-                        except asyncio.CancelledError:
-                            break
-
-                await asyncio.gather(_ocr_worker(), _metadata_worker())
+                async with workers(
+                    client, config, queues, field_ids, lambda stage: _write_heartbeat()
+                ):
+                    await wait_for_shutdown()
                 log.info("Shutdown complete.")
         finally:
+            await close_model_probe_session()
             await queues.close()
 
 
@@ -424,7 +359,7 @@ def main() -> None:
     mode.add_argument(
         "--watch",
         action="store_true",
-        help="Poll continuously with three concurrent workers (default via Docker)",
+        help="Poll continuously with two concurrent workers (default via Docker)",
     )
     mode.add_argument(
         "--eval",

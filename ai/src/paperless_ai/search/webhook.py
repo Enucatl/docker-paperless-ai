@@ -24,7 +24,8 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from paperless_common.secrets import read_secret
 
 from paperless_ai.core.config import AgentConfig
-from paperless_common.paperless import PaperlessClient, _raise_for_status
+from paperless_ai.core.runtime import initialize_paperless, workers
+from paperless_common.paperless import PaperlessClient
 from paperless_common.telemetry import setup_telemetry
 from paperless_common.queue import TaskQueues
 
@@ -45,15 +46,6 @@ _worker_ready: bool = False
 _worker_setup_error: str | None = None
 
 
-def _is_retryable_paperless_error(exc: Exception) -> bool:
-    """Return whether a Paperless startup error may be transient."""
-    response = getattr(exc, "response", None)
-    status_code = getattr(response, "status_code", None)
-    if status_code is not None:
-        return status_code in {408, 429} or status_code >= 500
-    return isinstance(exc, niquests.RequestException)
-
-
 def _is_unavailable_chat_source_error(exc: Exception) -> bool:
     """Return whether a document metadata failure should retain an unavailable source."""
     response = getattr(exc, "response", None)
@@ -61,77 +53,6 @@ def _is_unavailable_chat_source_error(exc: Exception) -> bool:
     if status_code is not None:
         return status_code in {401, 403, 404, 408, 429} or status_code >= 500
     return isinstance(exc, niquests.RequestException)
-
-
-async def _initialize_paperless(
-    client: PaperlessClient,
-    config: AgentConfig,
-    *,
-    retry_delay: float = 1.0,
-    max_retry_delay: float = 60.0,
-) -> tuple[int, int, int, int]:
-    """Wait for Paperless and ensure the AI-managed resources are ready."""
-    attempt = 0
-    while True:
-        attempt += 1
-        try:
-            response = await client._client.get("/api/")
-            _raise_for_status(response)
-            log.info(
-                "Paperless API reachable (version: %s)",
-                response.headers.get("x-version", "unknown"),
-            )
-
-            if config.manage_paperless_workflows:
-                added_wf_id, updated_wf_id = await client.ensure_ai_workflows(
-                    tag_ocr=config.tag_ocr,
-                    webhook_url=config.paperless_webhook_url,
-                    webhook_secret=config.webhook_secret,
-                )
-                log.info(
-                    "Paperless workflows ready: document_added=%d document_updated=%d",
-                    added_wf_id,
-                    updated_wf_id,
-                )
-            else:
-                added_wf_id = updated_wf_id = 0
-
-            custom_field_id = await client.get_or_create_custom_field(
-                "ai_processed", data_type="date"
-            )
-            ai_summary_field_id = await client.get_or_create_custom_field(
-                "ai_summary", data_type="longtext"
-            )
-            ai_result_field_id = await client.get_or_create_custom_field(
-                "ai_result", data_type="longtext"
-            )
-            ai_ocr_output_field_id = await client.get_or_create_custom_field(
-                "ai_ocr_output", data_type="longtext"
-            )
-            log.info(
-                "Custom fields: ai_processed=%d ai_summary=%d ai_result=%d ai_ocr_output=%d",
-                custom_field_id,
-                ai_summary_field_id,
-                ai_result_field_id,
-                ai_ocr_output_field_id,
-            )
-            return (
-                custom_field_id,
-                ai_summary_field_id,
-                ai_result_field_id,
-                ai_ocr_output_field_id,
-            )
-        except Exception as exc:
-            if not _is_retryable_paperless_error(exc):
-                raise
-            delay = min(max_retry_delay, retry_delay * 2 ** min(attempt - 1, 6))
-            log.warning(
-                "Paperless startup attempt %d failed: %s; retrying in %.1fs",
-                attempt,
-                exc,
-                delay,
-            )
-            await asyncio.sleep(delay)
 
 
 @asynccontextmanager
@@ -172,13 +93,7 @@ async def lifespan(app: FastAPI):
     log.info("Chat history database migrations are ready")
     _queues = TaskQueues(redis_url)
 
-    from paperless_ai.core.runner import (
-        clear_shutdown_request,
-        close_model_probe_session,
-        request_shutdown,
-        run_metadata_batch,
-        run_ocr_batch,
-    )
+    from paperless_ai.core.runner import clear_shutdown_request
 
     _worker_ready = False
     _worker_setup_error = None
@@ -186,92 +101,35 @@ async def lifespan(app: FastAPI):
     _worker_tasks = []
     clear_shutdown_request()
 
-    log.info("Checking Paperless API connectivity and managed resources...")
-    (
-        custom_field_id,
-        ai_summary_field_id,
-        ai_result_field_id,
-        ai_ocr_output_field_id,
-    ) = await _initialize_paperless(_paperless_client, _config)
+    try:
+        log.info("Checking Paperless API connectivity and managed resources...")
+        field_ids = await initialize_paperless(_paperless_client, _config)
 
-    _chat_copilot = None
-    log.info("Chat copilot enabled lazily")
+        _chat_copilot = None
+        log.info("Chat copilot enabled lazily")
 
-    def _mark_worker_heartbeat(stage: str) -> None:
-        _worker_heartbeats[stage] = time.time()
+        def _mark_worker_heartbeat(stage: str) -> None:
+            _worker_heartbeats[stage] = time.time()
 
-    async def _sleep_or_stop() -> bool:
-        try:
-            await asyncio.sleep(_config.poll_interval)
-            return False
-        except asyncio.CancelledError:
-            return True
+        async with workers(
+            _paperless_client, _config, _queues, field_ids, _mark_worker_heartbeat
+        ) as tasks:
+            _worker_tasks = tasks
+            _worker_ready = True
+            log.info("Copilot service ready")
+            yield
 
-    async def _ocr_worker() -> None:
-        while True:
-            try:
-                success, failure = await run_ocr_batch(
-                    _paperless_client, _config, _queues, ai_ocr_output_field_id
-                )
-                if success or failure:
-                    log.info("OCR worker: %d ok / %d failed", success, failure)
-            except Exception as exc:
-                log.error("OCR worker error: %s", exc)
-            _mark_worker_heartbeat("ocr")
-            if await _sleep_or_stop():
-                return
-
-    async def _metadata_worker() -> None:
-        while True:
-            try:
-                success, failure = await run_metadata_batch(
-                    _paperless_client,
-                    _config,
-                    _queues,
-                    custom_field_id,
-                    ai_summary_field_id,
-                    ai_result_field_id,
-                )
-                if success or failure:
-                    log.info("Metadata worker: %d ok / %d failed", success, failure)
-            except Exception as exc:
-                log.error("Metadata worker error: %s", exc)
-            _mark_worker_heartbeat("metadata")
-            if await _sleep_or_stop():
-                return
-
-    now = time.time()
-    _worker_heartbeats = {"ocr": now, "metadata": now}
-    _worker_tasks = [
-        asyncio.create_task(_ocr_worker(), name="ocr-worker"),
-        asyncio.create_task(_metadata_worker(), name="metadata-worker"),
-    ]
-    _worker_ready = True
-    log.info("Copilot service ready")
-    yield
-
-    request_shutdown()
-    if _worker_tasks:
-        try:
-            await asyncio.wait_for(
-                asyncio.gather(*_worker_tasks, return_exceptions=True),
-                timeout=30,
-            )
-        except asyncio.TimeoutError:
-            for task in _worker_tasks:
-                task.cancel()
-            await asyncio.gather(*_worker_tasks, return_exceptions=True)
-    await close_model_probe_session()
-    if _queues is not None:
-        await _queues.close()
-    if _paperless_client is not None:
-        await _paperless_client.aclose()
-    _chat_copilot = None
-    _chat_store = None
-    _config = None
-    _worker_tasks = []
-    _worker_ready = False
-    _worker_setup_error = None
+    finally:
+        if _queues is not None:
+            await _queues.close()
+        if _paperless_client is not None:
+            await _paperless_client.aclose()
+        _chat_copilot = None
+        _chat_store = None
+        _config = None
+        _worker_tasks = []
+        _worker_ready = False
+        _worker_setup_error = None
 
 
 app = FastAPI(lifespan=lifespan)

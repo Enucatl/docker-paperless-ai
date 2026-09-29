@@ -20,7 +20,6 @@ from paperless_ai.agents.smart_graph_agent import (
     SmartDocumentAgent,
     StructuredOutputStrategy,
     _ExtractedMetadata,
-    build_metadata_document_context,
 )
 from paperless_ai.core.config import AgentConfig
 from shared_inference import CompletionResult, Usage
@@ -51,7 +50,6 @@ def mock_config():
     config.metadata_endpoint = None
     config.metadata_prompt = "Extract metadata from the following text:"
     config.metadata_response_format = "auto"
-    config.llm_retries = 2
     config.get_metadata_kwargs = lambda: {}
     return config
 
@@ -59,25 +57,6 @@ def mock_config():
 # ---------------------------------------------------------------------------
 # Tests: _fallback_parse (json-repair integration)
 # ---------------------------------------------------------------------------
-
-
-def test_build_metadata_context_keeps_start_middle_and_end() -> None:
-    text = "A" * 3000 + "B" * 3000 + "C" * 3000 + "D" * 3000 + "E" * 3000
-
-    result = build_metadata_document_context(
-        text,
-        max_chars=1000,
-        start_chars=200,
-        end_chars=200,
-        middle_windows=3,
-    )
-
-    assert result.startswith("A" * 200)
-    assert "B" * 100 in result
-    assert "C" * 100 in result
-    assert "D" * 100 in result
-    assert result.endswith("E" * 200)
-    assert len(result) <= 1020
 
 
 def test_metadata_response_format_defaults_to_auto() -> None:

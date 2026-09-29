@@ -87,7 +87,6 @@ variants include `OPENROUTER_API_KEY_FILE`, `GOOGLE_API_KEY_FILE`,
 | `OPENAI_API_KEY` | *(none)* | For OpenAI / vLLM models |
 | `POLL_INTERVAL` | `300` | Seconds between polls in watch mode |
 | `OCR_CONCURRENCY` | `4` | Documents processed concurrently in OCR batches |
-| `LLM_RETRIES` | `3` | Retries for model requests |
 | `STAGE_MAX_ATTEMPTS` | `3` | Attempts before moving a document to the failed queue |
 | `TAG_OCR` | `ai:run-ocr` | Tag for documents entering the OCR stage |
 | `TAG_METADATA` | `ai:run-metadata` | Tag for documents entering the metadata stage |

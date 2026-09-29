@@ -300,7 +300,6 @@ services:
       - INFERENCE_CHAT_MAX_TOKENS
       - INFERENCE_CHAT_EXTRA_KWARGS
       - OCR_CONCURRENCY
-      - LLM_RETRIES
       # - DRY_RUN=false
 
       # OpenTelemetry → Arize Phoenix (local, no external data sent)
@@ -405,7 +404,6 @@ services:
       - OPENAI_API_KEY_FILE=/run/secrets/openai_api_key
       - HF_TOKEN_FILE=/run/secrets/hf_token
       - TYPESAFE_API_KEY_FILE=/run/secrets/typesafe_api_key
-      - LLM_RETRIES
       - INFERENCE_METADATA_REASONING_EFFORT
       - INFERENCE_METADATA_TEMPERATURE
       - INFERENCE_METADATA_MAX_TOKENS

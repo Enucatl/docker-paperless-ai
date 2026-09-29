@@ -42,7 +42,6 @@ async def complete(
     **kwargs: Any,
 ) -> CompletionResult:
     """Send one non-streaming completion, dropping legacy routing-only options."""
-    kwargs.pop("num_retries", None)
     kwargs.pop("metadata", None)
     return await get_client(_endpoint(endpoint), domain).complete(
         model=model.removeprefix("openrouter/"), messages=messages, **kwargs

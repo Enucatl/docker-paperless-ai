@@ -135,58 +135,6 @@ def _field_instructions_from_schema() -> str:
     return "\n".join(lines)
 
 
-def build_metadata_document_context(
-    text: str,
-    *,
-    max_chars: int | None = None,
-    start_chars: int = 2500,
-    end_chars: int = 2000,
-    middle_windows: int = 3,
-) -> str:
-    """Build the context used by metadata extraction.
-
-    By default, preserve the complete OCR transcript. A character limit can be
-    supplied by callers that explicitly need bounded context; the evaluation
-    path deliberately does not use one.
-    """
-    if max_chars is None or len(text) <= max_chars:
-        return text
-
-    middle_budget = max(0, max_chars - start_chars - end_chars)
-    window_count = max(0, middle_windows if middle_budget else 0)
-    window_size = middle_budget // window_count if window_count else 0
-
-    ranges: list[tuple[int, int]] = [(0, min(start_chars, len(text)))]
-    middle_start = ranges[0][1]
-    middle_end = max(middle_start, len(text) - end_chars)
-    middle_span = middle_end - middle_start
-    if window_size > 0 and middle_span > 0:
-        for idx in range(window_count):
-            center = middle_start + round((idx + 1) * middle_span / (window_count + 1))
-            start = max(middle_start, center - (window_size // 2))
-            end = min(middle_end, start + window_size)
-            start = max(middle_start, end - window_size)
-            if start < end:
-                ranges.append((start, end))
-    ranges.append((max(0, len(text) - end_chars), len(text)))
-
-    merged: list[tuple[int, int]] = []
-    for start, end in sorted(ranges):
-        if not merged or start > merged[-1][1]:
-            merged.append((start, end))
-        else:
-            merged[-1] = (merged[-1][0], max(merged[-1][1], end))
-
-    parts: list[str] = []
-    last_end = 0
-    for start, end in merged:
-        if start > last_end:
-            parts.append("\n...\n")
-        parts.append(text[start:end])
-        last_end = end
-    return "".join(parts)
-
-
 def _metadata_response_format_tier(config: AgentConfig) -> tuple[str, object | None]:
     """Return the metadata prompt and the selected response format policy."""
     response_format_policy = config.metadata_response_format
@@ -243,7 +191,6 @@ class StructuredOutputStrategy:
         kwargs: dict = {
             "model": config.metadata_model,
             "messages": messages,
-            "num_retries": config.llm_retries,
             **config.get_metadata_kwargs(),
         }
         if "temperature" not in kwargs:
@@ -296,9 +243,8 @@ class SmartDocumentAgent:
         if not full_text.strip():
             raise ValueError("OCR returned an empty transcript")
 
-        metadata_context = build_metadata_document_context(full_text)
         with start_span("extract_metadata"):
-            extracted = await self._strategy.extract(metadata_context, self._config)
+            extracted = await self._strategy.extract(full_text, self._config)
 
         log.info(
             "Smart agent: done — title=%r date=%r correspondent=%r",
@@ -318,7 +264,7 @@ class SmartDocumentAgent:
 
         return AgentResult(
             metadata=metadata,
-            metadata_context=metadata_context,
+            metadata_context=full_text,
             elapsed_s=round(time.time() - t_start, 1),
             pages=pages,
             chars=len(full_text),

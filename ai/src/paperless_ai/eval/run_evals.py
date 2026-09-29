@@ -270,13 +270,7 @@ async def run_scientific_evaluation(config: AgentConfig, split: str = "test") ->
                 metadata = result.metadata
                 document_context = getattr(result, "metadata_context", "")
                 if not document_context:
-                    from paperless_ai.agents.smart_graph_agent import (
-                        build_metadata_document_context,
-                    )
-
-                    document_context = build_metadata_document_context(
-                        getattr(metadata, "full_ocr_transcript", "")
-                    )
+                    document_context = getattr(metadata, "full_ocr_transcript", "")
 
                 evaluation = await _jev_evaluator.evaluate(
                     document_context=document_context,

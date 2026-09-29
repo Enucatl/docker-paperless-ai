@@ -117,7 +117,6 @@ class AgentConfig(BaseSettings):
     )
 
     poll_interval: int = 300
-    llm_retries: int = 3
     stage_max_attempts: int = 3
     ocr_concurrency: int = 4
     correspondent_match_threshold: float = Field(

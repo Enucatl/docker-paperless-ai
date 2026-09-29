@@ -4,7 +4,9 @@ Paperless-ngx REST API client.
 Handles polling, downloading, and patching documents via the API.
 """
 
+import asyncio
 import logging
+from copy import copy
 from typing import Any
 
 from paperless_common.languages import LANGUAGES
@@ -36,6 +38,12 @@ class PaperlessClient:
             timeout=60,
         )
         self.paperless_version: str | None = None
+        self._owns_session = True
+        self._reset_metadata()
+
+    def _reset_metadata(self) -> None:
+        """Start empty metadata caches for one operation."""
+        self._metadata_lock = asyncio.Lock()
         self._correspondents_cache: list[dict] | None = None
         self._tags_cache: list[dict] | None = None
         self._tag_id_cache: dict[str, int] = {}
@@ -44,8 +52,21 @@ class PaperlessClient:
         self._workflows_cache: list[dict] | None = None
         self._custom_field_id_cache: dict[str, int] = {}
 
+    def metadata_snapshot(self) -> "PaperlessClient":
+        """Borrow the HTTP session with fresh metadata caches for one request/batch.
+
+        Reuse the returned client throughout the operation. Its lazy caches and
+        local writes are isolated from other operations; only the owning client
+        closes the shared HTTP session.
+        """
+        snapshot = copy(self)
+        snapshot._owns_session = False
+        snapshot._reset_metadata()
+        return snapshot
+
     async def aclose(self):
-        await self._client.close()
+        if self._owns_session:
+            await self._client.close()
 
     async def __aenter__(self):
         return self
@@ -163,26 +184,27 @@ class PaperlessClient:
         force: bool = False,
     ) -> list[dict]:
         """Return all paginated objects from a Paperless endpoint, using a cache."""
-        cached = getattr(self, cache_attr)
-        if cached is not None and not force:
-            return cached
+        async with self._metadata_lock:
+            cached = getattr(self, cache_attr)
+            if cached is not None and not force:
+                return cached
 
-        items: list[dict] = []
-        page = 1
-        while True:
-            r = await self._client.get(
-                endpoint, params={"page": page, "page_size": 250}
-            )
-            _raise_for_status(r)
-            data = r.json()
-            items.extend(data["results"])
-            if not data.get("next"):
-                break
-            page += 1
+            items: list[dict] = []
+            page = 1
+            while True:
+                r = await self._client.get(
+                    endpoint, params={"page": page, "page_size": 250}
+                )
+                _raise_for_status(r)
+                data = r.json()
+                items.extend(data["results"])
+                if not data.get("next"):
+                    break
+                page += 1
 
-        setattr(self, cache_attr, items)
-        log.info("Loaded %d object(s) from %s", len(items), endpoint)
-        return items
+            setattr(self, cache_attr, items)
+            log.info("Loaded %d object(s) from %s", len(items), endpoint)
+            return items
 
     @staticmethod
     def _resource_label(item: dict[str, Any]) -> str | None:
@@ -209,10 +231,10 @@ class PaperlessClient:
         return await self._get_all_objects("/api/tags/", "_tags_cache", force=force)
 
     async def get_document_languages(self) -> dict[str, int]:
-        """Return supported languages and fresh document counts, most common first."""
+        """Return this operation's language counts, most common first."""
         counts = {
             tag["name"].removeprefix("language:"): tag["document_count"]
-            for tag in await self._get_all_tags(force=True)
+            for tag in await self._get_all_tags()
             if tag.get("name", "").startswith("language:")
             and tag["name"].removeprefix("language:") in LANGUAGES
             and tag["name"] != "language:und"

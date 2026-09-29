@@ -31,7 +31,7 @@ Test matrix:
 
 import asyncio
 import json
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -186,6 +186,7 @@ async def test_batches_release_due_retries(task_queues, stage):
     from paperless_ai.core.runner import run_ocr_batch, run_metadata_batch
 
     client = AsyncMock()
+    client.metadata_snapshot = MagicMock(return_value=client)
     client.get_document.return_value = None
     client.get_document_with_content.return_value = None
     config = AgentConfig(ocr_endpoint="http://document-service.invalid")

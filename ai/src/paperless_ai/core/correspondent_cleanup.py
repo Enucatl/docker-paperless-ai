@@ -444,6 +444,7 @@ async def build_correspondent_merge_plan(
     review_store: CleanupReviewStore | None = None,
 ) -> CorrespondentMergePlan:
     """Build a read-only disjoint-pair iterative cleanup plan."""
+    client = client.metadata_snapshot()
     correspondents, documents = (
         await client.get_all_correspondents(),
         await client.iter_all_documents_brief(),
@@ -944,6 +945,7 @@ async def apply_correspondent_merge_plan(
     advance_manual_boundary: bool = True,
 ) -> dict[str, int]:
     """Apply approved plan operations; analysis itself never calls this."""
+    client = client.metadata_snapshot()
     moved = deleted = skipped_clusters = skipped_orphans = skipped_nonempty = (
         renamed
     ) = 0

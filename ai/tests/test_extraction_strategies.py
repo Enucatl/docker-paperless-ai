@@ -529,6 +529,7 @@ async def test_invalid_metadata_retries_without_writing(monkeypatch, mock_config
     mock_config.stage_max_attempts = 3
     mock_config.tag_metadata = "ai:run-metadata"
     client = AsyncMock()
+    client.metadata_snapshot = MagicMock(return_value=client)
     client.get_document_with_content.return_value = {
         "id": 42,
         "content": "Invoice OCR",

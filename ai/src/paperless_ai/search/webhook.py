@@ -157,7 +157,8 @@ async def available_metadata() -> JSONResponse:
     """Return exact metadata names available for agentic search pre-filtering."""
     if _paperless_client is None:
         raise HTTPException(status_code=503, detail="Paperless client not configured")
-    return JSONResponse(content=await _paperless_client.get_available_metadata())
+    client = _paperless_client.metadata_snapshot()
+    return JSONResponse(content=await client.get_available_metadata())
 
 
 def _document_detail_url(doc_id: int) -> str:
@@ -173,6 +174,7 @@ def _document_preview_url(doc_id: int) -> str:
 
 
 async def _build_chat_sources(source_flags: dict[int, dict[str, bool]]) -> list[dict]:
+    client = _paperless_client.metadata_snapshot() if _paperless_client else None
     items: list[dict] = []
     for doc_id, flags in sorted(
         source_flags.items(),
@@ -180,8 +182,8 @@ async def _build_chat_sources(source_flags: dict[int, dict[str, bool]]) -> list[
     ):
         try:
             metadata = (
-                await _paperless_client.get_document_chat_metadata(doc_id)
-                if _paperless_client is not None
+                await client.get_document_chat_metadata(doc_id)
+                if client is not None
                 else None
             )
         except Exception as exc:
@@ -205,12 +207,13 @@ async def _build_chat_sources(source_flags: dict[int, dict[str, bool]]) -> list[
 
 async def _restore_chat_sources(sources: list[dict]) -> list[dict]:
     """Refresh persisted source cards while retaining deleted-document snapshots."""
+    client = _paperless_client.metadata_snapshot() if _paperless_client else None
     items: list[dict] = []
     for source in sources:
         try:
             metadata = (
-                await _paperless_client.get_document_chat_metadata(source["id"])
-                if _paperless_client is not None
+                await client.get_document_chat_metadata(source["id"])
+                if client is not None
                 else None
             )
         except Exception as exc:

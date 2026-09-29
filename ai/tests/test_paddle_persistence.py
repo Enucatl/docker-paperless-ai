@@ -52,6 +52,7 @@ def _queues(doc_ids: set[int] | None = None) -> AsyncMock:
 def _client() -> MagicMock:
     """Provide old and freshly fetched document state with distinct fields."""
     client = MagicMock()
+    client.metadata_snapshot.return_value = client
     initial = {
         "id": 42,
         "content": "Original transcript",

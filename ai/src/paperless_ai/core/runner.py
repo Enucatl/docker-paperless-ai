@@ -202,6 +202,7 @@ async def run_ocr_batch(
     from paperless_ai.agents.paddle_ocr import fetch_ocr_metadata, run_paddle_ocr
     from paperless_common.queue import TaskQueues
 
+    client = client.metadata_snapshot()
     await queues.release_due(TaskQueues.KEY_OCR)
     if await queues.stage_size(TaskQueues.KEY_OCR) == 0:
         return 0, 0
@@ -364,6 +365,7 @@ async def run_metadata_batch(
     from paperless_ai.agents.smart_graph_agent import StructuredOutputStrategy
     from paperless_common.queue import TaskQueues
 
+    client = client.metadata_snapshot()
     await queues.release_due(TaskQueues.KEY_METADATA)
     if await queues.stage_size(TaskQueues.KEY_METADATA) == 0:
         return 0, 0
@@ -527,7 +529,7 @@ async def run_metadata_batch(
                 if language_tag_ids is None:
                     language_tag_ids = {
                         tag["id"]
-                        for tag in await client._get_all_tags(force=True)
+                        for tag in await client._get_all_tags()
                         if tag["name"].startswith("language:")
                     }
                 language = (extracted.languages or ["und"])[0]

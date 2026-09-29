@@ -99,14 +99,15 @@ async def _get_current_document_tags(doc_id: int, payload_tags: set[str]) -> set
     if _paperless_client is None:
         return payload_tags
 
+    client = _paperless_client.metadata_snapshot()
     try:
-        doc = await _paperless_client.get_document(doc_id)
+        doc = await client.get_document(doc_id)
         if doc is None:
             return payload_tags
         tag_ids = doc.get("tags") or []
         if not isinstance(tag_ids, list):
             return payload_tags
-        return set(await _paperless_client.get_tag_names(tag_ids))
+        return set(await client.get_tag_names(tag_ids))
     except niquests.RequestException as exc:
         log.warning(
             "Webhook: failed to resolve current tags for document %d: %s", doc_id, exc

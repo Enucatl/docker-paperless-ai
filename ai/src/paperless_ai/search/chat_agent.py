@@ -145,6 +145,7 @@ class ChatCopilot:
         event_callback: EventCallback | None = None,
     ) -> ChatTurnResult:
         """Run one user turn and return the assistant reply, history, sources, and usage."""
+        client = self._client.metadata_snapshot()
         with start_span(
             "paperless_ai.chat.turn",
             **{
@@ -154,7 +155,7 @@ class ChatCopilot:
             },
         ) as turn_span:
             try:
-                languages = await self._client.get_document_languages()
+                languages = await client.get_document_languages()
             except niquests.RequestException:
                 log.warning("Could not load document languages for chat", exc_info=True)
                 languages = {}
@@ -286,7 +287,7 @@ class ChatCopilot:
                         result = argument_error or await execute_tool_call_detailed(
                             name,
                             args,
-                            client=self._client,
+                            client=client,
                         )
                         duration_ms = int((time.perf_counter() - start) * 1000)
                         set_span_attributes(

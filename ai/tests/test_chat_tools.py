@@ -182,6 +182,7 @@ async def test_chat_copilot_supplies_fresh_languages_before_model_call(languages
     config.get_chat_kwargs.return_value = {}
     client = AsyncMock()
     client.get_document_languages.side_effect = [languages, {"fr": 2}]
+    client.metadata_snapshot = MagicMock(return_value=client)
     copilot = ChatCopilot(config=config, client=client)
 
     with patch(
@@ -224,6 +225,7 @@ async def test_chat_copilot_run_turn_emits_events_and_aggregates_usage():
 
     client = AsyncMock()
     client.get_document_languages.return_value = {"de": 700, "en": 305}
+    client.metadata_snapshot = MagicMock(return_value=client)
     copilot = ChatCopilot(config=config, client=client)
 
     first_response = _completion(
@@ -394,6 +396,7 @@ async def test_chat_returns_validation_errors_to_model_then_recovers(arguments):
     config = MagicMock()
     config.get_chat_kwargs.return_value = {}
     client = AsyncMock()
+    client.metadata_snapshot = MagicMock(return_value=client)
     client.get_document_languages.return_value = {}
     client.get_document_with_content.return_value = {"id": 1, "content": "Invoice"}
 

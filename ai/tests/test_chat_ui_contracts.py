@@ -93,6 +93,9 @@ async def test_source_build_and_restore_keep_expected_failures_and_successful_pe
     monkeypatch,
 ):
     class Client:
+        def metadata_snapshot(self):
+            return self
+
         async def get_document_chat_metadata(self, doc_id):
             if doc_id == 1:
                 response = SimpleNamespace(status_code=403)
@@ -122,6 +125,7 @@ async def test_source_programming_errors_propagate(monkeypatch):
     client = SimpleNamespace(
         get_document_chat_metadata=AsyncMock(side_effect=ValueError("bug"))
     )
+    client.metadata_snapshot = lambda: client
     monkeypatch.setattr(webhook, "_paperless_client", client)
 
     with pytest.raises(ValueError, match="bug"):

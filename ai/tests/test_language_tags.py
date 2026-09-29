@@ -33,7 +33,7 @@ async def test_language_tags_are_atomic_and_reused_across_documents(mode: str) -
     session = AsyncMock()
     response = MagicMock()
     response.headers = {}
-    response.json.return_value = {"results": []}
+    response.json.return_value = {"results": [{"id": 10, "name": config.tag_metadata}]}
     session.get.return_value = response
 
     async def create_tag(endpoint: str, *, json: dict) -> MagicMock:
@@ -59,7 +59,6 @@ async def test_language_tags_are_atomic_and_reused_across_documents(mode: str) -
         ),
     ):
         async with PaperlessClient("http://paperless", "token") as client:
-            client._tag_id_cache[config.tag_metadata] = 10
             client.get_document_with_content = AsyncMock(
                 return_value={
                     "content": "Rechnung. Please pay the invoice.",
@@ -103,6 +102,6 @@ async def test_language_tags_are_atomic_and_reused_across_documents(mode: str) -
                 client._get_all_tags.assert_not_awaited()
             elif mode in {"known", "unknown"}:
                 assert session.post.await_count == 1
-                client._get_all_tags.assert_awaited_once_with(force=True)
+                client._get_all_tags.assert_awaited_once_with()
             else:
                 assert queues.mark_failure.await_count == 2

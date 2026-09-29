@@ -114,9 +114,16 @@ async def test_document_languages_refresh_counts_and_read_all_pages():
         ]
         async with PaperlessClient("http://test:8000", "token") as client:
             client._tags_cache = [{"name": "language:fr", "document_count": 10}]
-            counts = await client.get_document_languages()
+            snapshot = client.metadata_snapshot()
+            counts = await snapshot.get_document_languages()
+            assert await snapshot.get_document_languages() == counts
             assert list(counts.items()) == [("en", 3), ("it", 2), ("cmn", 1)]
-            assert list((await client.get_document_languages()).items()) == []
+            assert (
+                list(
+                    (await client.metadata_snapshot().get_document_languages()).items()
+                )
+                == []
+            )
 
         assert [
             call.kwargs["params"]["page"] for call in session.get.await_args_list
@@ -483,3 +490,69 @@ async def test_count_documents_for_correspondent_uses_count_field():
             "/api/documents/",
             params={"correspondent__id": 41, "page_size": 1, "fields": "id"},
         )
+
+
+@pytest.mark.asyncio
+async def test_metadata_snapshots_refresh_and_isolate_overlapping_operations():
+    """Concurrent operations reuse their own lists and observe external edits."""
+    import asyncio
+
+    with patch("paperless_common.paperless.niquests.AsyncSession") as session_class:
+        session = session_class.return_value = AsyncMock()
+        name = "Original"
+
+        async def fetch(endpoint, **kwargs):
+            response = _paged_response([{"id": 1, "name": name}])
+            await asyncio.sleep(0)
+            return response
+
+        session.get.side_effect = fetch
+        async with PaperlessClient("http://test:8000", "token") as owner:
+            first = owner.metadata_snapshot()
+            assert (
+                await asyncio.gather(
+                    first.get_available_metadata(), first.get_available_metadata()
+                )
+                == [
+                    {
+                        key: ["Original"]
+                        for key in (
+                            "correspondents",
+                            "document_types",
+                            "storage_paths",
+                            "tags",
+                        )
+                    }
+                ]
+                * 2
+            )
+            assert session.get.await_count == 4
+            name = "Renamed"
+            second = owner.metadata_snapshot()
+            assert (await second.get_available_metadata())["tags"] == ["Renamed"]
+            assert await second.get_correspondent_name(1) == "Renamed"
+            assert await first.get_correspondent_name(1) == "Original"
+            assert await first.get_tag_names([1]) == ["Original"]
+            assert session.get.await_count == 8
+            await second.aclose()
+            session.close.assert_not_awaited()
+        session.close.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_snapshot_id_caches_expire_between_operations():
+    """Tag and custom-field IDs cannot survive deletion and recreation externally."""
+    with patch("paperless_common.paperless.niquests.AsyncSession") as session_class:
+        session = session_class.return_value = AsyncMock()
+        async with PaperlessClient("http://test:8000", "token") as owner:
+            for identifier in (1, 2):
+                session.get.return_value = _paged_response(
+                    [{"id": identifier, "name": "Name", "data_type": "date"}]
+                )
+                snapshot = owner.metadata_snapshot()
+                for _ in range(2):
+                    assert await snapshot.get_tag_id("Name", create=False) == identifier
+                    assert (
+                        await snapshot.get_or_create_custom_field("Name") == identifier
+                    )
+            assert session.get.await_count == 4

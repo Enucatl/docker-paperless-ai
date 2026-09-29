@@ -34,6 +34,9 @@ class _FakeClient:
         self.renamed = []
         self.deleted = []
 
+    def metadata_snapshot(self):
+        return self
+
     async def get_all_correspondents(self, force: bool = False):
         return list(self._correspondents)
 

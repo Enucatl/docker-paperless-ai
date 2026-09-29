@@ -59,7 +59,8 @@ dev = [
 where = ["src"]
 
 [tool.setuptools.package-data]
-"paperless_ai.search" = ["migrations/*.sql"]
+"paperless_ai.search" = ["migrations/*.sql", "assets/*.html", "assets/*.css", "assets/*.js"]
+"paperless_ai.core" = ["assets/*.html", "assets/*.css", "assets/*.js"]
 
 [tool.uv.sources]
 paperless-common = { path = "../common" }

@@ -1,0 +1,292 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Paperless Copilot</title>
+    <link href="/static/bootstrap.min.css" rel="stylesheet" />
+    <link href="/static/base.css" rel="stylesheet" />
+    <link rel="stylesheet" href="assets/chat.css" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main-content">Skip to conversation</a>
+    <header class="paperless-topbar">
+      <div class="paperless-topbar-inner">
+        <button
+          id="history-toggle"
+          class="topbar-button"
+          type="button"
+          aria-label="Open conversation history"
+          aria-expanded="false"
+          aria-controls="history-panel"
+        >
+          ☰
+        </button>
+        <a class="brand-link" href="/"
+          ><span aria-hidden="true">▤</span>
+          <span class="brand-label">paperless-ngx</span></a
+        >
+        <span class="brand-divider" aria-hidden="true"></span>
+        <span class="topbar-title">AI Copilot</span>
+        <span class="topbar-spacer"></span>
+        <span
+          id="connection-status"
+          class="connection-status"
+          role="status"
+          aria-live="polite"
+          >Connecting…</span
+        >
+        <button
+          id="help-button"
+          class="topbar-button"
+          type="button"
+          aria-haspopup="dialog"
+        >
+          Help
+        </button>
+      </div>
+    </header>
+    <main id="main-content" class="chat-shell" tabindex="-1">
+      <div id="chat-layout" class="chat-layout">
+        <aside
+          id="history-panel"
+          class="history-column"
+          aria-label="Conversation history"
+        >
+          <nav class="history-panel" aria-labelledby="history-heading">
+            <div class="history-header">
+              <strong id="history-heading">Conversations</strong>
+              <button
+                id="new-conversation"
+                type="button"
+                class="btn btn-outline-primary"
+              >
+                New chat
+              </button>
+            </div>
+            <div id="history-list" class="history-list"></div>
+            <div
+              id="history-feedback"
+              class="history-feedback"
+              role="status"
+              aria-live="polite"
+            ></div>
+            <div
+              id="history-status"
+              class="history-status"
+              role="alert"
+              aria-live="assertive"
+            ></div>
+            <div class="history-actions">
+              <button
+                id="rename-conversation"
+                type="button"
+                class="btn btn-sm btn-outline-secondary"
+              >
+                Rename
+              </button>
+              <button
+                id="delete-conversation"
+                type="button"
+                class="btn btn-sm btn-outline-danger"
+              >
+                Delete
+              </button>
+            </div>
+            <footer class="archive-footer" aria-label="Archive status">
+              <span class="archive-footer-heading">Archive status</span>
+              <span id="archive-status" role="status" aria-live="polite"
+                >Loading status…</span
+              >
+              <button
+                id="history-refresh"
+                type="button"
+                class="btn btn-sm btn-outline-secondary"
+              >
+                Refresh
+              </button>
+            </footer>
+          </nav>
+        </aside>
+        <section class="chat-column" aria-labelledby="page-heading">
+          <div class="chat-heading">
+            <h1 id="page-heading" tabindex="-1">Ask your archive</h1>
+            <p>Search, inspect, and understand your Paperless documents.</p>
+          </div>
+          <div
+            id="socket-banner"
+            class="socket-banner alert alert-warning mb-0"
+            role="alert"
+            aria-live="assertive"
+          ></div>
+          <section class="chat-panel" aria-label="Conversation">
+            <div
+              id="conversation"
+              class="conversation"
+              aria-label="Conversation transcript"
+            >
+              <div id="empty-chat-invitation" class="empty-chat-invitation">
+                Ask a question to search and understand your archive.
+              </div>
+            </div>
+            <button
+              id="jump-to-latest"
+              type="button"
+              class="jump-to-latest btn btn-sm btn-light"
+              hidden
+            >
+              Jump to latest
+            </button>
+            <div
+              id="chat-announcements"
+              class="visually-hidden"
+              role="status"
+              aria-live="polite"
+            ></div>
+            <div
+              id="recovery-panel"
+              class="recovery-panel"
+              role="status"
+              aria-live="polite"
+            ></div>
+            <form id="chat-form" class="composer">
+              <label class="visually-hidden" for="prompt"
+                >Message your archive</label
+              >
+              <textarea
+                id="prompt"
+                placeholder="Ask about invoices, receipts, correspondents, or document contents…"
+                aria-describedby="composer-help"
+              ></textarea>
+              <span id="composer-help" class="visually-hidden"
+                >Press Enter to send. Press Shift and Enter for a new line.
+                Control and Enter or Command and Enter also send.</span
+              >
+              <div class="composer-actions">
+                <button
+                  id="send-button"
+                  type="submit"
+                  class="btn btn-primary px-4"
+                >
+                  Send
+                </button>
+              </div>
+            </form>
+          </section>
+        </section>
+
+        <aside
+          id="preview-panel"
+          class="preview-column"
+          aria-label="Document inspector"
+          aria-modal="false"
+        >
+          <section class="preview-panel" aria-labelledby="preview-title">
+            <div id="preview-placeholder" class="preview-placeholder">
+              <h2 class="h5">Document inspector</h2>
+              <p>
+                Select a source to inspect it here. Use “Open in Paperless” for
+                the full document view.
+              </p>
+            </div>
+            <div id="preview-header" class="preview-header">
+              <div>
+                <h2 id="preview-title" class="h6 mb-1">Document preview</h2>
+                <p id="preview-subtitle" class="text-muted small mb-0"></p>
+              </div>
+              <a
+                id="preview-open-link"
+                class="btn btn-sm btn-outline-secondary"
+                target="_blank"
+                rel="noopener noreferrer"
+                >Open in Paperless</a
+              >
+              <button
+                id="preview-close"
+                class="preview-close btn btn-outline-secondary"
+                type="button"
+                aria-label="Close document inspector"
+              >
+                ×
+              </button>
+            </div>
+            <div id="preview-metadata" class="preview-metadata" hidden>
+              <dl></dl>
+            </div>
+            <div id="preview-frame-wrap" class="preview-frame-wrap">
+              <p
+                id="preview-state"
+                class="preview-state"
+                role="status"
+                aria-live="polite"
+              ></p>
+              <iframe
+                id="preview-frame"
+                class="preview-frame"
+                title="Document preview"
+              ></iframe>
+              <p id="preview-fallback" class="preview-state" hidden>
+                Preview not displaying?
+                <a
+                  id="preview-fallback-link"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  >Open in Paperless</a
+                >
+              </p>
+            </div>
+          </section>
+        </aside>
+        <button
+          id="drawer-backdrop"
+          class="drawer-backdrop"
+          type="button"
+          aria-label="Close drawer"
+        ></button>
+      </div>
+    </main>
+    <dialog id="help-dialog" aria-labelledby="help-title">
+      <h2 id="help-title">Using AI Copilot</h2>
+      <p>
+        Ask a question about your Paperless archive. Press Enter to send or
+        Shift+Enter for a new line. Control+Enter or Command+Enter also sends.
+      </p>
+      <p>
+        Each new connection starts without earlier conversation context. Saved
+        conversations restore what you can read, but do not replay it to the
+        assistant.
+      </p>
+      <form method="dialog">
+        <button id="help-close" class="btn btn-primary">Close</button>
+      </form>
+    </dialog>
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/dompurify@3/dist/purify.min.js"></script>
+    <dialog id="rename-dialog" aria-labelledby="rename-title">
+      <form id="rename-form">
+        <h2 id="rename-title">Rename conversation</h2>
+        <label for="rename-input">Conversation name</label>
+        <input
+          id="rename-input"
+          class="form-control"
+          maxlength="120"
+          required
+        />
+        <div id="rename-error" role="alert"></div>
+        <div class="d-flex justify-content-end gap-2 mt-3">
+          <button
+            id="rename-cancel"
+            type="button"
+            class="btn btn-outline-secondary"
+          >
+            Cancel
+          </button>
+          <button id="rename-save" type="submit" class="btn btn-primary">
+            Save
+          </button>
+        </div>
+      </form>
+    </dialog>
+    <script src="assets/chat.js"></script>
+  </body>
+</html>

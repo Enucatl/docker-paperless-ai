@@ -9,7 +9,8 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import BackgroundTasks, FastAPI, HTTPException
-from fastapi.responses import HTMLResponse
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 from paperless_ai.core.config import AgentConfig
@@ -164,19 +165,15 @@ async def _reviewed_plan(
 
 
 app = FastAPI(title="Correspondent cleanup review")
+app.mount(
+    "/assets", StaticFiles(directory=Path(__file__).with_name("assets")), name="assets"
+)
 
 
-@app.get("/", response_class=HTMLResponse)
-async def index() -> str:
-    return """<!doctype html><meta charset=utf-8><title>Correspondent cleanup review</title>
-<style>body{max-width:1000px;margin:2rem auto;font:16px system-ui;color:#18212f;padding:0 1rem}.card{border:1px solid #d9e0ea;border-radius:8px;padding:1rem;margin:1rem 0}button{margin-right:.5rem;padding:.4rem .7rem;border:1px solid #cbd5e1;border-radius:5px;background:#fff;cursor:pointer}button.approved{background:#dcfce7;border-color:#22c55e;color:#166534;font-weight:700}button.rejected{background:#fee2e2;border-color:#ef4444;color:#991b1b;font-weight:700}button:disabled{cursor:default;opacity:.8}pre{white-space:pre-wrap;background:#f6f7fb;padding:1rem}.muted{color:#64748b}</style>
-<h1>Correspondent cleanup review</h1><p id=status class=muted>Loading…</p><p><input id=confirmation placeholder="Type APPLY to apply"/><button id=apply>Apply reviewed plan</button></p><main id=pairs></main><h2>Reviewed plan</h2><pre id=plan>Resolve review decisions to generate the plan.</pre>
-<script>
-let current; const status=document.querySelector('#status'), pairs=document.querySelector('#pairs'), output=document.querySelector('#plan');
-const refresh=async()=>{const r=await fetch('/api/plan');if(!r.ok){status.textContent=await r.text();return}current=await r.json();const recorded=new Map(current.review_decisions.map(x=>[x.pair_key,x.decision]));const count=recorded.size;status.textContent=`${current.cleanup_mode} cleanup · snapshot max ID ${current.scanned_max_correspondent_id} · ${current.review_candidates.length} actionable review pair(s) · ${count} decision(s) recorded`;pairs.replaceChildren();for(const p of current.review_candidates){const c=document.createElement('section');c.className='card';const key=[...p.left_members].sort().join(':')+'|'+[...p.right_members].sort().join(':');const selected=recorded.get(key);c.innerHTML=`<strong>${p.left_name}</strong> (${p.left_members.join(', ')}) ↔ <strong>${p.right_name}</strong> (${p.right_members.join(', ')})<p class=muted>${p.reason||''} · candidate score ${p.candidate_score??'—'}</p>`;for(const choice of ['approve','reject']){const b=document.createElement('button');b.textContent=selected===choice?(choice==='approve'?'Approved':'Rejected'):choice;b.className=selected===choice?(choice==='approve'?'approved':'rejected'):'';b.onclick=async()=>{const response=await fetch('/api/decisions',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({pair_key:key,decision:choice})});if(!response.ok){alert((await response.json()).detail||'Unable to record decision');return}status.textContent=`Decision recorded: ${choice}`;await showPlan();await refresh()};c.append(b)}pairs.append(c)};await showPlan()};
-const showPlan=async()=>{const r=await fetch('/api/reviewed-plan');output.textContent=r.ok?JSON.stringify(await r.json(),null,2):await r.text()};
-document.querySelector('#apply').onclick=async()=>{const r=await fetch('/api/apply',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({confirmation:document.querySelector('#confirmation').value})});const text=await r.text();let body;try{body=JSON.parse(text)}catch{body={detail:text}}if(!r.ok){status.textContent=body.detail||'Apply failed';alert(body.detail||text);return}status.textContent=`Apply completed: ${body.reassigned_documents} documents reassigned, ${body.deleted_correspondents} correspondents deleted · manual boundary ${body.manual_review_boundary_id}`;output.textContent=JSON.stringify(body,null,2);document.querySelector('#apply').disabled=true};refresh();
-</script>"""
+@app.get("/")
+async def index() -> FileResponse:
+    """Serve the packaged cleanup browser UI."""
+    return FileResponse(Path(__file__).with_name("assets") / "cleanup.html")
 
 
 @app.get("/api/plan")
@@ -196,7 +193,11 @@ async def plan() -> dict[str, Any]:
         >= item.scanned_max_correspondent_id
     )
     data["review_candidates"] = [
-        asdict(candidate) for candidate in actionable_review_pairs(item)
+        {
+            **asdict(candidate),
+            "pair_key": _pair_key(candidate.left_members, candidate.right_members),
+        }
+        for candidate in actionable_review_pairs(item)
     ]
     return data
 

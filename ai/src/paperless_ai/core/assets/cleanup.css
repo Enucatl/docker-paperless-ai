@@ -1,0 +1,45 @@
+body {
+  max-width: 1000px;
+  margin: 2rem auto;
+  font: 16px system-ui;
+  color: #18212f;
+  padding: 0 1rem;
+}
+.card {
+  border: 1px solid #d9e0ea;
+  border-radius: 8px;
+  padding: 1rem;
+  margin: 1rem 0;
+}
+button {
+  margin-right: 0.5rem;
+  padding: 0.4rem 0.7rem;
+  border: 1px solid #cbd5e1;
+  border-radius: 5px;
+  background: #fff;
+  cursor: pointer;
+}
+button.approved {
+  background: #dcfce7;
+  border-color: #22c55e;
+  color: #166534;
+  font-weight: 700;
+}
+button.rejected {
+  background: #fee2e2;
+  border-color: #ef4444;
+  color: #991b1b;
+  font-weight: 700;
+}
+button:disabled {
+  cursor: default;
+  opacity: 0.8;
+}
+pre {
+  white-space: pre-wrap;
+  background: #f6f7fb;
+  padding: 1rem;
+}
+.muted {
+  color: #64748b;
+}

@@ -254,15 +254,8 @@ services:
       - CHAT_DATABASE_PASSWORD_FILE=/run/secrets/ai_chat_postgres_password
       - CHAT_OWNER_HEADER
 
-      # OCR model — any OpenAI-compatible inference vision model string:
-      #   gemini/gemini-2.5-flash          (cloud, default)
-      #   claude-3-5-sonnet-20241022       (cloud)
-      #   gpt-4o                           (cloud)
-      #   ollama/llava-llama3              (local Ollama, set INFERENCE_OCR_ENDPOINT)
-      #   openai/Nanonets-OCR2-3B          (local vLLM, set INFERENCE_OCR_ENDPOINT)
-      - INFERENCE_OCR_BACKEND=${INFERENCE_OCR_BACKEND:-vision}
-      - INFERENCE_PADDLE_TIMEOUT=${INFERENCE_PADDLE_TIMEOUT:-600}
-      - INFERENCE_OCR_MODEL
+      # Complete-PDF /layout-parsing service (Paddle or optional vision-ocr).
+      - INFERENCE_OCR_TIMEOUT=${INFERENCE_OCR_TIMEOUT:-600}
 
       # Metadata extraction model — text-only, called once per document.
       #   ollama/llama3.2   openai/Meta-Llama-3.1-8B-Instruct   gemini/gemini-2.5-flash
@@ -274,8 +267,7 @@ services:
 
       # Base URLs for local/self-hosted models (independent, can differ).
       # Examples:
-      #   INFERENCE_OCR_ENDPOINT=http://workstation:11434       (Ollama)
-      #   INFERENCE_OCR_ENDPOINT=http://workstation:8000/v1     (vision vLLM)
+      #   INFERENCE_OCR_ENDPOINT=http://vision-ocr:8000         (optional adapter)
       #   INFERENCE_OCR_ENDPOINT=http://workstation:8080        (Paddle parsing API)
       - INFERENCE_OCR_ENDPOINT
       - INFERENCE_METADATA_ENDPOINT
@@ -299,8 +291,6 @@ services:
       # Behaviour tuning (all optional)
       - POLL_INTERVAL
       - TAG_OCR=ai:run-ocr
-      - INFERENCE_OCR_REASONING_EFFORT
-      - INFERENCE_OCR_TEMPERATURE
       - INFERENCE_METADATA_TEMPERATURE
       - INFERENCE_METADATA_REASONING_EFFORT
       - INFERENCE_METADATA_MAX_TOKENS
@@ -352,6 +342,31 @@ services:
       - ai_chat_postgres_password
       - typesafe_api_key
 
+  # Optional complete-PDF adapter for OpenAI-compatible vision endpoints.
+  # Explicitly start: docker compose up -d --build vision-ocr
+  vision-ocr:
+    build:
+      context: .
+      dockerfile: ./vision-ocr/Dockerfile
+    profiles: [vision-ocr]
+    restart: "no"
+    environment:
+      - VISION_OCR_ENDPOINT
+      - VISION_OCR_MODEL
+      - VISION_OCR_API_KEY
+      - VISION_OCR_PROMPT
+      - VISION_OCR_MAX_IMAGE_DIMENSION
+      - VISION_OCR_MAX_TOKENS
+      - VISION_OCR_TEMPERATURE
+      - VISION_OCR_REASONING_EFFORT
+      - VISION_OCR_EXTRA_KWARGS
+      - VISION_OCR_TIMEOUT
+    networks:
+      - internal
+      - traefik_proxy
+    labels:
+      - "traefik.enable=false"
+
   ai-cleanup:
     extends:
       file: ../compose-security-baseline/hardening.yml
@@ -380,9 +395,7 @@ services:
       - WEBHOOK_SECRET_FILE=/run/secrets/webhook_secret
       - PAPERLESS_WEBHOOK_URL=http://webhook-listener:8001/webhook/document
       - MANAGE_PAPERLESS_WORKFLOWS=false
-      - INFERENCE_OCR_BACKEND=${INFERENCE_OCR_BACKEND:-vision}
-      - INFERENCE_PADDLE_TIMEOUT=${INFERENCE_PADDLE_TIMEOUT:-600}
-      - INFERENCE_OCR_MODEL
+      - INFERENCE_OCR_TIMEOUT=${INFERENCE_OCR_TIMEOUT:-600}
       - INFERENCE_METADATA_MODEL
       - INFERENCE_CHAT_MODEL
       - INFERENCE_OCR_ENDPOINT
@@ -461,7 +474,7 @@ services:
       dockerfile: ./ai/Dockerfile
       target: eval
     profiles: [eval]
-    # Eval runs are one-off batch jobs with bursty PDF rasterization and
+    # Eval runs are one-off batch jobs with
     # dataframe/LLM-judge memory use, so do not inherit the medium service
     # memory cap from the hardening baseline.
     mem_limit: 0
@@ -483,9 +496,7 @@ services:
       - AGENT_NAME=paperless-ai-eval
       - PAPERLESS_URL=http://webserver:8000
       - PAPERLESS_TOKEN_FILE=/run/secrets/paperless_token
-      - INFERENCE_OCR_BACKEND=${INFERENCE_OCR_BACKEND:-vision}
-      - INFERENCE_PADDLE_TIMEOUT=${INFERENCE_PADDLE_TIMEOUT:-600}
-      - INFERENCE_OCR_MODEL
+      - INFERENCE_OCR_TIMEOUT=${INFERENCE_OCR_TIMEOUT:-600}
       - INFERENCE_METADATA_MODEL
       - INFERENCE_CHAT_MODEL
       - INFERENCE_OCR_ENDPOINT

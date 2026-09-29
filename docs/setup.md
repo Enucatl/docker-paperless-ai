@@ -107,7 +107,7 @@ fields automatically on first successful startup:
 - `ai_processed` (Date)
 - `ai_summary` (Long text)
 - `ai_result` (Long text)
-- `ai_ocr_output` (Long text, Paddle JSON and provenance)
+- `ai_ocr_output` (Long text, document OCR JSON and provenance)
 
 ## 4. Start the full stack
 
@@ -134,7 +134,7 @@ After the stack is up and the workflows exist, new documents flow automatically:
    - `ai_processed`
    - `ai_summary`
    - `ai_result`
-   - `ai_ocr_output` when using Paddle
+   - `ai_ocr_output` with structured OCR and provenance
 
 The `ai` service exposes:
 
@@ -181,57 +181,45 @@ to increasingly large slices of your archive.
 
 ## Models
 
-For PaddleOCR-VL-1.6, follow [Paddle setup and cutover](paddleocr.md). The
-[workstation prompt](../paddle.md) deploys the full parsing service in the GPU
-repository. Keep `INFERENCE_OCR_BACKEND=vision` until its fixed pilot passes.
-The migration does not enqueue historical documents beyond that pilot.
+OCR uses a complete-PDF `/layout-parsing` service. Set
+`INFERENCE_OCR_ENDPOINT=http://workstation:8080` for Paddle directly, or
+`INFERENCE_OCR_ENDPOINT=http://vision-ocr:8000` for the optional vision adapter.
+See [OCR service setup](paddleocr.md) for both configurations. No stored-document
+migration or archive reprocessing is required.
 
-Edit `INFERENCE_OCR_MODEL`, `INFERENCE_METADATA_MODEL`, and `INFERENCE_CHAT_MODEL` in `.env`, then recreate the service:
+The adapter calls any OpenAI-compatible vision endpoint, including vLLM and
+cloud gateways. Configure it separately:
+
+```env
+VISION_OCR_ENDPOINT=https://openrouter.ai/api/v1
+VISION_OCR_MODEL=google/gemini-3.1-flash-lite
+VISION_OCR_API_KEY=your-key
+INFERENCE_OCR_ENDPOINT=http://vision-ocr:8000
+```
 
 ```bash
+docker compose up -d --build vision-ocr
 docker compose up -d --force-recreate ai
+# Stop the optional adapter when it is no longer needed:
+docker compose stop vision-ocr
 ```
 
+The URL selects the service but does not start it. Ordinary Compose startup
+excludes the adapter. Native Gemini and Anthropic APIs are not supported by
+this adapter; use an OpenAI-compatible gateway.
+
+Metadata and chat retain their existing model settings and credentials:
+
 ```env
-# Default models from .env.example (served through OpenRouter)
-INFERENCE_OCR_MODEL=google/gemini-3.1-flash-lite
 INFERENCE_METADATA_MODEL=google/gemini-3.1-flash-lite
 INFERENCE_CHAT_MODEL=google/gemini-3.1-flash-lite
-
-# Evaluated metadata alternative (called once per document)
-INFERENCE_METADATA_MODEL=inception/mercury-2.5
+# Optional OpenAI-compatible local endpoints:
+# INFERENCE_METADATA_ENDPOINT=http://workstation:8101/v1
+# INFERENCE_CHAT_ENDPOINT=http://workstation:8101/v1
 ```
 
-### Local or self-hosted models
-
-The AI service uses the shared inference client. It calls OpenRouter by default;
-set each stage's endpoint to use another OpenAI-compatible server.
-
-**Ollama**:
-
-```env
-INFERENCE_OCR_MODEL=llava-llama3
-INFERENCE_METADATA_MODEL=llama3.2
-INFERENCE_CHAT_MODEL=llama3.2
-INFERENCE_OCR_ENDPOINT=http://workstation:11434/v1
-INFERENCE_METADATA_ENDPOINT=http://workstation:11434/v1
-INFERENCE_CHAT_ENDPOINT=http://workstation:11434/v1
-```
-
-**vLLM**:
-
-```env
-INFERENCE_OCR_MODEL=openai/nanonets/Nanonets-OCR2-3B
-INFERENCE_METADATA_MODEL=openai/meta-llama/Llama-3.2-3B-Instruct
-INFERENCE_CHAT_MODEL=openai/meta-llama/Llama-3.2-3B-Instruct
-INFERENCE_OCR_ENDPOINT=http://workstation:8100/v1
-INFERENCE_METADATA_ENDPOINT=http://workstation:8101/v1
-INFERENCE_CHAT_ENDPOINT=http://workstation:8101/v1
-```
-
-`INFERENCE_OCR_ENDPOINT`, `INFERENCE_METADATA_ENDPOINT`, and `INFERENCE_CHAT_ENDPOINT` are independent — each stage can run on different servers or ports.
-
-For running the model endpoints themselves, see [Enucatl/vllm](https://github.com/Enucatl/vllm).
+Recreate `ai` after changing its settings. For running local model endpoints,
+see [Enucatl/vllm](https://github.com/Enucatl/vllm).
 
 ## Existing installations
 

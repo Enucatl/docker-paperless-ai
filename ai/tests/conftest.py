@@ -206,7 +206,7 @@ async def paperless_client(paperless_token: str):
 
 
 # ---------------------------------------------------------------------------
-# Function-scoped: reset LiteLLM mock for every test
+# Function-scoped: reset inference mock for every test
 # ---------------------------------------------------------------------------
 
 # Deterministic LLM responses used by all tests.
@@ -223,10 +223,8 @@ _METADATA_JSON = json.dumps(
 
 def _make_fake_completion():
     async def fake_completion(**kwargs):
-        # Metadata calls set response_format; OCR calls do not.
-        content = (
-            _METADATA_JSON if kwargs.get("response_format") is not None else _OCR_TEXT
-        )
+        # Document OCR is mocked separately at the document-service interface.
+        content = _METADATA_JSON
         return CompletionResult(
             content=content,
             message={"role": "assistant", "content": content},
@@ -249,6 +247,42 @@ def mock_litellm():
     with (
         patch("paperless_ai.agents.smart_graph_agent.complete", side_effect=fake),
         patch("paperless_ai.inference.complete", side_effect=fake),
+    ):
+        yield
+
+
+@pytest.fixture
+def mock_document_service():
+    """Return deterministic complete-document OCR for pipeline integration tests."""
+    from unittest.mock import AsyncMock
+
+    output = {
+        "schema_version": 1,
+        "pipeline": "test-document-service",
+        "model": "test-ocr",
+        "layout_model": "test-layout",
+        "page_count": 1,
+        "pages": [{"page_index": 0, "markdown": {"text": _OCR_TEXT}}],
+    }
+    with (
+        patch(
+            "paperless_ai.agents.paddle_ocr.run_paddle_ocr",
+            new=AsyncMock(return_value=(_OCR_TEXT, output, 1, 0.01)),
+        ),
+        patch(
+            "paperless_ai.core.runner._check_server_reachable",
+            new=AsyncMock(return_value=True),
+        ),
+        patch(
+            "paperless_ai.agents.paddle_ocr.fetch_ocr_metadata",
+            new=AsyncMock(
+                return_value={
+                    "pipeline": "test-document-service",
+                    "model": "test-ocr",
+                    "layout_model": "test-layout",
+                }
+            ),
+        ),
     ):
         yield
 

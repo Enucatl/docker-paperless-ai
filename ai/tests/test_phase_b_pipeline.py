@@ -1,6 +1,6 @@
 """
 Pipeline tests: TaskQueues, webhook routing, and the OCR and metadata batch
-workers. These run against Paperless and Redis, with LLM and vision OCR mocked.
+workers. These run against Paperless and Redis, with LLM and document OCR mocked.
 
 Test matrix:
   TaskQueues — unit tests (fast, Redis required):
@@ -30,6 +30,8 @@ Test matrix:
 """
 
 import pytest
+
+pytestmark = pytest.mark.usefixtures("mock_document_service")
 
 from tests.conftest import (
     PAPERLESS_URL,
@@ -157,7 +159,7 @@ async def test_ocr_batch_writes_content_and_transitions_tag(
     paperless_client, task_queues
 ):
     """
-    OCR batch: downloads PDF, runs vision OCR (mocked), writes content to
+    OCR batch: downloads PDF, runs document OCR (mocked), writes content to
     Paperless, transitions tag from ai:run-ocr to ai:run-metadata, enqueues
     to metadata queue, removes from OCR queue.
     """
@@ -168,7 +170,6 @@ async def test_ocr_batch_writes_content_and_transitions_tag(
     config = AgentConfig(
         paperless_url=PAPERLESS_URL,
         paperless_token=token,
-        ocr_model="gemini/gemini-2.5-flash",
         metadata_model="gemini/gemini-2.5-flash",
         chat_model="gemini/gemini-2.5-flash",
         tag_ocr="ai:run-ocr",
@@ -274,15 +275,12 @@ async def test_ocr_batch_moves_poison_document_to_failed_queue(
     async def _boom(*_args, **_kwargs):
         raise RuntimeError("corrupted pdf")
 
-    monkeypatch.setattr(
-        "paperless_ai.agents.smart_graph_agent.run_vision_ocr_only", _boom
-    )
+    monkeypatch.setattr("paperless_ai.agents.paddle_ocr.run_paddle_ocr", _boom)
 
     token = paperless_client._client.headers["Authorization"].split(" ")[1]
     config = AgentConfig(
         paperless_url=PAPERLESS_URL,
         paperless_token=token,
-        ocr_model="gemini/gemini-2.5-flash",
         metadata_model="gemini/gemini-2.5-flash",
         chat_model="gemini/gemini-2.5-flash",
         stage_max_attempts=3,

@@ -1,36 +1,14 @@
-"""
-LangGraph state definition for the SmartDocumentAgent.
+"""State for complete-document parsing and metadata extraction."""
 
-Uses TypedDict so the graph can merge partial updates from each node.
-The `extracted_text_chunks` list uses operator.add annotation so LangGraph
-automatically concatenates chunks from successive batched-vision-OCR loops.
-"""
-
-import operator
-from typing import Annotated, Optional, TypedDict
+from typing import TypedDict
 
 
 class AgentState(TypedDict):
-    # Input
+    """Document input, parsing output, and extracted metadata."""
+
     file_path: str
-    language: Optional[str]
-
-    # Set by analyze_pdf node
     total_pages: int
-    is_digital_text: bool
-
-    # Ordered list of 0-based page indices selected for vision OCR.
-    ocr_page_indices: list[int]
-
-    # current_page is an index into ocr_page_indices, NOT a raw page number.
-    # It advances by batch_size each iteration of the batched-vision-OCR loop.
-    current_page: int
-    batch_size: int
-
-    # Accumulated across loop iterations — LangGraph concatenates via operator.add
-    extracted_text_chunks: Annotated[list[str], operator.add]
-
-    # Written by extract_metadata node; read back in SmartDocumentAgent.process()
+    extracted_text_chunks: list[str]
     _extracted_metadata: dict
     _full_text: str
     _metadata_context: str

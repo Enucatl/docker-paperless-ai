@@ -12,16 +12,18 @@ is an adjacent service that reacts to workflow tags, moves documents through
 independent stages, and writes results back through supported REST APIs.
 
 The separation of models matters because the operational profile of each step is
-different. OCR may need a vision-capable model and larger image payloads.
+different. OCR uses a complete-PDF parsing service; the optional vision adapter
+renders its pages and calls a vision-capable model.
 Metadata extraction is usually a smaller text-only call. Chat is interactive
 and must keep latency acceptable. The repo therefore exposes independent model
-and API-base settings for OCR, metadata, and chat.
+and API-base settings for metadata and chat; the OCR adapter has its own
+`VISION_OCR_*` configuration.
 
 ### Data ingestion
 
 New (or updated) documents are governed by
 Paperless stage tags (`ai:run-ocr`, `ai:run-metadata`) and wait in Redis until
-the configured OCR and metadata model endpoints are online.
+the configured document service and metadata model endpoints are online.
 
 The ingestion path is:
 
@@ -29,8 +31,8 @@ The ingestion path is:
 2. The webhook listener receives the Paperless event and enqueues the document
    ID in Redis.
 3. The AI service downloads the original PDF and processes every page. Paddle
-   receives the complete PDF; the vision backend receives rendered page images.
-   The worker writes the transcript to Paperless and, for Paddle, saves
+   receives the complete PDF, as does the optional vision adapter.
+   The worker writes the transcript to Paperless and saves
    structured page results in `ai_ocr_output`.
 4. The metadata stage extracts document fields from the transcript and patches
    Paperless metadata.
@@ -45,7 +47,7 @@ flowchart LR
     P[Paperless workflow] -->|document event| W[Webhook listener]
     W -->|document ID| OQ[(Redis OCR queue)]
     OQ --> OW[OCR worker]
-    OW --> VM[Vision model]
+    OW --> VM[Document parsing service]
     VM -->|OCR text and stage tag| P
     OW -->|document ID| MQ[(Redis metadata queue)]
     MQ --> MW[Metadata worker]

@@ -32,7 +32,7 @@ keyword search.
 
 ## What It Does
 
-- OCRs imported documents with a vision model and writes the transcript back
+- OCRs imported documents with a complete-PDF document service and writes the transcript back
   to Paperless.
 - Extracts title, date, correspondent, summary, and structured debug output via
   a metadata LLM.

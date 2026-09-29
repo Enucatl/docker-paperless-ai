@@ -21,9 +21,7 @@ from paperless_ai.agents.smart_graph_agent import (
     NuExtractStrategy,
     SmartDocumentAgent,
     StructuredOutputStrategy,
-    VisionOcrCache,
     _ExtractedMetadata,
-    _batched_vision_ocr,
     build_metadata_document_context,
     _extract_metadata,
 )
@@ -52,7 +50,6 @@ def completion_result(content: str | None) -> CompletionResult:
 def mock_config():
     """Minimal AgentConfig for testing."""
     config = MagicMock(spec=AgentConfig)
-    config.ocr_backend = "vision"
     config.metadata_model = "test-model"
     config.metadata_endpoint = None
     config.metadata_prompt = "Extract metadata from the following text:"
@@ -487,12 +484,10 @@ async def test_languages_propagate_to_public_agent_result(mock_config) -> None:
         mock_config,
         FixedMetadataStrategy(),
     )
-    mock_config.vision_batch_size = 1
     graph = MagicMock()
     graph.ainvoke = AsyncMock(return_value=state)
     with (
         patch.object(SmartDocumentAgent, "_build_graph", return_value=graph),
-        patch("paperless_ai.agents.smart_graph_agent._count_pdf_pages", return_value=1),
     ):
         result = await SmartDocumentAgent(mock_config).process("unused.pdf", {})
 
@@ -535,52 +530,21 @@ async def test_metadata_context_preserves_the_complete_ocr_transcript(
     assert result["_metadata_context"] == text
 
 
-@pytest.mark.asyncio
-async def test_vision_ocr_cache_reuses_same_page_request(tmp_path) -> None:
-    """Repeated evaluation requests reuse OCR text without another call."""
-    pdf_path = tmp_path / "document.pdf"
-    pdf_path.write_bytes(b"%PDF-1.4 test")
-
-    config = MagicMock(spec=AgentConfig)
-    config.ocr_model = "google/gemini-3.5-flash-lite"
-    config.ocr_endpoint = None
-    config.ocr_prompt = "Read this page."
-    config.ocr_max_image_dimension = 1920
-    config.ocr_max_tokens = 4096
-    config.ocr_temperature = 1.0
-    config.ocr_reasoning_effort = "minimal"
-    config.ocr_extra_kwargs = None
-    config.llm_retries = 2
-    config.get_ocr_kwargs = lambda: {
-        "max_tokens": 4096,
-        "temperature": 1.0,
-        "reasoning_effort": "minimal",
-    }
-    state = {
-        "file_path": str(pdf_path),
-        "current_page": 0,
-        "batch_size": 1,
-        "total_pages": 1,
-        "ocr_page_indices": [0],
-        "extracted_text_chunks": [],
-        "language": None,
-    }
-    cache = VisionOcrCache()
-
-    with patch(
-        "paperless_ai.agents.smart_graph_agent._render_page_to_base64",
-        return_value="image",
-    ) as render:
-        with patch(
-            "paperless_ai.agents.smart_graph_agent.complete",
-            new=AsyncMock(return_value=completion_result("OCR text")),
-        ) as complete:
-            first = await _batched_vision_ocr(state, config, cache)
-            second = await _batched_vision_ocr(state, config, cache)
-
-    assert first["extracted_text_chunks"] == ["OCR text"]
-    assert second["extracted_text_chunks"] == ["OCR text"]
-    assert complete.await_count == 1
-    assert render.call_count == 1
-    assert cache.hits == 1
-    assert cache.misses == 1
+def test_metadata_reasoning_default_is_independent_of_ocr(monkeypatch) -> None:
+    """Keep minimal metadata reasoning after removing legacy OCR settings."""
+    for key in (
+        "INFERENCE_METADATA_REASONING_EFFORT",
+        "METADATA_REASONING_EFFORT",
+        "metadata_reasoning_effort",
+        "INFERENCE_METADATA_EXTRA_KWARGS",
+        "METADATA_EXTRA_KWARGS",
+        "metadata_extra_kwargs",
+    ):
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.setenv("INFERENCE_OCR_REASONING_EFFORT", "high")
+    config = AgentConfig(metadata_model="metadata", chat_model="chat")
+    assert config.get_metadata_kwargs()["reasoning_effort"] == "minimal"
+    config.metadata_reasoning_effort = "high"
+    assert config.get_metadata_kwargs()["reasoning_effort"] == "high"
+    config.metadata_reasoning_effort = None
+    assert "reasoning_effort" not in config.get_metadata_kwargs()

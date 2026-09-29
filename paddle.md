@@ -37,14 +37,28 @@ the Paperless AI image.
 
 ## Exact Paperless client contract
 
-The client configures `INFERENCE_OCR_BACKEND=paddleocr`,
+The client configures
 `INFERENCE_OCR_ENDPOINT=http://<reachable-host>:<parsing-port>` **without `/v1`**,
-`INFERENCE_PADDLE_TIMEOUT=600` seconds, and initially `OCR_CONCURRENCY=1`.
+`INFERENCE_OCR_TIMEOUT=600` seconds, and initially `OCR_CONCURRENCY=1`.
+The URL selects the parser; there is no backend selector or OCR model setting
+in Paperless AI. The parsing service runs independently on the workstation.
 
 `GET /health` must return a successful HTTP response only when the complete
 pipeline is ready, including its recognition dependency. Return a failing
 status while loading or unavailable; a 404 or a merely listening socket is not
 readiness.
+
+`GET /metadata` must return nonempty `pipeline`, `model`, and `layout_model`
+strings for the deployed pipeline and both models, for example:
+
+```json
+{"pipeline": "PaddleOCR-VL-1.6", "model": "PaddlePaddle/PaddleOCR-VL-1.6", "layout_model": "PP-DocLayoutV3"}
+```
+
+Paperless AI fetches this once per OCR batch or job before any document writes.
+An unavailable or invalid response fails processing. Pause new Paperless AI
+processing during backend upgrades, let active work finish, then replace the
+service so one batch cannot span deployments.
 
 `POST /layout-parsing` accepts JSON with the **entire original PDF**, not
 individual images or a document URL:
@@ -63,7 +77,8 @@ individual images or a document URL:
 
 Return the official synchronous parsing response shape. This illustrative
 one-page shape shows the required fields; preserve the actual structured
-results produced by Paddle:
+results produced by Paddle. Do not add provenance to this response; Paperless
+AI records the identity from `/metadata` separately:
 
 ```json
 {
@@ -141,15 +156,17 @@ PDF/error response and unhealthy recognition dependency. Record elapsed time
 and observed GPU memory, including the long PDF. No comparative experiment,
 quality scoring, image storage or archive-wide backfill.
 
-Report the reachable parsing **base URL**, `/layout-parsing` URL and `/health`
-URL from the Paperless Docker network; exact deployment/start/stop/rollback
-commands; GPU memory; tested image digests and model revisions; sample page
-counts and outcomes; any required timeout changes. Do not claim completion
-solely from the vLLM recognition server starting.
+Report the reachable parsing **base URL**, `/layout-parsing`, `/health`, and
+`/metadata` URLs from the Paperless Docker network; exact startup, shutdown,
+and rollback commands; GPU memory; tested image digests and model revisions;
+sample page counts and outcomes; any required timeout changes. Do not claim
+completion solely from the vLLM recognition server starting.
 
 Paperless then snapshots a small fixed pilot's content, metadata, tags and
 custom fields, processes only that pilot, verifies complete text and field
 ownership, and enables Paddle for incoming documents after checks pass. Keep
 the single-active-worker deployment assumption: stop the Paperless `ai`
-service before a processing CLI instance. Restoring the old backend affects
-future processing; previous document writes require the saved pilot snapshots.
+service before a processing CLI instance. Switching to another
+`/layout-parsing` service, or routing the previous OpenAI-compatible OCR server
+through `vision-ocr`, affects future processing; previous document writes
+require the saved pilot snapshots.

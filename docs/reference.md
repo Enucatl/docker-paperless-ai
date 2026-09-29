@@ -10,8 +10,8 @@ New document arrives → Paperless Workflow fires (Document Added):
                          2. Webhook → webhook-listener enqueues doc ID in Redis
 
 OCR worker          → downloads original PDF
-                    → Paddle parses the full PDF, or vision OCR reads every page
-                    → writes transcript to content and Paddle JSON to ai_ocr_output
+                    → /layout-parsing service reads the complete PDF
+                    → writes transcript to content and structured OCR JSON to ai_ocr_output
                     → tag transitions: ai:run-ocr → ai:run-metadata
 
 Metadata worker     → reads transcript from Paperless (no PDF download)
@@ -36,7 +36,7 @@ Chat query → LLM chooses short keywords → Paperless full-text search
 
 > **When using cloud models (the default), the following data is sent to the configured third-party API:**
 >
-> - **OCR input** — the vision backend sends every rendered page to its OCR model. The Paddle backend sends the complete original PDF to its configured parsing service.
+> - **OCR input** — the complete original PDF goes to the configured `/layout-parsing` service. Paddle parses it directly; the optional vision adapter renders pages sequentially for its model.
 > - **Document text** — extracted text (or the first 6000 characters) goes to the metadata model.
 > - **Chat context** — your question and text from matching documents go to the chat model.
 > - **Jev evaluation** — OCR text and predicted metadata go to TypeSafe/Jev when evaluations run.
@@ -65,24 +65,19 @@ variants include `OPENROUTER_API_KEY_FILE`, `GOOGLE_API_KEY_FILE`,
 |---|---|---|
 | `PAPERLESS_URL` | `http://webserver:8000` | Paperless base URL (internal Docker network) |
 | `PAPERLESS_TOKEN` | *(required)* | API authentication token |
-| `INFERENCE_OCR_BACKEND` | `vision` | `vision` or full `paddleocr` document parsing |
-| `INFERENCE_PADDLE_TIMEOUT` | `600` | Positive Paddle request timeout in seconds |
-| `INFERENCE_OCR_MODEL` | `google/gemini-3.1-flash-lite` in `.env.example` | Vision model for OCR |
+| `INFERENCE_OCR_TIMEOUT` | `600` | Positive document-service request timeout in seconds |
 | `INFERENCE_METADATA_MODEL` | *(required)* | OpenAI-compatible inference text model for metadata extraction |
 | `INFERENCE_CHAT_MODEL` | *(required)* | OpenAI-compatible inference chat/planning model for the browser copilot |
-| `INFERENCE_OCR_ENDPOINT` | *(none)* | Vision server URL, or Paddle parsing base URL without `/v1` |
+| `INFERENCE_OCR_ENDPOINT` | *(none)* | Required document-service base URL: Paddle or `http://vision-ocr:8000` |
 | `INFERENCE_METADATA_ENDPOINT` | *(none)* | Base URL for local metadata server |
 | `INFERENCE_CHAT_ENDPOINT` | *(none)* | Base URL for the chat model server |
 | `OPENROUTER_API_KEY` | *(required for default endpoint)* | API key for OpenRouter |
-| `INFERENCE_OCR_TEMPERATURE` | *(none)* | Temperature override for OCR |
 | `INFERENCE_METADATA_TEMPERATURE` | *(none)* | Temperature override for metadata extraction |
 | `INFERENCE_CHAT_TEMPERATURE` | *(none)* | Temperature override for chat |
-| `INFERENCE_OCR_REASONING_EFFORT` | `minimal` | OpenAI-compatible inference `reasoning_effort` parameter for OCR |
-| `INFERENCE_METADATA_REASONING_EFFORT` | *(none)* | OpenAI-compatible inference `reasoning_effort` parameter for metadata extraction |
+| `INFERENCE_METADATA_REASONING_EFFORT` | `minimal` | OpenAI-compatible inference `reasoning_effort` parameter for metadata extraction |
 | `INFERENCE_CHAT_REASONING_EFFORT` | *(none)* | OpenAI-compatible inference `reasoning_effort` parameter for chat |
 | `INFERENCE_METADATA_MAX_TOKENS` | `1000` | Max output tokens for metadata extraction |
 | `INFERENCE_CHAT_MAX_TOKENS` | `1000` | Max output tokens for chat |
-| `INFERENCE_OCR_EXTRA_KWARGS` | *(none)* | JSON object of extra OpenAI-compatible inference kwargs for OCR |
 | `INFERENCE_METADATA_EXTRA_KWARGS` | *(none)* | JSON object of extra OpenAI-compatible inference kwargs for metadata extraction |
 | `INFERENCE_CHAT_EXTRA_KWARGS` | *(none)* | JSON object of extra OpenAI-compatible inference kwargs for chat |
 | `CHAT_DATABASE_URL` | *(required by the copilot)* | PostgreSQL URL for the dedicated copilot database |
@@ -141,16 +136,17 @@ On first run the worker creates these custom fields automatically:
 - `ai_processed` (Date)
 - `ai_summary` (Long text)
 - `ai_result` (Long text, metadata model output)
-- `ai_ocr_output` (Long text, Paddle JSON and provenance)
+- `ai_ocr_output` (Long text, document OCR JSON and provenance)
 
 `ai_processed` is set to the processing date on every successfully finished
 document. `ai_summary` stores the extracted 1-2 sentence summary so it can be
 shown directly in the Paperless UI or added as a list column. `ai_result`
-stores the metadata model result. `ai_ocr_output` separately stores Paddle
-document information, per-page Markdown and structured results, plus provenance.
-Metadata processing preserves it; a successful vision OCR rerun removes stale
-Paddle output. Content, OCR output and OCR stage tags are saved in one PATCH.
-See [Paddle operations](paddleocr.md) for the fixed pilot and rollback procedure.
+stores the metadata model result. `ai_ocr_output` separately stores document
+information, ordered page results and provenance from the service's
+`GET /metadata` response. OCR requires nonempty pipeline, model, and
+layout-model identities before writing documents. Metadata preserves this field.
+Content, OCR output and OCR stage tags are saved in one PATCH.
+See [OCR service setup](paddleocr.md) for direct Paddle and adapter operation.
 
 ### Document languages
 
@@ -426,18 +422,19 @@ A comparison is available in Phoenix after each run:
 #### Adding experiments
 
 Edit `ai/src/paperless_ai/eval/experiments.yaml`, then rebuild `ai-eval`.
-Any `AgentConfig` field can be overridden per experiment:
+Experiments inherit the document-service endpoint and timeout. Each experiment
+may override `ocr_endpoint`, `ocr_timeout`, and metadata configuration; its
+timeout allows the configured OCR duration plus 300 seconds for metadata:
 
 ```yaml
 experiments:
   - name: "baseline-flash"
-    ocr_model: "google/gemini-3.5-flash-lite"
     metadata_model: "inception/mercury-2.5"
     metadata_temperature: 0.75
 
   - name: "local-nuextract"
-    ocr_model: "openai/Nanonets-OCR2-3B"
-    ocr_endpoint: "http://workstation:8100/v1"
+    ocr_endpoint: "http://vision-ocr:8000"
+    ocr_timeout: 900
     metadata_model: "openai/numind/NuExtract-2.0-4B"
     metadata_endpoint: "http://workstation:8101/v1"
     metadata_temperature: 0.0

@@ -60,7 +60,6 @@ def _write_experiments(path: Path, count: int = 1) -> None:
     experiments = [
         {
             "name": f"experiment-{index}",
-            "ocr_model": "ocr-test",
             "metadata_model": "metadata-test",
         }
         for index in range(count)
@@ -234,14 +233,21 @@ async def test_corpus_language_is_an_evaluation_target_not_agent_input(tmp_path)
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("ocr_backend", ["vision", "paddleocr"])
-async def test_each_experiment_has_its_own_client(tmp_path, ocr_backend):
-    """Experiments keep separate Jev clients and the configured OCR backend."""
+@pytest.mark.parametrize(
+    "ocr_endpoint", ["http://paddle:8080", "http://vision-ocr:8000"]
+)
+async def test_each_experiment_has_its_own_client(tmp_path, ocr_endpoint):
+    """Experiments keep separate clients and inherit or override the OCR service."""
     path = _existing_pdf(tmp_path)
     corpus = tmp_path / "eval.json"
     experiments = tmp_path / "experiments.yaml"
     _write_corpus(corpus, [{"file_path": str(path), "split": "test"}])
     _write_experiments(experiments, count=2)
+    experiment_data = yaml.safe_load(experiments.read_text())
+    experiment_data["experiments"][1].update(
+        ocr_endpoint="http://override:8000", ocr_timeout=700
+    )
+    experiments.write_text(yaml.safe_dump(experiment_data))
     phoenix = _Phoenix(str(path))
     agent = MagicMock()
     agent.process = AsyncMock(
@@ -277,9 +283,8 @@ async def test_each_experiment_has_its_own_client(tmp_path, ocr_backend):
                         await run_scientific_evaluation(
                             _config().model_copy(
                                 update={
-                                    "ocr_backend": ocr_backend,
-                                    "ocr_endpoint": "http://paddle:8080",
-                                    "paddle_timeout": 650,
+                                    "ocr_endpoint": ocr_endpoint,
+                                    "ocr_timeout": 650,
                                 }
                             ),
                             split="test",
@@ -290,20 +295,20 @@ async def test_each_experiment_has_its_own_client(tmp_path, ocr_backend):
 
     assert all(client.system_one.call_count == 1 for client in clients)
     assert all(client.close.call_count == 1 for client in clients)
-    for call in build_agent.call_args_list:
+    for index, call in enumerate(build_agent.call_args_list):
         config = call.args[0]
-        assert config.ocr_backend == ocr_backend
         assert config.ocr_endpoint == (
-            "http://paddle:8080" if ocr_backend == "paddleocr" else None
+            ocr_endpoint if index == 0 else "http://override:8000"
         )
-        assert config.paddle_timeout == 650
-    for call in phoenix.run_experiment.await_args_list:
+        assert config.ocr_timeout == (650 if index == 0 else 700)
+    for index, call in enumerate(phoenix.run_experiment.await_args_list):
         metadata = call.kwargs["experiment_metadata"]
-        assert metadata["ocr_backend"] == ocr_backend
-        assert metadata["ocr_model"] == (
-            "PaddleOCR-VL-1.6-0.9B" if ocr_backend == "paddleocr" else "ocr-test"
+        assert metadata["ocr_method"] == "layout-parsing"
+        assert metadata["ocr_endpoint"] == (
+            ocr_endpoint if index == 0 else "http://override:8000"
         )
-        assert call.kwargs["timeout"] == (950 if ocr_backend == "paddleocr" else 300)
+        assert "ocr_model" not in metadata
+        assert call.kwargs["timeout"] == (950 if index == 0 else 1000)
 
 
 @pytest.mark.asyncio

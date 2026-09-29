@@ -30,6 +30,29 @@ _HTML_IMAGE = re.compile(r"<img\b(?:[^>\"']|\"[^\"]*\"|'[^']*')*>", re.IGNORECAS
 _MARKDOWN_IMAGE = re.compile(r"!\[([^\]]*)\]\((?:[^()\n]|\([^()\n]*\))*\)")
 _REFERENCE_IMAGE = re.compile(r"!\[([^\]]*)\](?:\[([^\]]*)\])?")
 _REFERENCE_DEFINITION = re.compile(r"(?m)^[ \t]{0,3}\[([^\]]+)\]:[^\n]*$")
+_IDENTITY_FIELDS = ("pipeline", "model", "layout_model")
+
+
+async def fetch_ocr_metadata(config: AgentConfig) -> dict[str, str]:
+    """Read and validate the parsing service's deployment identity."""
+    if not config.ocr_endpoint:
+        raise ValueError("Document OCR requires INFERENCE_OCR_ENDPOINT")
+    url = config.ocr_endpoint.rstrip("/") + "/metadata"
+    try:
+        async with niquests.AsyncSession() as session:
+            response = await session.get(url, timeout=5.0)
+            response.raise_for_status()
+            metadata = response.json()
+    except (niquests.RequestException, ValueError) as exc:
+        raise RuntimeError(f"OCR metadata request failed at {url}: {exc}") from exc
+    if not isinstance(metadata, dict) or any(
+        not isinstance(metadata.get(field), str) or not metadata[field].strip()
+        for field in _IDENTITY_FIELDS
+    ):
+        raise ValueError(
+            "OCR /metadata requires nonempty pipeline, model, and layout_model strings"
+        )
+    return {field: metadata[field] for field in _IDENTITY_FIELDS}
 
 
 def _image_alt(match: re.Match) -> str:
@@ -136,13 +159,14 @@ def _parse_response(payload: Any, page_count: int) -> tuple[str, dict, list[dict
 
 
 async def run_paddle_ocr(
-    file_path: str, config: AgentConfig
+    file_path: str, config: AgentConfig, metadata: dict[str, str] | None = None
 ) -> tuple[str, dict, int, float]:
     """Parse a complete PDF and return Markdown, provenance, pages and seconds.
 
     Args:
         file_path: Local PDF to send without rendering or sampling pages.
         config: Parsing service base URL and request timeout.
+        metadata: Validated batch identity, or None for a standalone job.
 
     Returns:
         Ordered Markdown, structured output, source page count and elapsed time.
@@ -152,7 +176,9 @@ async def run_paddle_ocr(
         niquests.RequestException: The service request fails.
     """
     if not config.ocr_endpoint:
-        raise ValueError("Paddle OCR requires INFERENCE_OCR_ENDPOINT")
+        raise ValueError("Document OCR requires INFERENCE_OCR_ENDPOINT")
+    if metadata is None:
+        metadata = await fetch_ocr_metadata(config)
     started = time.monotonic()
     source = await asyncio.to_thread(Path(file_path).read_bytes)
     with fitz.open(stream=source, filetype="pdf") as document:
@@ -171,16 +197,15 @@ async def run_paddle_ocr(
                 "visualize": False,
                 "restructurePages": False,
             },
-            timeout=config.paddle_timeout,
+            timeout=config.ocr_timeout,
         )
         response.raise_for_status()
-        text, info, pages = _parse_response(response.json(), page_count)
+        payload = response.json()
+        text, info, pages = _parse_response(payload, page_count)
     elapsed = time.monotonic() - started
     output = {
         "schema_version": 1,
-        "pipeline": "PaddleOCR-VL-1.6",
-        "model": "PaddleOCR-VL-1.6-0.9B",
-        "layout_model": "PP-DocLayoutV3",
+        **metadata,
         "source_sha256": hashlib.sha256(source).hexdigest(),
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "page_count": page_count,

@@ -68,15 +68,12 @@ class AgentConfig(BaseSettings):
         stripped = str(value).strip()
         return stripped or None
 
-    ocr_backend: Literal["vision", "paddleocr"] = Field(
-        default="vision", validation_alias="INFERENCE_OCR_BACKEND"
-    )
-    paddle_timeout: float = Field(
-        default=600, gt=0, validation_alias="INFERENCE_PADDLE_TIMEOUT"
-    )
-    ocr_model: str = Field(
-        default="gemini-2.5-flash",
-        validation_alias="INFERENCE_OCR_MODEL",
+    ocr_timeout: float = Field(
+        default=600,
+        gt=0,
+        validation_alias=AliasChoices(
+            "INFERENCE_OCR_TIMEOUT", "INFERENCE_PADDLE_TIMEOUT"
+        ),
     )
     metadata_model: str = Field(validation_alias="INFERENCE_METADATA_MODEL")
     chat_model: str = Field(validation_alias="INFERENCE_CHAT_MODEL")
@@ -92,16 +89,8 @@ class AgentConfig(BaseSettings):
         default=None,
         validation_alias="INFERENCE_CHAT_ENDPOINT",
     )
-    ocr_reasoning_effort: Optional[str] = Field(
-        default="minimal",
-        validation_alias=AliasChoices(
-            "INFERENCE_OCR_REASONING_EFFORT",
-            "OCR_REASONING_EFFORT",
-            "ocr_reasoning_effort",
-        ),
-    )
     metadata_reasoning_effort: Optional[str] = Field(
-        default=None,
+        default="minimal",
         validation_alias=AliasChoices(
             "INFERENCE_METADATA_REASONING_EFFORT",
             "METADATA_REASONING_EFFORT",
@@ -174,15 +163,6 @@ class AgentConfig(BaseSettings):
     dry_run: bool = False
 
     # TEMPERATURE is a generic fallback when specific ones are not set
-    ocr_temperature: Optional[float] = Field(
-        default=None,
-        validation_alias=AliasChoices(
-            "INFERENCE_OCR_TEMPERATURE",
-            "OCR_TEMPERATURE",
-            "TEMPERATURE",
-            "ocr_temperature",
-        ),
-    )
     metadata_temperature: Optional[float] = Field(
         default=None,
         validation_alias=AliasChoices(
@@ -199,7 +179,6 @@ class AgentConfig(BaseSettings):
         ),
     )
 
-    ocr_prompt: str = Field(default_factory=lambda: _load_prompt("prompt.txt"))
     metadata_prompt: str = Field(
         default_factory=lambda: _load_prompt("metadata_prompt.txt")
     )
@@ -215,23 +194,6 @@ class AgentConfig(BaseSettings):
     paperless_webhook_url: str = "http://webhook-listener:8001/webhook/document"
     webhook_secret: Optional[str] = None
 
-    # Smart agent batch size for memory-safe vision OCR loops
-    vision_batch_size: int = 5
-    # Cap the longest image dimension (px) before encoding for vision OCR.
-    # Prevents context-length errors on models with small token budgets.
-    # None = no cap (use full 300 DPI render).
-    ocr_max_image_dimension: Optional[int] = None
-
-    # Per-page output cap for vision OCR calls.  A single page of text rarely
-    # needs more than ~2000 tokens; a hard limit prevents runaway generation
-    # when a model transcribes embedded binary data (e.g. base64 images in
-    # web-archive documents) instead of summarising it.
-    ocr_max_tokens: int = Field(
-        default=4096,
-        validation_alias=AliasChoices(
-            "INFERENCE_OCR_MAX_TOKENS", "OCR_MAX_TOKENS", "ocr_max_tokens"
-        ),
-    )
     metadata_max_tokens: int = Field(
         default=1000,
         validation_alias=AliasChoices(
@@ -249,16 +211,6 @@ class AgentConfig(BaseSettings):
 
     # Dotted import path to the agent class to use in eval experiments.
     agent_class: str = "paperless_ai.agents.smart_graph_agent.SmartDocumentAgent"
-
-    # Extra kwargs to forward to OpenAI-compatible inference for OCR calls.
-    # Supports any parameter the downstream API accepts (e.g., top_p, top_k,
-    # presence_penalty, or vLLM-specific fields via extra_body).
-    ocr_extra_kwargs: Optional[Dict[str, Any]] = Field(
-        default=None,
-        validation_alias=AliasChoices(
-            "INFERENCE_OCR_EXTRA_KWARGS", "OCR_EXTRA_KWARGS", "ocr_extra_kwargs"
-        ),
-    )
 
     # Extra kwargs to forward to OpenAI-compatible inference for metadata extraction calls.
     metadata_extra_kwargs: Optional[Dict[str, Any]] = Field(
@@ -279,7 +231,6 @@ class AgentConfig(BaseSettings):
     )
 
     @field_validator(
-        "ocr_model",
         "metadata_model",
         "chat_model",
         mode="before",
@@ -290,23 +241,12 @@ class AgentConfig(BaseSettings):
             return None
         return str(value).removeprefix("openrouter/").removeprefix("openai/")
 
-    def get_ocr_kwargs(self) -> dict:
-        """Hyperparameter kwargs for OCR (vision) requests."""
-        kwargs: dict = {"max_tokens": self.ocr_max_tokens}
-        if self.ocr_temperature is not None:
-            kwargs["temperature"] = self.ocr_temperature
-        if self.ocr_reasoning_effort:
-            kwargs["reasoning_effort"] = self.ocr_reasoning_effort
-        if self.ocr_extra_kwargs:
-            kwargs.update(self.ocr_extra_kwargs)
-        return kwargs
-
     def get_metadata_kwargs(self) -> dict:
         """Hyperparameter kwargs for metadata extraction requests."""
         kwargs: dict = {"max_tokens": self.metadata_max_tokens}
         if self.metadata_temperature is not None:
             kwargs["temperature"] = self.metadata_temperature
-        effort = self.metadata_reasoning_effort or self.ocr_reasoning_effort
+        effort = self.metadata_reasoning_effort
         if effort:
             kwargs["reasoning_effort"] = effort
         if self.metadata_extra_kwargs:

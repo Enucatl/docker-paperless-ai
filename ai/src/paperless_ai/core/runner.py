@@ -4,7 +4,7 @@ Batch runner: orchestrates the Redis-driven document processing pipeline.
 Flow per document:
   1. Fetch document metadata from Paperless API
   2. Download original PDF to a temp file
-  3. Run SmartDocumentAgent (vision OCR + metadata extraction)
+  3. Run SmartDocumentAgent (document OCR + metadata extraction)
   4. PATCH Paperless (title, date, correspondent, content, custom fields)
   5. SREM doc_id from Redis queue (only on full success)
 
@@ -184,17 +184,22 @@ async def run_ocr_batch(
     queues: TaskQueues,
     ai_ocr_output_field_id: int | None = None,
 ) -> tuple[int, int]:
-    """OCR stage: download PDF, run vision OCR, write content, transition tag to ai:run-metadata.
+    """OCR stage: download PDF, run document OCR, write content, transition tag to ai:run-metadata.
 
     Directly enqueues processed docs to the metadata Redis queue so the pipeline
     advances without relying on webhook timing.
     """
-    from paperless_ai.agents.smart_graph_agent import run_vision_ocr_only
-    from paperless_ai.agents.paddle_ocr import run_paddle_ocr
+    from paperless_ai.agents.paddle_ocr import fetch_ocr_metadata, run_paddle_ocr
     from paperless_common.queue import TaskQueues
 
     if await queues.stage_size(TaskQueues.KEY_OCR) == 0:
         return 0, 0
+
+    if not config.ocr_endpoint:
+        raise ValueError("Document OCR requires INFERENCE_OCR_ENDPOINT")
+    if not await _check_server_reachable(config.ocr_endpoint, strict_health=True):
+        return 0, 0
+    metadata = await fetch_ocr_metadata(config)
 
     if ai_ocr_output_field_id is None:
         ai_ocr_output_field_id = await client.get_or_create_custom_field(
@@ -250,15 +255,9 @@ async def run_ocr_batch(
                 del data
 
                 try:
-                    output = None
-                    if config.ocr_backend == "paddleocr":
-                        full_text, output, pages, elapsed = await run_paddle_ocr(
-                            tmp_path, config
-                        )
-                    else:
-                        full_text, pages, elapsed = await run_vision_ocr_only(
-                            tmp_path, config
-                        )
+                    full_text, output, pages, elapsed = await run_paddle_ocr(
+                        tmp_path, config, metadata
+                    )
                     if not full_text.strip():
                         raise ValueError("OCR returned an empty transcript")
                 except Exception as e:
@@ -301,15 +300,12 @@ async def run_ocr_batch(
                 for cf in doc.get("custom_fields", [])
                 if cf["field"] != ai_ocr_output_field_id
             ]
-            if output is not None:
-                fields.append(
-                    {
-                        "field": ai_ocr_output_field_id,
-                        "value": json.dumps(
-                            output, ensure_ascii=False, allow_nan=False
-                        ),
-                    }
-                )
+            fields.append(
+                {
+                    "field": ai_ocr_output_field_id,
+                    "value": json.dumps(output, ensure_ascii=False, allow_nan=False),
+                }
+            )
             await _suppress_webhook(queues, doc_id)
             await client.patch_document(
                 doc_id,
@@ -333,15 +329,12 @@ async def run_ocr_batch(
             )
             return False
 
-    # Preflight: skip the batch when the local OCR server is offline so we
-    # don't download PDFs that we can't process yet.
     return await _run_stage(
         "OCR",
-        config.ocr_endpoint or None,
+        None,
         TaskQueues.KEY_OCR,
         queues,
         _process_one,
-        strict_health=config.ocr_backend == "paddleocr",
     )
 
 

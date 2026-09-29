@@ -12,12 +12,25 @@ from paperless_ai.core.config import AgentConfig
 from paperless_common.queue import TaskQueues
 from tests.conftest import PAPERLESS_URL, _make_test_pdf, _upload_document
 
+_METADATA = {
+    "pipeline": "PaddleOCR-VL-1.6",
+    "model": "PaddlePaddle/PaddleOCR-VL-1.6",
+    "layout_model": "PP-DocLayoutV3",
+}
+
+
+@pytest.fixture(autouse=True)
+def mock_ocr_metadata(monkeypatch):
+    """Provide a fresh deployment identity for mocked OCR batches."""
+    fetch = AsyncMock(return_value=_METADATA)
+    monkeypatch.setattr("paperless_ai.agents.paddle_ocr.fetch_ocr_metadata", fetch)
+    return fetch
+
 
 def _config(**kwargs) -> AgentConfig:
     """Build a configuration independent of installed inference endpoints."""
     return AgentConfig(
         **{
-            "ocr_backend": "paddleocr",
             "ocr_endpoint": "http://paddle:8080",
             "metadata_endpoint": None,
             "metadata_model": "test-metadata",
@@ -71,24 +84,23 @@ def _client() -> MagicMock:
     return client
 
 
-@pytest.mark.parametrize("backend", ["paddleocr", "vision"])
 async def test_ocr_atomic_patch_owns_only_content_and_ocr_output(
-    monkeypatch, backend: str
+    monkeypatch, mock_ocr_metadata
 ) -> None:
-    """Both OCR backends preserve fresh metadata, fields, and unrelated tags."""
+    """Document OCR preserves fresh metadata, fields, and unrelated tags."""
     client, queues = _client(), _queues()
-    output = {"schema_version": 1, "pages": [{"page_index": 0, "markdown": "新"}]}
+    output = {
+        "schema_version": 1,
+        **_METADATA,
+        "pages": [{"page_index": 0, "markdown": "新"}],
+    }
     monkeypatch.setattr(runner, "_check_server_reachable", AsyncMock(return_value=True))
     monkeypatch.setattr(
         "paperless_ai.agents.paddle_ocr.run_paddle_ocr",
         AsyncMock(return_value=("New transcript", output, 1, 0.1)),
     )
-    monkeypatch.setattr(
-        "paperless_ai.agents.smart_graph_agent.run_vision_ocr_only",
-        AsyncMock(return_value=("New transcript", 1, 0.1)),
-    )
 
-    assert await runner.run_ocr_batch(client, _config(ocr_backend=backend), queues) == (
+    assert await runner.run_ocr_batch(client, _config(), queues) == (
         1,
         0,
     )
@@ -105,12 +117,45 @@ async def test_ocr_atomic_patch_owns_only_content_and_ocr_output(
     fields = {field["field"]: field["value"] for field in payload["custom_fields"]}
     assert fields[11] == '{"previous":"metadata"}'
     assert fields[12] == "Added during processing"
-    if backend == "paddleocr":
-        assert json.loads(fields[10]) == output
-    else:
-        assert 10 not in fields
+    assert json.loads(fields[10]) == output
     queues.remove.assert_awaited_once_with(42, TaskQueues.KEY_OCR)
     queues.enqueue_metadata.assert_awaited_once_with(42)
+    mock_ocr_metadata.assert_awaited_once()
+
+
+async def test_ocr_batch_fetches_metadata_once(monkeypatch, mock_ocr_metadata) -> None:
+    """All documents in one batch share the same fetched identity."""
+    client, queues = _client(), _queues({42, 43})
+    client.get_document.side_effect = None
+    client.get_document.return_value = {"id": 42}
+    parser = AsyncMock(return_value=("Text", {**_METADATA}, 1, 0.1))
+    monkeypatch.setattr(runner, "_check_server_reachable", AsyncMock(return_value=True))
+    monkeypatch.setattr("paperless_ai.agents.paddle_ocr.run_paddle_ocr", parser)
+
+    assert await runner.run_ocr_batch(client, _config(dry_run=True), queues) == (2, 0)
+    mock_ocr_metadata.assert_awaited_once()
+    assert parser.await_count == 2
+    assert all(call.args[2] is _METADATA for call in parser.await_args_list)
+    client.patch_document.assert_not_awaited()
+
+    assert await runner.run_ocr_batch(client, _config(dry_run=True), queues) == (2, 0)
+    assert mock_ocr_metadata.await_count == 2
+
+
+async def test_bad_batch_metadata_preserves_documents(
+    monkeypatch, mock_ocr_metadata
+) -> None:
+    """Metadata failure aborts the batch before downloads or document writes."""
+    client, queues = _client(), _queues()
+    monkeypatch.setattr(runner, "_check_server_reachable", AsyncMock(return_value=True))
+    mock_ocr_metadata.side_effect = ValueError("OCR /metadata requires nonempty model")
+
+    with pytest.raises(ValueError, match="OCR /metadata requires nonempty model"):
+        await runner.run_ocr_batch(client, _config(), queues)
+    client.get_document.assert_not_awaited()
+    client.download_original.assert_not_awaited()
+    client.patch_document.assert_not_awaited()
+    queues.remove.assert_not_awaited()
 
 
 @pytest.mark.parametrize(

@@ -18,7 +18,7 @@ Usage:
     python cli.py --once --dry-run
 
 Pipeline stages (tag-driven):
-    ai:run-ocr      → OCR worker: download PDF, run vision OCR, write content
+    ai:run-ocr      → OCR worker: download PDF, run document OCR, write content
     ai:run-metadata → Metadata worker: read content, run LLM, write title/date/correspondent
 """
 
@@ -88,11 +88,7 @@ async def main_async(args: argparse.Namespace) -> None:
         setup_telemetry(service_name=config.name, project_name=config.name)
 
     log.info("Paperless URL: %s", config.paperless_url)
-    log.info(
-        "OCR model: %s%s",
-        config.ocr_model,
-        f" (endpoint={config.ocr_endpoint})" if config.ocr_endpoint else "",
-    )
+    log.info("OCR layout-parsing endpoint: %s", config.ocr_endpoint)
     log.info(
         "Metadata model: %s%s",
         config.metadata_model,

@@ -131,11 +131,9 @@ services:
       - GOOGLE_API_KEY=dummy-test-key
       - ANTHROPIC_API_KEY=dummy-test-key
       - OPENAI_API_KEY=dummy-test-key
-      - INFERENCE_OCR_BACKEND=vision
-      - INFERENCE_OCR_MODEL=gemini/gemini-2.5-flash
       - INFERENCE_METADATA_MODEL=gemini/gemini-2.5-flash
       - INFERENCE_CHAT_MODEL=gemini/gemini-2.5-flash
-      - INFERENCE_OCR_ENDPOINT=
+      - INFERENCE_OCR_ENDPOINT=http://document-service.invalid
       - INFERENCE_METADATA_ENDPOINT=
       - INFERENCE_CHAT_ENDPOINT=
       # Redis queue (DB 1)
@@ -174,11 +172,9 @@ services:
       - GOOGLE_API_KEY=dummy-test-key
       - ANTHROPIC_API_KEY=dummy-test-key
       - OPENAI_API_KEY=dummy-test-key
-      - INFERENCE_OCR_BACKEND=vision
-      - INFERENCE_OCR_MODEL=gemini/gemini-2.5-flash
       - INFERENCE_METADATA_MODEL=gemini/gemini-2.5-flash
       - INFERENCE_CHAT_MODEL=gemini/gemini-2.5-flash
-      - INFERENCE_OCR_ENDPOINT=
+      - INFERENCE_OCR_ENDPOINT=http://document-service.invalid
       - INFERENCE_METADATA_ENDPOINT=
       - INFERENCE_CHAT_ENDPOINT=
       - REDIS_URL=redis://broker:6379/1

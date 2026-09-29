@@ -102,26 +102,11 @@ def language_accuracy(output: Any) -> dict[str, float]:
     return {"score": float(isinstance(predicted, str) and predicted == reference)}
 
 
-def _build_agent(exp_config: AgentConfig, ocr_cache: Any = None):
+def _build_agent(exp_config: AgentConfig):
     """Instantiate the configured extraction agent."""
     module_path, class_name = exp_config.agent_class.rsplit(".", 1)
     module = importlib.import_module(module_path)
     agent_class = getattr(module, class_name)
-
-    if class_name == "SmartDocumentAgent":
-        from paperless_ai.agents.smart_graph_agent import _select_extraction_strategy
-
-        strategy = _select_extraction_strategy(exp_config)
-        log.info(
-            "Experiment %s: using %s",
-            exp_config.name,
-            strategy.__class__.__name__,
-        )
-        return agent_class(
-            exp_config,
-            extraction_strategy=strategy,
-            ocr_cache=ocr_cache,
-        )
 
     return agent_class(exp_config)
 
@@ -238,18 +223,13 @@ async def run_scientific_evaluation(config: AgentConfig, split: str = "test") ->
     reset_for_experiments = {
         "name": None,
         "agent_class": "paperless_ai.agents.smart_graph_agent.SmartDocumentAgent",
-        "ocr_model": "gemini/gemini-2.5-flash",
         "metadata_model": "gemini/gemini-2.5-flash",
         "chat_model": "gemini/gemini-2.5-flash",
-        "ocr_endpoint": None,
         "metadata_endpoint": None,
         "chat_endpoint": None,
-        "ocr_reasoning_effort": None,
-        "metadata_reasoning_effort": None,
+        "metadata_reasoning_effort": "minimal",
         "metadata_response_format": "auto",
-        "ocr_temperature": None,
         "metadata_temperature": None,
-        "ocr_max_image_dimension": None,
     }
     fixed_jev_settings = {
         "typesafe_api_key": config.typesafe_api_key,
@@ -263,11 +243,6 @@ async def run_scientific_evaluation(config: AgentConfig, split: str = "test") ->
         experiment_config.update(reset_for_experiments)
         experiment_config.update(experiment)
         experiment_config.update(fixed_jev_settings)
-        if (
-            experiment_config["ocr_backend"] == "paddleocr"
-            and "ocr_endpoint" not in experiment
-        ):
-            experiment_config["ocr_endpoint"] = config.ocr_endpoint
         experiments.append(AgentConfig(**experiment_config))
 
     log.info(
@@ -277,9 +252,6 @@ async def run_scientific_evaluation(config: AgentConfig, split: str = "test") ->
         config.typesafe_model,
     )
 
-    from paperless_ai.agents.smart_graph_agent import VisionOcrCache
-
-    ocr_cache = VisionOcrCache()
     for experiment_config in experiments:
         jev_client = None
         try:
@@ -294,7 +266,7 @@ async def run_scientific_evaluation(config: AgentConfig, split: str = "test") ->
                 base_url=config.typesafe_endpoint,
             )
             jev_evaluator = JevMetadataEvaluator(jev_client, config.typesafe_model)
-            agent = _build_agent(experiment_config, ocr_cache=ocr_cache)
+            agent = _build_agent(experiment_config)
 
             async def task(
                 example,
@@ -402,25 +374,15 @@ async def run_scientific_evaluation(config: AgentConfig, split: str = "test") ->
                 ),
                 experiment_metadata={
                     "agent_class": experiment_config.agent_class,
-                    "ocr_backend": experiment_config.ocr_backend,
-                    "ocr_model": (
-                        "PaddleOCR-VL-1.6-0.9B"
-                        if experiment_config.ocr_backend == "paddleocr"
-                        else experiment_config.ocr_model
-                    ),
+                    "ocr_method": "layout-parsing",
+                    "ocr_endpoint": experiment_config.ocr_endpoint,
                     "metadata_model": experiment_config.metadata_model,
                     "typesafe_model": config.typesafe_model,
-                    "ocr_temperature": experiment_config.ocr_temperature,
                     "metadata_temperature": experiment_config.metadata_temperature,
-                    "ocr_reasoning_effort": experiment_config.ocr_reasoning_effort,
                     "metadata_reasoning_effort": experiment_config.metadata_reasoning_effort,
                 },
                 concurrency=1,
-                timeout=(
-                    experiment_config.paddle_timeout + 300
-                    if experiment_config.ocr_backend == "paddleocr"
-                    else 300
-                ),
+                timeout=experiment_config.ocr_timeout + 300,
             )
             log.info("Experiment '%s' complete", experiment_config.name)
         except Exception:
@@ -430,11 +392,6 @@ async def run_scientific_evaluation(config: AgentConfig, split: str = "test") ->
                 jev_client.close()
 
     log.info("All experiments complete! View results at %s", phoenix_endpoint)
-    log.info(
-        "OCR cache: %d hits, %d misses",
-        ocr_cache.hits,
-        ocr_cache.misses,
-    )
 
 
 async def run_evals(config: AgentConfig, split: str = "test") -> None:

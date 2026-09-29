@@ -5,6 +5,7 @@ Ensures niquests AsyncSession is used correctly (e.g., close() not aclose(),
 no follow_redirects parameter, etc).
 """
 
+import niquests
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -12,67 +13,61 @@ from paperless_common.paperless import PaperlessClient
 
 
 @pytest.mark.asyncio
-async def test_paperless_client_context_manager():
-    """Verify PaperlessClient async context manager properly calls close() on exit."""
-    with patch(
-        "paperless_common.paperless.niquests.AsyncSession"
-    ) as mock_session_class:
-        mock_session = AsyncMock()
-        mock_session_class.return_value = mock_session
-        # Make sure close() exists and is callable
-        mock_session.close = AsyncMock()
-
-        # Create client and verify context manager calls close on exit
-        async with PaperlessClient("http://test:8000", "token123") as client:
-            assert client._client == mock_session
-
-        # Verify close() was called when exiting context (not aclose())
-        mock_session.close.assert_called_once()
+@pytest.mark.parametrize("fails", [False, True])
+async def test_paperless_client_context_manager(fails):
+    """The real session is awaited closed, including exceptional context exit."""
+    client = PaperlessClient("http://test:8000", "token123")
+    with patch.object(client._client, "close", wraps=client._client.close) as close:
+        if fails:
+            with pytest.raises(ValueError, match="operation failed"):
+                async with client:
+                    raise ValueError("operation failed")
+        else:
+            async with client as entered:
+                assert entered is client
+        close.assert_awaited_once()
 
 
 @pytest.mark.asyncio
-async def test_paperless_client_api_calls_use_correct_parameters():
-    """Verify API calls don't use httpx-specific parameters like follow_redirects."""
-    with patch(
-        "paperless_common.paperless.niquests.AsyncSession"
-    ) as mock_session_class:
-        mock_session = AsyncMock()
-        mock_session_class.return_value = mock_session
+@pytest.mark.parametrize("outcome", ["found", "missing", "http_error"])
+async def test_paperless_client_tag_transport(outcome):
+    """Real request preparation and response handling preserve the API contract."""
+    response = niquests.Response()
+    response.status_code = 403 if outcome == "http_error" else 200
+    response.headers["x-version"] = "5.1.2"
+    response._content = (
+        b'{"results": [{"id": 42, "name": "test"}]}'
+        if outcome == "found"
+        else b'{"results": []}'
+    )
+    async with PaperlessClient("http://test:8000/", "token123") as client:
+        with patch.object(client._client, "send", return_value=response) as send:
+            if outcome == "http_error":
+                with pytest.raises(niquests.HTTPError) as error:
+                    await client.get_tag_id("test", create=False)
+                assert error.value.response is response
+            elif outcome == "missing":
+                with pytest.raises(ValueError, match="Tag 'test' not found"):
+                    await client.get_tag_id("test", create=False)
+            else:
+                assert await client.get_tag_id("test", create=False) == 42
+                assert client.paperless_version == "5.1.2"
 
-        mock_response = MagicMock()
-        mock_response.status_code = 200
-        mock_response.headers = {}
-        mock_response.json = MagicMock(return_value={"results": []})
-        mock_session.get = AsyncMock(return_value=mock_response)
-
-        async with PaperlessClient("http://test:8000", "token123") as client:
-            try:
-                await client.get_tag_id("test", create=False)
-            except ValueError:
-                # Expected when tag not found
-                pass
-
-        # Verify get() was called without follow_redirects
-        call_kwargs = mock_session.get.call_args[1]
-        assert "follow_redirects" not in call_kwargs, (
-            "niquests.AsyncSession doesn't support follow_redirects; use allow_redirects instead"
-        )
+        send.assert_awaited_once()
+        request = send.await_args.args[0]
+        assert request.method == "GET"
+        assert request.url == "http://test:8000/api/tags/?name=test"
+        assert request.headers["Authorization"] == "Token token123"
+        assert send.await_args.kwargs["timeout"] == 60
 
 
 @pytest.mark.asyncio
-async def test_paperless_client_aclose_method_exists():
-    """Verify PaperlessClient.aclose() method exists and delegates to session.close()."""
-    with patch(
-        "paperless_common.paperless.niquests.AsyncSession"
-    ) as mock_session_class:
-        mock_session = AsyncMock()
-        mock_session_class.return_value = mock_session
-
-        client = PaperlessClient("http://test:8000", "token123")
+async def test_paperless_client_aclose():
+    """Explicit cleanup awaits the real niquests session close method."""
+    client = PaperlessClient("http://test:8000", "token123")
+    with patch.object(client._client, "close", wraps=client._client.close) as close:
         await client.aclose()
-
-        # Verify close() (not aclose()) was called on the session
-        mock_session.close.assert_called_once()
+        close.assert_awaited_once()
 
 
 def _paged_response(results, *, next_value=None):

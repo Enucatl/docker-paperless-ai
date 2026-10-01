@@ -10,7 +10,7 @@ This repository's `docker-compose.yml` is tailored to an existing host. It expec
 
 - Docker Compose and the sibling `../compose-security-baseline/hardening.yml` file.
 - An external Docker network named `traefik_proxy`, with Traefik and Authelia configured for the routes in Compose.
-- External Docker volumes `paperless-ai_data` and `paperless-ai_media`, plus the host directory `/opt/paperless-consume`.
+- External Docker volumes `paperless-ai_data` and `paperless-ai_media`. Compose creates the persistent `consume` volume automatically.
 - A host CA bundle at `/etc/ssl/certs/ca-certificates.crt`.
 - Files for every secret listed in `docker-compose.yml` under `secrets:`. Put real credentials in the files you use; empty files can stand in for unused model providers. Keep `secrets/` private.
 
@@ -20,7 +20,6 @@ For a new installation, create the network and external volumes if they do not a
 docker network create traefik_proxy
 docker volume create paperless-ai_data
 docker volume create paperless-ai_media
-mkdir -p /opt/paperless-consume
 ```
 
 The sibling hardening file comes from [docker-compose-security-baseline](https://github.com/Enucatl/docker-compose-security-baseline). This deployment also assumes a reverse proxy and domain that match `DOCKER_DOMAIN`.

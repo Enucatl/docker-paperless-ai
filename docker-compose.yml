@@ -64,7 +64,7 @@ services:
       - data:/usr/src/paperless/data
       - media:/usr/src/paperless/media
       - export:/usr/src/paperless/export
-      - /opt/paperless-consume:/usr/src/paperless/consume
+      - consume:/usr/src/paperless/consume
       - /etc/ssl/certs/ca-certificates.crt:/usr/src/paperless/certs/ca-certificates.crt:ro
     environment:
       - PAPERLESS_SECRET_KEY
@@ -555,6 +555,7 @@ networks:
 volumes:
   broker-data:
   cleanup_review_data:
+  consume:
   data:
     external: true
     name: paperless-ai_data

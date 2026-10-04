@@ -7,11 +7,12 @@ import html
 import re
 import time
 from datetime import datetime, timezone
+from io import BytesIO
 from pathlib import Path
 from typing import Any
 
-import fitz
 import niquests
+from pypdf import PdfReader
 
 from paperless_ai.core.config import AgentConfig
 
@@ -181,8 +182,7 @@ async def run_paddle_ocr(
         metadata = await fetch_ocr_metadata(config)
     started = time.monotonic()
     source = await asyncio.to_thread(Path(file_path).read_bytes)
-    with fitz.open(stream=source, filetype="pdf") as document:
-        page_count = document.page_count
+    page_count = len(PdfReader(BytesIO(source)).pages)
     if page_count == 0:
         raise ValueError("Cannot OCR a PDF without pages")
     async with niquests.AsyncSession() as session:

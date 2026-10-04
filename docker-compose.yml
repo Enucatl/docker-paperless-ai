@@ -128,6 +128,7 @@ services:
       - "traefik.http.services.phoenix.loadbalancer.server.port=6006"
     environment:
       - PHOENIX_DEFAULT_RETENTION_POLICY_DAYS=90
+      - PHOENIX_DISABLE_AGENT_ASSISTANT=true
       - PHOENIX_POSTGRES_HOST=db
       - PHOENIX_POSTGRES_PORT=5432
       - PHOENIX_POSTGRES_USER=phoenix

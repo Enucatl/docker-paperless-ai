@@ -7,7 +7,7 @@ dependencies = [
     "paperless-common",
     "shared-inference",
     "niquests>=3.0",
-    "PyMuPDF>=1.25",
+    "pypdf>=6.19",
     "Pillow>=10.0",
     "json-repair>=0.25",
     "tenacity>=8.0",
@@ -31,6 +31,7 @@ eval = [
     "pandas",
 ]
 test = [
+    "PyMuPDF>=1.25",
     "paperless-listener",
     "pytest>=8.0",
     "pytest-asyncio>=0.23",

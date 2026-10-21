@@ -65,7 +65,7 @@ services:
       - media:/usr/src/paperless/media
       - export:/usr/src/paperless/export
       - /opt/paperless-consume:/usr/src/paperless/consume
-      - /etc/ssl/certs/ca-certificates.crt:/usr/src/paperless/certs/ca-certificates.crt:ro
+      - /etc/ssl/certs/ca-certificates.crt:/etc/ssl/certs/ca-certificates.crt:ro
     environment:
       - PAPERLESS_SECRET_KEY
       - PAPERLESS_DBPASS
@@ -83,7 +83,7 @@ services:
       - PAPERLESS_URL=https://paperless.${DOCKER_DOMAIN}
       - PAPERLESS_ENABLE_HTTP_REMOTE_USER=true
       - PAPERLESS_LOGOUT_REDIRECT_URL=https://authelia.${DOCKER_DOMAIN}/logout
-      - PAPERLESS_EMAIL_CERTIFICATE_LOCATION=/usr/src/paperless/certs/ca-certificates.crt
+      - PAPERLESS_EMAIL_CERTIFICATE_LOCATION=/etc/ssl/certs/ca-certificates.crt
       - S6_READ_ONLY_ROOT=1
     networks:
       - internal

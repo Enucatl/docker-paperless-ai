@@ -87,7 +87,7 @@ services:
       - S6_READ_ONLY_ROOT=1
     networks:
       - internal
-      - traefik_proxy
+      - paperless-ai_traefik
     labels:
       - "traefik.enable=true"
       - "traefik.http.routers.paperless.rule=Host(`paperless.${DOCKER_DOMAIN}`)"
@@ -96,7 +96,7 @@ services:
       - "traefik.http.routers.paperless.tls=true"
       - "traefik.http.routers.paperless.service=paperless"
       - "traefik.http.services.paperless.loadbalancer.server.port=8000"
-      - "traefik.docker.network=traefik_proxy"
+      - "traefik.docker.network=paperless-ai_traefik"
 
   # Local observability & evaluation platform (Arize Phoenix).
   # UI: https://phoenix.${DOCKER_DOMAIN}  — traces, costs, and eval results.
@@ -111,10 +111,10 @@ services:
       - /tmp:rw,noexec,nosuid,size=64m,mode=1777
     networks:
       - internal
-      - traefik_proxy
+      - paperless-ai_traefik
     labels:
       - "traefik.enable=true"
-      - "traefik.docker.network=traefik_proxy"
+      - "traefik.docker.network=paperless-ai_traefik"
       - "traefik.http.routers.phoenix.rule=Host(`phoenix.${DOCKER_DOMAIN}`)"
       - "traefik.http.routers.phoenix.entrypoints=https"
       - "traefik.http.routers.phoenix.tls=true"
@@ -312,10 +312,10 @@ services:
       - ./ai/eval:/app/eval
     networks:
       - internal
-      - traefik_proxy
+      - paperless-ai_traefik
     labels:
       - "traefik.enable=true"
-      - "traefik.docker.network=traefik_proxy"
+      - "traefik.docker.network=paperless-ai_traefik"
       - "traefik.http.routers.paperless-ai.rule=Host(`paperless.${DOCKER_DOMAIN}`) && PathPrefix(`/ai`)"
       - "traefik.http.routers.paperless-ai.entrypoints=https"
       - "traefik.http.routers.paperless-ai.tls=true"
@@ -365,7 +365,7 @@ services:
       - VISION_OCR_TIMEOUT
     networks:
       - internal
-      - traefik_proxy
+      - paperless-ai_traefik
     labels:
       - "traefik.enable=false"
 
@@ -450,7 +450,7 @@ services:
       - cleanup_review_data:/review:ro
     networks:
       - internal
-      - traefik_proxy
+      - paperless-ai_traefik
     secrets:
       - paperless_token
     depends_on:
@@ -458,7 +458,7 @@ services:
         condition: service_healthy
     labels:
       - "traefik.enable=true"
-      - "traefik.docker.network=traefik_proxy"
+      - "traefik.docker.network=paperless-ai_traefik"
       - "traefik.http.routers.cleanup-review.rule=Host(`correspondent-cleanup.${DOCKER_DOMAIN}`)"
       - "traefik.http.routers.cleanup-review.entrypoints=https"
       - "traefik.http.routers.cleanup-review.tls=true"
@@ -516,7 +516,7 @@ services:
     volumes: []
     networks:
       - internal
-      - traefik_proxy
+      - paperless-ai_traefik
     depends_on:
       webserver:
         condition: service_healthy
@@ -552,8 +552,9 @@ networks:
     enable_ipv6: true
     ipam:
       driver: default
-  traefik_proxy:
-    external: true
+  paperless-ai_traefik:
+    name: paperless-ai_traefik
+    enable_ipv6: true
 
 volumes:
   broker-data:

@@ -42,7 +42,7 @@ services:
       file: ../compose-security-baseline/hardening.yml
       service: hardened-xxlarge
     user: "1000:1000"
-    image: ghcr.io/paperless-ngx/paperless-ngx:latest
+    image: ghcr.io/enucatl/paperless-ngx:latest
     cpu_shares: 256
     read_only: false
     tmpfs:
@@ -76,6 +76,10 @@ services:
       - PAPERLESS_TASK_WORKERS=1
       - PAPERLESS_THREADS_PER_WORKER=2
       - PAPERLESS_WEBSERVER_WORKERS=1
+      - PAPERLESS_USE_API_CONSUMER=1
+      - PAPERLESS_USE_API_SCHEDULER=1
+      - PAPERLESS_USE_LEAN_WORKER=1
+      - PAPERLESS_API_TOKEN_FILE=/run/secrets/paperless_token
       - PAPERLESS_TRAIN_TASK_CRON=disable
       - PAPERLESS_TIME_ZONE
       - PAPERLESS_REDIS=redis://broker:6379
@@ -85,6 +89,8 @@ services:
       - PAPERLESS_LOGOUT_REDIRECT_URL=https://authelia.${DOCKER_DOMAIN}/logout
       - PAPERLESS_EMAIL_CERTIFICATE_LOCATION=/etc/ssl/certs/ca-certificates.crt
       - S6_READ_ONLY_ROOT=1
+    secrets:
+      - paperless_token
     networks:
       - internal
       - paperless-ai_traefik

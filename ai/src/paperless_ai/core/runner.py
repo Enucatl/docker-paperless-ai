@@ -264,6 +264,8 @@ async def run_ocr_batch(
                 return False
 
             tmp_path = None
+            archive_path = None
+            archive = None
             try:
                 with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
                     tmp.write(data)
@@ -271,9 +273,13 @@ async def run_ocr_batch(
                 del data
 
                 try:
+                    if metadata["layout_model"] != "none":
+                        archive_path = Path(tmp_path).with_suffix(".archive.pdf")
                     full_text, output, pages, elapsed = await run_paddle_ocr(
-                        tmp_path, config, metadata
+                        tmp_path, config, metadata, archive_path=archive_path
                     )
+                    if archive_path is not None:
+                        archive = await asyncio.to_thread(archive_path.read_bytes)
                     if not full_text.strip():
                         raise ValueError("OCR returned an empty transcript")
                 except Exception as e:
@@ -289,6 +295,8 @@ async def run_ocr_batch(
             finally:
                 if tmp_path is not None:
                     Path(tmp_path).unlink(missing_ok=True)
+                if archive_path is not None:
+                    archive_path.unlink(missing_ok=True)
 
         log.info(
             "Document %d: OCR done — %d pages, %d chars, %.1fs",
@@ -323,6 +331,10 @@ async def run_ocr_batch(
                 }
             )
             await _suppress_webhook(queues, doc_id)
+            if archive is not None:
+                await client.upload_archive(
+                    doc_id, archive, full_text, output["source_sha256"]
+                )
             await client.patch_document(
                 doc_id,
                 {"content": full_text, "tags": current_tags, "custom_fields": fields},

@@ -13,6 +13,27 @@ from paperless_common.paperless import PaperlessClient
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("status", [200, 409])
+async def test_upload_archive_preserves_source_guard(status):
+    """Send archive and text together and propagate stale-original failures."""
+    response = niquests.Response()
+    response.status_code = status
+    response._content = b"original changed" if status == 409 else b"{}"
+    async with PaperlessClient("http://test:8000", "token123") as client:
+        client._client.post = AsyncMock(return_value=response)
+        if status == 409:
+            with pytest.raises(niquests.HTTPError):
+                await client.upload_archive(42, b"PDF", "recognized", "a" * 64)
+        else:
+            await client.upload_archive(42, b"PDF", "recognized", "a" * 64)
+        client._client.post.assert_awaited_once_with(
+            "/api/documents/42/archive/",
+            files={"archive": ("archive.pdf", b"PDF", "application/pdf")},
+            data={"content": "recognized", "source_checksum": "a" * 64},
+        )
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("fails", [False, True])
 async def test_paperless_client_context_manager(fails):
     """The real session is awaited closed, including exceptional context exit."""

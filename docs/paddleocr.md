@@ -128,3 +128,27 @@ contract test also needs the AI dependencies: from `ai/`, run
 its test/evaluation extras. The Docker integration suite uses `./run_tests.sh`
 from the repository root. These tests mock inference and do not reprocess
 stored documents.
+
+## Searchable archival PDFs
+
+The OCR worker requests `includeArchiveImages=true` for Paddle responses. Each
+`layoutParsingResults` entry must include `archiveImage`: a base64 PNG of the
+clean corrected page, in exactly the coordinate space used by `prunedResult`
+bounding boxes. Comparison panels and detection visualizations are unsuitable.
+The service must export the actual preprocessing output while preserving
+orientation correction and unwarping. Missing images fail the OCR job before
+document writes; historical JSON without these images requires fresh OCR.
+
+The AI service embeds the recognized text invisibly into these corrected pages
+and converts the result to PDF/A-2 using Ghostscript. It sends the archive and
+transcript together to `POST /api/documents/{id}/archive/`, with the original's
+SHA-256 as `source_checksum`. Paperless preserves the original and rejects stale
+results. Stage tags and stored OCR provenance are updated only after the archive
+upload succeeds. Page images are transient and never stored in `ai_ocr_output`.
+The vision adapter (`layout_model=none`) continues its text-only workflow.
+
+On Atlas, prohibit Paperless's local OCR, classifier, and built-in AI via
+`PAPERLESS_LOCAL_OCR_ENABLED=false`, `PAPERLESS_CLASSIFIER_ENABLED=false`, and
+`PAPERLESS_AI_ALLOWED=false`. These restrictions leave this external archival
+workflow available. Deploy a Paperless image supporting the archive endpoint
+and deployment restrictions before updating the external worker.

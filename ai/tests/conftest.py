@@ -264,10 +264,26 @@ def mock_document_service():
         "page_count": 1,
         "pages": [{"page_index": 0, "markdown": {"text": _OCR_TEXT}}],
     }
+
+    async def mock_document_ocr(source, config, metadata, *, archive_path=None):
+        """Return source-bound output and write the requested mock PDF archive."""
+        from hashlib import sha256
+        from pathlib import Path
+
+        source_bytes = Path(source).read_bytes()
+        if archive_path is not None:
+            archive_path.write_bytes(source_bytes)
+        return (
+            _OCR_TEXT,
+            {**output, "source_sha256": sha256(source_bytes).hexdigest()},
+            1,
+            0.01,
+        )
+
     with (
         patch(
             "paperless_ai.agents.paddle_ocr.run_paddle_ocr",
-            new=AsyncMock(return_value=(_OCR_TEXT, output, 1, 0.01)),
+            new=AsyncMock(side_effect=mock_document_ocr),
         ),
         patch(
             "paperless_ai.core.runner._check_server_reachable",

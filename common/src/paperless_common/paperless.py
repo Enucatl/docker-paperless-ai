@@ -292,6 +292,24 @@ class PaperlessClient:
         r = await self._client.patch(f"/api/documents/{doc_id}/", json=payload)
         _raise_for_status(r)
 
+    async def upload_archive(
+        self, doc_id: int, archive: bytes, content: str, source_checksum: str
+    ) -> None:
+        """Attach an external archive and transcript to the unchanged original.
+
+        Args:
+            doc_id: Document whose original was processed.
+            archive: Searchable PDF/A generated from the OCR result.
+            content: Complete recognized document text.
+            source_checksum: SHA-256 of the original used for OCR.
+        """
+        response = await self._client.post(
+            f"/api/documents/{doc_id}/archive/",
+            files={"archive": ("archive.pdf", archive, "application/pdf")},
+            data={"content": content, "source_checksum": source_checksum},
+        )
+        _raise_for_status(response)
+
     async def delete_correspondent(self, correspondent_id: int) -> None:
         r = await self._client.delete(f"/api/correspondents/{correspondent_id}/")
         _raise_for_status(r)

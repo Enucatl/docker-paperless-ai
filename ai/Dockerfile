@@ -4,7 +4,7 @@ FROM python:3.14-slim AS runtime
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
 
 RUN apt-get update \
-    && apt-get install --no-install-recommends --yes git \
+    && apt-get install --no-install-recommends --yes git ghostscript \
     && rm -rf /var/lib/apt/lists/*
 
 RUN groupadd --gid 10001 app \

@@ -20,7 +20,7 @@ COMPOSE="docker compose -f docker-compose.yml -f docker-compose.test.yml"
 # ---------------------------------------------------------------------------
 teardown() {
     if [ "$?" -ne 0 ]; then
-        $COMPOSE logs --no-color --tail=80 ai webhook-listener || true
+        $COMPOSE logs --no-color --tail=80 webserver ai webhook-listener || true
     fi
     echo ""
     echo "=== Tearing down test environment ==="

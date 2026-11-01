@@ -64,6 +64,7 @@ def test_page_order_blank_pages_and_image_omission() -> None:
     first["markdown"]["images"] = {"image.png": "secret"}
     first["outputImages"] = {"preview": "secret"}
     first["inputImage"] = "secret"
+    first["archiveImage"] = "secret"
     first["exports"] = {"docx": {"content": "secret"}}
     first["prunedResult"]["parsing_res_list"][0]["image"] = "secret"
     first["prunedResult"]["doc_preprocessor_res"] = {"output_img": "secret", "angle": 0}
@@ -290,3 +291,64 @@ async def test_metadata_http_and_json_failures(error: Exception) -> None:
             get.side_effect = error
         with pytest.raises(RuntimeError, match="OCR metadata request failed"):
             await fetch_ocr_metadata(config)
+
+
+async def test_archive_images_are_requested_but_not_persisted(tmp_path: Path) -> None:
+    """Pass clean corrected pages to the PDF generator without storing base64."""
+    source = tmp_path / "source.pdf"
+    destination = tmp_path / "archive.pdf"
+    with fitz.open() as doc:
+        page = doc.new_page()
+        clean_png = page.get_pixmap().tobytes("png")
+        doc.save(source)
+    payload = _response("recognized text")
+    payload["result"]["layoutParsingResults"][0]["archiveImage"] = base64.b64encode(
+        clean_png
+    ).decode()
+    response = Mock()
+    response.json.return_value = payload
+    config = AgentConfig(
+        metadata_model="metadata", chat_model="chat", ocr_endpoint="http://paddle:8080"
+    )
+    with (
+        patch(
+            "niquests.AsyncSession.post", new_callable=AsyncMock, return_value=response
+        ) as post,
+        patch("paperless_ai.agents.archive.create_searchable_archive") as generate,
+    ):
+        text, output, count, _ = await run_paddle_ocr(
+            str(source), config, _METADATA, archive_path=destination
+        )
+    assert post.await_args.kwargs["json"]["includeArchiveImages"] is True
+    generate.assert_called_once_with(
+        source, output, destination, corrected_images=[clean_png]
+    )
+    assert text == "recognized text" and count == 1
+    assert "archiveImage" not in json.dumps(output)
+
+
+@pytest.mark.parametrize("image", [None, "not base64!"])
+async def test_archive_requires_valid_clean_page_images(tmp_path: Path, image) -> None:
+    """Missing or corrupt clean images abort the job rather than using previews."""
+    source = tmp_path / "source.pdf"
+    with fitz.open() as doc:
+        doc.new_page()
+        doc.save(source)
+    payload = _response("text")
+    payload["result"]["layoutParsingResults"][0]["archiveImage"] = image
+    response = Mock()
+    response.json.return_value = payload
+    config = AgentConfig(
+        metadata_model="metadata", chat_model="chat", ocr_endpoint="http://paddle:8080"
+    )
+    with (
+        patch(
+            "niquests.AsyncSession.post", new_callable=AsyncMock, return_value=response
+        ),
+        patch("paperless_ai.agents.archive.create_searchable_archive") as generate,
+        pytest.raises(ValueError),
+    ):
+        await run_paddle_ocr(
+            str(source), config, _METADATA, archive_path=tmp_path / "archive.pdf"
+        )
+    generate.assert_not_called()

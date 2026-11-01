@@ -81,6 +81,9 @@ services:
       - PAPERLESS_USE_LEAN_WORKER=1
       - PAPERLESS_API_TOKEN_FILE=/run/secrets/paperless_token
       - PAPERLESS_TRAIN_TASK_CRON=disable
+      - PAPERLESS_CLASSIFIER_ENABLED=false
+      - PAPERLESS_LOCAL_OCR_ENABLED=false
+      - PAPERLESS_AI_ALLOWED=false
       - PAPERLESS_TIME_ZONE
       - PAPERLESS_REDIS=redis://broker:6379
       - PAPERLESS_DBHOST=db
@@ -233,7 +236,7 @@ services:
       target: runtime
     cpu_shares: 256
     tmpfs:
-      - /tmp:rw,noexec,nosuid,size=32m,mode=1777
+      - /tmp:rw,noexec,nosuid,size=1g,mode=1777
     extra_hosts:
       - "${DOCKER_DOMAIN}:host-gateway"
     entrypoint: []

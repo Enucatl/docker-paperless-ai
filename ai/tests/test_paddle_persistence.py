@@ -2,6 +2,8 @@
 
 import asyncio
 import json
+from hashlib import sha256
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -80,9 +82,25 @@ def _client() -> MagicMock:
     )
     client.get_or_create_custom_field = AsyncMock(return_value=10)
     client.patch_document = AsyncMock()
+    client.upload_archive = AsyncMock()
     client._get_all_tags = AsyncMock(return_value=[])
     client.paperless_version = "test"
     return client
+
+
+def _paddle_result(
+    text: str, output: dict, archive: bytes = b"mock archive"
+) -> AsyncMock:
+    """Mock OCR output and its optional on-disk archive together."""
+
+    async def process(source, config, metadata, *, archive_path=None):
+        """Tie output to the exact bytes downloaded for this job."""
+        output["source_sha256"] = sha256(Path(source).read_bytes()).hexdigest()
+        if archive_path is not None:
+            archive_path.write_bytes(archive)
+        return text, output, 1, 0.1
+
+    return AsyncMock(side_effect=process)
 
 
 async def test_ocr_atomic_patch_owns_only_content_and_ocr_output(
@@ -98,7 +116,7 @@ async def test_ocr_atomic_patch_owns_only_content_and_ocr_output(
     monkeypatch.setattr(runner, "_check_server_reachable", AsyncMock(return_value=True))
     monkeypatch.setattr(
         "paperless_ai.agents.paddle_ocr.run_paddle_ocr",
-        AsyncMock(return_value=("New transcript", output, 1, 0.1)),
+        _paddle_result("New transcript", output),
     )
 
     assert await runner.run_ocr_batch(client, _config(), queues) == (
@@ -108,6 +126,9 @@ async def test_ocr_atomic_patch_owns_only_content_and_ocr_output(
 
     client.get_or_create_custom_field.assert_awaited_once_with(
         "ai_ocr_output", data_type="longtext"
+    )
+    client.upload_archive.assert_awaited_once_with(
+        42, b"mock archive", "New transcript", output["source_sha256"]
     )
     client.patch_document.assert_awaited_once()
     doc_id, payload = client.patch_document.await_args.args
@@ -124,12 +145,45 @@ async def test_ocr_atomic_patch_owns_only_content_and_ocr_output(
     mock_ocr_metadata.assert_awaited_once()
 
 
+async def test_archive_upload_failure_preserves_tags_and_retries(monkeypatch) -> None:
+    """Do not transition to metadata when archive persistence fails."""
+    client, queues = _client(), _queues()
+    client.upload_archive.side_effect = RuntimeError("archive rejected")
+    monkeypatch.setattr(runner, "_check_server_reachable", AsyncMock(return_value=True))
+    monkeypatch.setattr(
+        "paperless_ai.agents.paddle_ocr.run_paddle_ocr",
+        _paddle_result("New transcript", {**_METADATA}),
+    )
+    assert await runner.run_ocr_batch(client, _config(), queues) == (0, 1)
+    client.upload_archive.assert_awaited_once()
+    client.patch_document.assert_not_awaited()
+    queues.remove.assert_not_awaited()
+    queues.enqueue_metadata.assert_not_awaited()
+    queues.mark_failure.assert_awaited_once_with(42, TaskQueues.KEY_OCR, max_attempts=3)
+
+
+async def test_vision_only_ocr_keeps_text_only_persistence(
+    monkeypatch, mock_ocr_metadata
+) -> None:
+    """An OCR backend without layout geometry does not request an archive."""
+    client, queues = _client(), _queues()
+    metadata = {**_METADATA, "layout_model": "none"}
+    mock_ocr_metadata.return_value = metadata
+    parser = _paddle_result("Vision transcript", metadata.copy())
+    monkeypatch.setattr(runner, "_check_server_reachable", AsyncMock(return_value=True))
+    monkeypatch.setattr("paperless_ai.agents.paddle_ocr.run_paddle_ocr", parser)
+    assert await runner.run_ocr_batch(client, _config(), queues) == (1, 0)
+    assert parser.await_args.kwargs["archive_path"] is None
+    client.upload_archive.assert_not_awaited()
+    assert client.patch_document.await_args.args[1]["content"] == "Vision transcript"
+
+
 async def test_ocr_batch_fetches_metadata_once(monkeypatch, mock_ocr_metadata) -> None:
     """All documents in one batch share the same fetched identity."""
     client, queues = _client(), _queues({42, 43})
     client.get_document.side_effect = None
     client.get_document.return_value = {"id": 42}
-    parser = AsyncMock(return_value=("Text", {**_METADATA}, 1, 0.1))
+    parser = _paddle_result("Text", {**_METADATA})
     monkeypatch.setattr(runner, "_check_server_reachable", AsyncMock(return_value=True))
     monkeypatch.setattr("paperless_ai.agents.paddle_ocr.run_paddle_ocr", parser)
 
@@ -138,6 +192,7 @@ async def test_ocr_batch_fetches_metadata_once(monkeypatch, mock_ocr_metadata) -
     assert parser.await_count == 2
     assert all(call.args[2] is _METADATA for call in parser.await_args_list)
     client.patch_document.assert_not_awaited()
+    client.upload_archive.assert_not_awaited()
 
     assert await runner.run_ocr_batch(client, _config(dry_run=True), queues) == (2, 0)
     assert mock_ocr_metadata.await_count == 2
@@ -320,7 +375,7 @@ async def test_paddle_large_json_roundtrip_metadata_preservation_and_failed_reru
         ],
     }
     assert len(json.dumps(output, ensure_ascii=False).encode()) > 100_000
-    paddle = AsyncMock(return_value=(text, output, 1, 0.1))
+    paddle = _paddle_result(text, output, _make_test_pdf())
     monkeypatch.setattr("paperless_ai.agents.paddle_ocr.run_paddle_ocr", paddle)
     fields = {}
     for name, data_type in (

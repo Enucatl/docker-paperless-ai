@@ -6,11 +6,12 @@
 # Ephemeral strategy:
 #   - db and broker use tmpfs (RAM-disk) — disappears the instant the container stops,
 #     no named volumes to clean up even if the script is Ctrl+C'd.
-#   - webserver uses anonymous volumes — Docker auto-wipes them on `down -v`.
+#   - webserver uses writable tmpfs directories owned by its non-root user.
 #   - Dummy LLM keys prevent real API calls even if a mock is accidentally skipped.
 
 services:
   db:
+    userns_mode: host
     # RAM-disk: lightning-fast Django migrations, zero disk residue.
     volumes: !reset []
     tmpfs:
@@ -21,6 +22,7 @@ services:
       start_period: 60s
 
   broker:
+    userns_mode: host
     # Ephemeral Redis needs no disk persistence (the hardened user cannot write /data).
     command: ["redis-server", "--save", "", "--appendonly", "no"]
     volumes: !reset []
@@ -31,6 +33,7 @@ services:
       start_period: 60s
 
   phoenix:
+    userns_mode: host
     networks: !override [internal]
     labels: !override
       traefik.enable: "false"
@@ -44,19 +47,30 @@ services:
       interval: 1s
 
   webserver:
+    userns_mode: host
     networks: !override [internal]
     labels: !override
       traefik.enable: "false"
     healthcheck:
       interval: 1s
       start_period: 60s
-    # Anonymous volumes — Docker auto-wipes them on `down -v`.
-    volumes:
-      - /usr/src/paperless/data
-      - /usr/src/paperless/media
-      - /usr/src/paperless/export
-      - /usr/src/paperless/consume
+    # Non-root Paperless needs writable ephemeral directories even with userns=host.
+    volumes: !reset []
+    secrets: !reset []
+    tmpfs: !override
+      - /tmp:rw,noexec,nosuid,size=1g,mode=1777
+      - /run:rw,exec,nosuid,size=16m,mode=1777
+      - /usr/src/paperless/data:uid=1000,gid=1000,mode=700
+      - /usr/src/paperless/media:uid=1000,gid=1000,mode=700
+      - /usr/src/paperless/export:uid=1000,gid=1000,mode=700
+      - /usr/src/paperless/consume:uid=1000,gid=1000,mode=700
     environment:
+      # The ephemeral database has no production API token for these services.
+      - PAPERLESS_API_TOKEN_FILE=
+      - PAPERLESS_USE_API_CONSUMER=
+      - PAPERLESS_USE_API_SCHEDULER=
+      # Keep a ready worker: lean autoscaling can exceed the upload test deadline.
+      - PAPERLESS_USE_LEAN_WORKER=
       # Auto-create the admin user on first boot (idempotent on subsequent boots).
       - PAPERLESS_ADMIN_USER=admin
       - PAPERLESS_ADMIN_PASSWORD=admin
@@ -64,6 +78,9 @@ services:
       - PAPERLESS_SECRET_KEY=test-secret-key-not-for-production
       - PAPERLESS_URL=http://webserver:8000
       - PAPERLESS_OCR_LANGUAGE=eng
+      - PAPERLESS_CLASSIFIER_ENABLED=false
+      - PAPERLESS_LOCAL_OCR_ENABLED=false
+      - PAPERLESS_AI_ALLOWED=false
       # Reuse the test consumer; Paperless otherwise respawns it after every upload.
       - CELERY_WORKER_MAX_TASKS_PER_CHILD=100
       # Allow Paperless to POST webhooks to internal Docker hostnames
@@ -75,6 +92,7 @@ services:
 
   # Webhook listener — receives document events and pushes to Redis DB 1.
   webhook-listener:
+    userns_mode: host
     command: >
       bash -ec '
         PAPERLESS_TOKEN=$$(python /app/fetch_paperless_token.py)
@@ -102,6 +120,7 @@ services:
         condition: service_healthy
 
   ai:
+    userns_mode: host
     # Keep test DNS and routes separate from the live stack's shared proxy network.
     networks: !override [internal]
     labels: !override
@@ -156,6 +175,7 @@ services:
       - hf_token
 
   ai-test:
+    userns_mode: host
     build:
       context: .
       dockerfile: ./ai/Dockerfile

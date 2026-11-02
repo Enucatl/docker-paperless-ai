@@ -3,17 +3,21 @@
 import hashlib
 import io
 import subprocess
+from xml.etree import ElementTree
 
 import pymupdf
 import pytest
 from PIL import Image
 
-from paperless_ai.agents.archive import create_searchable_archive
+from paperless_ai.agents.archive import _validate_pdfa_2u, create_searchable_archive
 
 
 @pytest.fixture
-def archive_input(tmp_path):
+def archive_input(tmp_path, monkeypatch):
     """Provide a mixed document with native text, vectors and a high resolution scan."""
+    monkeypatch.setattr(
+        "paperless_ai.agents.archive._validate_pdfa_2u", lambda source: None
+    )
     source = tmp_path / "original.pdf"
     image = io.BytesIO()
     Image.new("RGB", (1500, 2000), "#ffeecc").save(image, format="PNG")
@@ -126,8 +130,11 @@ def test_invalid_conversion_preserves_existing_archive(archive_input, monkeypatc
     assert destination.read_bytes() == b"existing archive"
 
 
-def test_scan_unicode_overlay_is_invisible(archive_input):
+def test_scan_unicode_overlay_is_invisible(archive_input, monkeypatch):
     """Searchable multilingual text does not alter the visible scan pixels."""
+    monkeypatch.setattr(
+        "paperless_ai.agents.archive._validate_pdfa_2u", _validate_pdfa_2u
+    )
     source, output, destination = archive_input
     output["pages"][1]["prunedResult"]["parsing_res_list"] = [
         {
@@ -146,6 +153,9 @@ def test_scan_unicode_overlay_is_invisible(archive_input):
         for word in ("Résumé", "Ελληνικά", "日本語", "发票", "Café", "€10"):
             assert word in text
         assert original[0].get_text() == archive[0].get_text()
+        metadata = ElementTree.fromstring(archive.get_xml_metadata())
+        conformance = "{http://www.aiim.org/pdfa/ns/id/}conformance"
+        assert any(node.get(conformance) == "U" for node in metadata.iter())
 
 
 @pytest.mark.parametrize(
@@ -334,3 +344,36 @@ def test_existing_unicode_map_is_preserved():
         document.xref_set_key(font, "ToUnicode", f"{mapping} 0 R")
         assert not _add_known_font_unicode(document)
         assert document.xref_stream(mapping) == b"existing map"
+
+
+@pytest.mark.parametrize(
+    "report",
+    [
+        b'<report><validationReport isCompliant="false"/></report>',
+        b"<report/>",
+        b"<report><validationReport/></report>",
+        b'<report><validationReport isCompliant="true"/><validationReport isCompliant="true"/></report>',
+        b"not XML",
+    ],
+)
+def test_invalid_unicode_report_preserves_previous_archive(
+    archive_input, monkeypatch, report
+):
+    """Reject incomplete or negative validation even when the CLI exits successfully."""
+    source, output, destination = archive_input
+    destination.write_bytes(b"existing archive")
+    original_run = subprocess.run
+
+    def run(command, **kwargs):
+        if command[0] == "verapdf":
+            assert command[1:3] == ["--flavour", "2u"]
+            return subprocess.CompletedProcess(command, 0, stdout=report)
+        return original_run(command, **kwargs)
+
+    monkeypatch.setattr(
+        "paperless_ai.agents.archive._validate_pdfa_2u", _validate_pdfa_2u
+    )
+    monkeypatch.setattr("paperless_ai.agents.archive.subprocess.run", run)
+    with pytest.raises((ValueError, ElementTree.ParseError)):
+        create_searchable_archive(source, output, destination)
+    assert destination.read_bytes() == b"existing archive"

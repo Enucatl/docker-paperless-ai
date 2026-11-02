@@ -9,6 +9,7 @@ dependencies = [
     "niquests>=3.0",
     "pypdf>=6.19",
     "PyMuPDF>=1.25",
+    "fonttools>=4.68",
     "Pillow>=10.0",
     "json-repair>=0.25",
     "tenacity>=8.0",

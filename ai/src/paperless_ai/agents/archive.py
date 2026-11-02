@@ -8,6 +8,12 @@ import subprocess
 import tempfile
 from html.parser import HTMLParser
 from pathlib import Path
+from xml.etree import ElementTree
+
+from paperless_ai.agents.font_mapping import (
+    recover_embedded_font_unicode,
+    set_font_unicode,
+)
 
 
 class _BlockText(HTMLParser):
@@ -41,7 +47,7 @@ def _block_text(content: str) -> str:
 
 
 def create_searchable_archive(source: Path, output: dict, destination: Path) -> None:
-    """Convert the original PDF to PDF/A-2 without rebuilding its pages.
+    """Convert the original PDF to validated PDF/A-2u without rebuilding pages.
 
     Args:
         source: Original PDF whose SHA-256 is recorded in the OCR output.
@@ -73,7 +79,9 @@ def create_searchable_archive(source: Path, output: dict, destination: Path) -> 
         with tempfile.TemporaryDirectory(dir=destination.parent) as temporary:
             temporary = Path(temporary)
             original_copy = temporary / "original.pdf"
-            if _add_known_font_unicode(original):
+            changed = _add_known_font_unicode(original)
+            changed = recover_embedded_font_unicode(original) or changed
+            if changed:
                 original.save(original_copy)
             else:
                 original_copy.write_bytes(source_bytes)
@@ -91,7 +99,6 @@ def create_searchable_archive(source: Path, output: dict, destination: Path) -> 
                     if original[index].get_text().strip():
                         continue
                     _add_ocr_layer(page, pages[index]["prunedResult"])
-                checked.subset_fonts()
                 # PDF/A requires the identity mapping MuPDF otherwise leaves implicit.
                 for xref in range(1, checked.xref_length()):
                     if (
@@ -100,8 +107,22 @@ def create_searchable_archive(source: Path, output: dict, destination: Path) -> 
                         and checked.xref_get_key(xref, "CIDToGIDMap")[0] == "null"
                     ):
                         checked.xref_set_key(xref, "CIDToGIDMap", "/Identity")
+                ElementTree.register_namespace(
+                    "pdfaid", "http://www.aiim.org/pdfa/ns/id/"
+                )
+                metadata = ElementTree.fromstring(checked.get_xml_metadata())
+                conformance = "{http://www.aiim.org/pdfa/ns/id/}conformance"
+                for node in metadata.iter():
+                    if conformance in node.attrib:
+                        node.set(conformance, "U")
+                    elif node.tag == conformance:
+                        node.text = "U"
+                checked.set_xml_metadata(
+                    ElementTree.tostring(metadata, encoding="unicode")
+                )
                 finished = temporary / "finished.pdf"
                 checked.save(finished, garbage=4, deflate=True)
+            _validate_pdfa_2u(finished)
             os.replace(finished, destination)
 
 
@@ -128,27 +149,11 @@ def _add_known_font_unicode(document) -> bool:
         160: " ",
         173: "-",
     }
-    mappings = []
+    mappings = {}
     for code in range(32, 256):
-        character = (
-            overrides[code] if code in overrides else bytes([code]).decode("cp1252")
-        )
-        mappings.append(f"<{code:02x}> <{ord(character):04x}>")
-    cmap = (
-        "/CIDInit /ProcSet findresource begin\n12 dict begin\nbegincmap\n"
-        "/CIDSystemInfo << /Registry (Adobe) /Ordering (UCS) /Supplement 0 >> def\n"
-        "/CMapName /KnownWinAnsi def\n/CMapType 2 def\n"
-        "1 begincodespacerange\n<00> <ff>\nendcodespacerange\n"
-    )
-    for offset in range(0, len(mappings), 100):
-        chunk = mappings[offset : offset + 100]
-        cmap += f"{len(chunk)} beginbfchar\n" + "\n".join(chunk) + "\nendbfchar\n"
-    cmap += "endcmap\nCMapName currentdict /CMap defineresource pop\nend\nend\n"
-    xref = document.get_new_xref()
-    document.update_object(xref, "<<>>")
-    document.update_stream(xref, cmap.encode("ascii"))
+        mappings[code] = overrides.get(code) or bytes([code]).decode("cp1252")
     for font in fonts:
-        document.xref_set_key(font, "ToUnicode", f"{xref} 0 R")
+        set_font_unicode(document, font, mappings)
     return True
 
 
@@ -206,12 +211,26 @@ def _add_ocr_layer(page, result: dict) -> None:
             if spare_height < 0:
                 raise ValueError("OCR block text cannot fit on the page")
         if layer.get_contents():
+            overlay.subset_fonts()
             page.show_pdf_page(
                 page.rect * page.derotation_matrix,
                 overlay,
                 rotate=(page.rotation - angle) % 360,
                 keep_proportion=False,
             )
+
+
+def _validate_pdfa_2u(source: Path) -> None:
+    """Publish only PDFs that pass veraPDF's Unicode conformance profile."""
+    result = subprocess.run(
+        ["verapdf", "--flavour", "2u", "--format", "xml", str(source)],
+        check=True,
+        capture_output=True,
+        timeout=120,
+    )
+    reports = ElementTree.fromstring(result.stdout).findall(".//validationReport")
+    if len(reports) != 1 or reports[0].get("isCompliant") != "true":
+        raise ValueError("Archive failed PDF/A-2u validation")
 
 
 def _convert_to_pdfa(source: Path, destination: Path, temporary: Path) -> None:

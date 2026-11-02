@@ -135,7 +135,7 @@ The OCR worker disables document unwarping (`useDocUnwarping=false`) and does
 not request corrected page images. OCR preprocessing is used for recognition,
 not as the visual source of the archive.
 
-The AI service converts the original PDF to PDF/A-2 using Ghostscript, preserving
+The AI service produces PDF/A-2u using Ghostscript and veraPDF, preserving
 native text, vector content and embedded image resolution. Pages with no existing
 extractable text receive an invisible OCR text layer; pages with existing text
 are left alone to avoid duplicate selection and search results. This is a
@@ -144,8 +144,17 @@ native text and scanned regions keeps its existing text only.
 
 Before conversion, simple fonts explicitly declaring `WinAnsiEncoding` receive
 missing Unicode maps derived from that encoding. Existing Unicode maps are
-preserved. Undeclared or custom encodings are not guessed, so conversion can
-still change text extraction for those fonts.
+preserved. For undeclared symbolic TrueType fonts, embedded Unicode tables and
+real glyph names are preferred. If they are inconclusive, consistent valid
+Unicode interpretations from the source PDF reader are made explicit. Other
+unsupported fonts retain the converter's normal interpretation. This may retain
+imperfect character guesses; Unicode conformance does not guarantee semantic
+accuracy.
+
+Only new OCR fonts are subset, preserving existing text mappings. After all
+edits, the archive declares PDF/A-2u and must pass the pinned veraPDF validator's
+2u profile before publication. Failed validation leaves the existing archive
+unchanged. There is no OCR-based font matching or non-PDF/A fallback.
 
 The overlay uses Paddle block bounding boxes, so selection within paragraphs
 and tables is approximate. Original page images are never replaced with OCR

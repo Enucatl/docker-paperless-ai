@@ -272,3 +272,65 @@ def test_pdf_errors_do_not_publish_partial_conversion(tmp_path):
     with pytest.raises(subprocess.CalledProcessError):
         create_searchable_archive(source, output, destination)
     assert destination.read_bytes() == b"existing archive"
+
+
+def test_declared_winansi_survives_pdfa_conversion(tmp_path):
+    """Explicit encoding restores punctuation without changing visible glyphs."""
+    source = tmp_path / "winansi.pdf"
+    destination = tmp_path / "archive.pdf"
+    with pymupdf.open() as document:
+        page = document.new_page()
+        font = page.insert_font(fontname="helv")
+        document.xref_set_key(font, "Encoding", "/WinAnsiEncoding")
+        page.insert_text((20, 30), "placeholder")
+        document.update_stream(
+            page.get_contents()[0], b"BT /helv 12 Tf 20 30 Td <959680a0ad> Tj ET"
+        )
+        document.save(source)
+    original_bytes = source.read_bytes()
+    output = {
+        "source_sha256": hashlib.sha256(original_bytes).hexdigest(),
+        "page_count": 1,
+        "pages": [{"page_index": 0}],
+    }
+    create_searchable_archive(source, output, destination)
+    assert source.read_bytes() == original_bytes
+    with pymupdf.open(source) as original, pymupdf.open(destination) as archive:
+        assert archive[0].get_text().strip() == "•–€ -"
+        assert archive[0].get_pixmap().samples == original[0].get_pixmap().samples
+
+
+@pytest.mark.parametrize(
+    "encoding",
+    [
+        None,
+        "/MacRomanEncoding",
+        "<< /BaseEncoding /WinAnsiEncoding /Differences [149 /A] >>",
+    ],
+)
+def test_unknown_or_custom_encoding_is_not_inferred(encoding):
+    """Leave missing and custom font encodings to the existing PDF reader."""
+    from paperless_ai.agents.archive import _add_known_font_unicode
+
+    with pymupdf.open() as document:
+        page = document.new_page()
+        font = page.insert_font(fontname="helv")
+        document.xref_set_key(font, "Encoding", encoding or "null")
+        assert not _add_known_font_unicode(document)
+        assert document.xref_get_key(font, "ToUnicode")[0] == "null"
+
+
+def test_existing_unicode_map_is_preserved():
+    """Do not override a font's explicit character semantics."""
+    from paperless_ai.agents.archive import _add_known_font_unicode
+
+    with pymupdf.open() as document:
+        page = document.new_page()
+        font = page.insert_font(fontname="helv")
+        document.xref_set_key(font, "Encoding", "/WinAnsiEncoding")
+        mapping = document.get_new_xref()
+        document.update_object(mapping, "<<>>")
+        document.update_stream(mapping, b"existing map")
+        document.xref_set_key(font, "ToUnicode", f"{mapping} 0 R")
+        assert not _add_known_font_unicode(document)
+        assert document.xref_stream(mapping) == b"existing map"

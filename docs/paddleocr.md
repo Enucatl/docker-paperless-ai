@@ -142,6 +142,11 @@ are left alone to avoid duplicate selection and search results. This is a
 presence check, not a text-density or image-count threshold. A page combining
 native text and scanned regions keeps its existing text only.
 
+Before conversion, simple fonts explicitly declaring `WinAnsiEncoding` receive
+missing Unicode maps derived from that encoding. Existing Unicode maps are
+preserved. Undeclared or custom encodings are not guessed, so conversion can
+still change text extraction for those fonts.
+
 The overlay uses Paddle block bounding boxes, so selection within paragraphs
 and tables is approximate. Original page images are never replaced with OCR
 preprocessing images. Orientation corrections are mapped back onto the original

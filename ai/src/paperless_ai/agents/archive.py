@@ -73,7 +73,10 @@ def create_searchable_archive(source: Path, output: dict, destination: Path) -> 
         with tempfile.TemporaryDirectory(dir=destination.parent) as temporary:
             temporary = Path(temporary)
             original_copy = temporary / "original.pdf"
-            original_copy.write_bytes(source_bytes)
+            if _add_known_font_unicode(original):
+                original.save(original_copy)
+            else:
+                original_copy.write_bytes(source_bytes)
             converted = temporary / "archive.pdf"
             _convert_to_pdfa(original_copy, converted, temporary)
             with pymupdf.open(converted) as checked:
@@ -100,6 +103,53 @@ def create_searchable_archive(source: Path, output: dict, destination: Path) -> 
                 finished = temporary / "finished.pdf"
                 checked.save(finished, garbage=4, deflate=True)
             os.replace(finished, destination)
+
+
+def _add_known_font_unicode(document) -> bool:
+    """Add missing Unicode maps only for explicitly declared WinAnsi fonts."""
+    fonts = {
+        font[0]
+        for page in document
+        for font in page.get_fonts()
+        if font[2] in {"Type1", "TrueType"}
+        and document.xref_get_key(font[0], "Encoding") == ("name", "/WinAnsiEncoding")
+        and document.xref_get_key(font[0], "ToUnicode")[0] == "null"
+    }
+    if not fonts:
+        return False
+    # PDF WinAnsi differs from Windows-1252 at these glyph positions (PDF Annex D).
+    overrides = {
+        127: "•",
+        129: "•",
+        141: "•",
+        143: "•",
+        144: "•",
+        157: "•",
+        160: " ",
+        173: "-",
+    }
+    mappings = []
+    for code in range(32, 256):
+        character = (
+            overrides[code] if code in overrides else bytes([code]).decode("cp1252")
+        )
+        mappings.append(f"<{code:02x}> <{ord(character):04x}>")
+    cmap = (
+        "/CIDInit /ProcSet findresource begin\n12 dict begin\nbegincmap\n"
+        "/CIDSystemInfo << /Registry (Adobe) /Ordering (UCS) /Supplement 0 >> def\n"
+        "/CMapName /KnownWinAnsi def\n/CMapType 2 def\n"
+        "1 begincodespacerange\n<00> <ff>\nendcodespacerange\n"
+    )
+    for offset in range(0, len(mappings), 100):
+        chunk = mappings[offset : offset + 100]
+        cmap += f"{len(chunk)} beginbfchar\n" + "\n".join(chunk) + "\nendbfchar\n"
+    cmap += "endcmap\nCMapName currentdict /CMap defineresource pop\nend\nend\n"
+    xref = document.get_new_xref()
+    document.update_object(xref, "<<>>")
+    document.update_stream(xref, cmap.encode("ascii"))
+    for font in fonts:
+        document.xref_set_key(font, "ToUnicode", f"{xref} 0 R")
+    return True
 
 
 def _add_ocr_layer(page, result: dict) -> None:

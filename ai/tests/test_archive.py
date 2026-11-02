@@ -224,3 +224,51 @@ def test_existing_invisible_text_is_not_duplicated(archive_input):
     create_searchable_archive(source, output, destination)
     with pymupdf.open(destination) as document:
         assert document[1].get_text().strip() == "Existing OCR"
+
+
+def test_pdfa_retains_text_with_overprint_mode(tmp_path):
+    """Omit forbidden overprint settings without discarding subsequent page content."""
+    source = tmp_path / "overprint.pdf"
+    destination = tmp_path / "archive.pdf"
+    with pymupdf.open() as document:
+        page = document.new_page()
+        page.insert_text((20, 30), "Keep this native text")
+        resources = int(document.xref_get_key(page.xref, "Resources")[1].split()[0])
+        document.xref_set_key(
+            resources, "ExtGState/Overprint", "<< /OPM 1 /op true /OP true >>"
+        )
+        stream = page.get_contents()[0]
+        document.update_stream(
+            stream, b"/Overprint gs\n" + document.xref_stream(stream)
+        )
+        document.save(source)
+    output = {
+        "source_sha256": hashlib.sha256(source.read_bytes()).hexdigest(),
+        "page_count": 1,
+        "pages": [{"page_index": 0}],
+    }
+    create_searchable_archive(source, output, destination)
+    with pymupdf.open(source) as original, pymupdf.open(destination) as archive:
+        assert archive[0].get_text() == original[0].get_text()
+        assert archive[0].get_pixmap().samples == original[0].get_pixmap().samples
+
+
+def test_pdf_errors_do_not_publish_partial_conversion(tmp_path):
+    """A malformed content operator must fail rather than publish a partial page."""
+    source = tmp_path / "malformed.pdf"
+    destination = tmp_path / "archive.pdf"
+    destination.write_bytes(b"existing archive")
+    with pymupdf.open() as document:
+        page = document.new_page()
+        page.insert_text((20, 30), "Keep this native text")
+        stream = page.get_contents()[0]
+        document.update_stream(stream, b"null cm\n" + document.xref_stream(stream))
+        document.save(source)
+    output = {
+        "source_sha256": hashlib.sha256(source.read_bytes()).hexdigest(),
+        "page_count": 1,
+        "pages": [{"page_index": 0}],
+    }
+    with pytest.raises(subprocess.CalledProcessError):
+        create_searchable_archive(source, output, destination)
+    assert destination.read_bytes() == b"existing archive"

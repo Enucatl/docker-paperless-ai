@@ -165,7 +165,7 @@ def _add_ocr_layer(page, result: dict) -> None:
 
 
 def _convert_to_pdfa(source: Path, destination: Path, temporary: Path) -> None:
-    """Convert without silently retaining features forbidden by PDF/A."""
+    """Convert to PDF/A, omitting incompatible settings and rejecting PDF errors."""
     profile = Path("/usr/share/color/icc/ghostscript/srgb.icc")
     definition = temporary / "pdfa.ps"
     definition.write_text(
@@ -185,7 +185,8 @@ def _convert_to_pdfa(source: Path, destination: Path, temporary: Path) -> None:
             "-dBATCH",
             "-dNOPAUSE",
             "-dPDFA=2",
-            "-dPDFACompatibilityPolicy=2",
+            "-dPDFACompatibilityPolicy=1",
+            "-dPDFSTOPONERROR",
             "-sDEVICE=pdfwrite",
             "-sColorConversionStrategy=RGB",
             "-dAutoRotatePages=/None",

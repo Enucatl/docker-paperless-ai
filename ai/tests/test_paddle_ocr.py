@@ -195,6 +195,7 @@ async def test_complete_pdf_request_and_metadata(tmp_path: Path) -> None:
     assert base64.b64decode(body.pop("file")) == path.read_bytes()
     assert body == {
         "fileType": 0,
+        "useDocUnwarping": False,
         "useLayoutDetection": True,
         "markdownIgnoreLabels": [],
         "returnMarkdownImages": False,
@@ -293,8 +294,8 @@ async def test_metadata_http_and_json_failures(error: Exception) -> None:
             await fetch_ocr_metadata(config)
 
 
-async def test_archive_images_are_requested_but_not_persisted(tmp_path: Path) -> None:
-    """Pass clean corrected pages to the PDF generator without storing base64."""
+async def test_archive_uses_original_without_requesting_images(tmp_path: Path) -> None:
+    """Preserve the original and disable unwarping without requesting images."""
     source = tmp_path / "source.pdf"
     destination = tmp_path / "archive.pdf"
     with fitz.open() as doc:
@@ -319,17 +320,18 @@ async def test_archive_images_are_requested_but_not_persisted(tmp_path: Path) ->
         text, output, count, _ = await run_paddle_ocr(
             str(source), config, _METADATA, archive_path=destination
         )
-    assert post.await_args.kwargs["json"]["includeArchiveImages"] is True
-    generate.assert_called_once_with(
-        source, output, destination, corrected_images=[clean_png]
-    )
+    assert "includeArchiveImages" not in post.await_args.kwargs["json"]
+    assert post.await_args.kwargs["json"]["useDocUnwarping"] is False
+    generate.assert_called_once_with(source, output, destination)
     assert text == "recognized text" and count == 1
     assert "archiveImage" not in json.dumps(output)
 
 
 @pytest.mark.parametrize("image", [None, "not base64!"])
-async def test_archive_requires_valid_clean_page_images(tmp_path: Path, image) -> None:
-    """Missing or corrupt clean images abort the job rather than using previews."""
+async def test_archive_does_not_require_clean_page_images(
+    tmp_path: Path, image
+) -> None:
+    """Archive creation is independent of optional preprocessing images."""
     source = tmp_path / "source.pdf"
     with fitz.open() as doc:
         doc.new_page()
@@ -346,9 +348,8 @@ async def test_archive_requires_valid_clean_page_images(tmp_path: Path, image) -
             "niquests.AsyncSession.post", new_callable=AsyncMock, return_value=response
         ),
         patch("paperless_ai.agents.archive.create_searchable_archive") as generate,
-        pytest.raises(ValueError),
     ):
         await run_paddle_ocr(
             str(source), config, _METADATA, archive_path=tmp_path / "archive.pdf"
         )
-    generate.assert_not_called()
+    generate.assert_called_once()

@@ -1,4 +1,4 @@
-"""Build a searchable archival PDF from the pages recognized by external OCR."""
+"""Create archival PDFs while preserving original page content."""
 
 import hashlib
 import html
@@ -6,7 +6,6 @@ import math
 import os
 import subprocess
 import tempfile
-from collections.abc import Sequence
 from html.parser import HTMLParser
 from pathlib import Path
 
@@ -41,25 +40,16 @@ def _block_text(content: str) -> str:
     return "".join(parser.parts).strip()
 
 
-def create_searchable_archive(
-    source: Path,
-    output: dict,
-    destination: Path,
-    *,
-    corrected_images: Sequence[bytes],
-) -> None:
-    """Create PDF/A-2b with a searchable text layer aligned to recognized pages.
+def create_searchable_archive(source: Path, output: dict, destination: Path) -> None:
+    """Convert the original PDF to PDF/A-2 without rebuilding its pages.
 
     Args:
         source: Original PDF whose SHA-256 is recorded in the OCR output.
-        output: Validated Paddle output containing page dimensions and block boxes.
+        output: Validated Paddle output identifying the source and its pages.
         destination: Archive file to publish only after successful conversion.
-        corrected_images: Exact corrected page images from the OCR pipeline, in
-            page order, including any rotation and unwarping applied before OCR.
 
     Raises:
-        ValueError: Source identity, geometry, page coverage or output is invalid.
-        TypeError: OCR blocks or their text have invalid types.
+        ValueError: Source identity, page coverage or converted output is invalid.
         subprocess.CalledProcessError: Ghostscript cannot produce compliant PDF/A.
     """
     import pymupdf
@@ -76,120 +66,102 @@ def create_searchable_archive(
             not isinstance(pages, list)
             or len(pages) != len(original)
             or output.get("page_count") != len(original)
-            or len(corrected_images) != len(original)
         ):
             raise ValueError("OCR archive page coverage does not match the original")
-        with pymupdf.open() as archive:
-            text_layers = []
-            for index, record in enumerate(pages):
-                text_blocks = []
-                text_layers.append(text_blocks)
-                if record.get("page_index") != index:
-                    raise ValueError("OCR archive pages must be in source order")
-                result = record["prunedResult"]
-                dimensions = (result.get("width"), result.get("height"))
-                if any(
-                    type(value) not in (int, float)
-                    or not math.isfinite(value)
-                    or value <= 0
-                    for value in dimensions
+        if any(record.get("page_index") != index for index, record in enumerate(pages)):
+            raise ValueError("OCR archive pages must be in source order")
+        with tempfile.TemporaryDirectory(dir=destination.parent) as temporary:
+            temporary = Path(temporary)
+            original_copy = temporary / "original.pdf"
+            original_copy.write_bytes(source_bytes)
+            converted = temporary / "archive.pdf"
+            _convert_to_pdfa(original_copy, converted, temporary)
+            with pymupdf.open(converted) as checked:
+                if len(checked) != len(original) or "pdfaid:part='2'" not in (
+                    checked.get_xml_metadata().replace('"', "'")
                 ):
-                    raise ValueError(f"Invalid OCR dimensions on page {index}")
-                width, height = dimensions
-                preprocessing = result.get("doc_preprocessor_res", {})
-                angle = preprocessing.get("angle", 0)
-                if angle not in (0, 90, 180, 270, -1):
-                    raise ValueError(f"Invalid OCR page orientation on page {index}")
-                original_page = original[index]
-                image = pymupdf.Pixmap(corrected_images[index])
-                if (image.width, image.height) != dimensions:
                     raise ValueError(
-                        f"Corrected image dimensions differ on page {index}"
+                        "Archive conversion did not produce a complete PDF/A-2"
                     )
-                page_width, page_height = (
-                    original_page.rect.width,
-                    original_page.rect.height,
-                )
-                if angle in (90, 270):
-                    page_width, page_height = page_height, page_width
-                page = archive.new_page(width=page_width, height=page_height)
-                page.insert_image(
-                    page.rect, stream=corrected_images[index], keep_proportion=False
-                )
-
-                blocks = result.get("parsing_res_list")
-                if not isinstance(blocks, list):
-                    raise TypeError(f"Missing OCR blocks on page {index}")
-                for block in blocks:
-                    content = block.get("block_content", "")
-                    if not isinstance(content, str):
-                        raise TypeError(f"Invalid OCR block text on page {index}")
-                    text = _block_text(content)
-                    if not text:
+                # Ghostscript can corrupt ToUnicode maps; add embedded OCR fonts afterward.
+                for index, page in enumerate(checked):
+                    if original[index].get_text().strip():
                         continue
-                    bbox = block.get("block_bbox")
+                    _add_ocr_layer(page, pages[index]["prunedResult"])
+                checked.subset_fonts()
+                # PDF/A requires the identity mapping MuPDF otherwise leaves implicit.
+                for xref in range(1, checked.xref_length()):
                     if (
-                        not isinstance(bbox, list)
-                        or len(bbox) != 4
-                        or any(
-                            type(value) not in (int, float) or not math.isfinite(value)
-                            for value in bbox
-                        )
-                        or not (
-                            0 <= bbox[0] < bbox[2] <= width
-                            and 0 <= bbox[1] < bbox[3] <= height
-                        )
+                        checked.xref_get_key(xref, "Subtype")
+                        == ("name", "/CIDFontType2")
+                        and checked.xref_get_key(xref, "CIDToGIDMap")[0] == "null"
                     ):
-                        raise ValueError(f"Invalid OCR bounding box on page {index}")
-                    rect = pymupdf.Rect(
-                        bbox[0] * page.rect.width / width,
-                        bbox[1] * page.rect.height / height,
-                        bbox[2] * page.rect.width / width,
-                        bbox[3] * page.rect.height / height,
-                    )
-                    text_blocks.append((rect, text))
+                        checked.xref_set_key(xref, "CIDToGIDMap", "/Identity")
+                finished = temporary / "finished.pdf"
+                checked.save(finished, garbage=4, deflate=True)
+            os.replace(finished, destination)
 
-            with tempfile.TemporaryDirectory(dir=destination.parent) as temporary:
-                temporary = Path(temporary)
-                searchable = temporary / "searchable.pdf"
-                converted = temporary / "archive.pdf"
-                archive.save(searchable, garbage=4, deflate=True)
-                _convert_to_pdfa(searchable, converted, temporary)
-                with pymupdf.open(converted) as checked:
-                    if len(checked) != len(
-                        original
-                    ) or "pdfaid:part='2'" not in checked.get_xml_metadata().replace(
-                        '"', "'"
-                    ):
-                        raise ValueError(
-                            "Archive conversion did not produce a complete PDF/A-2"
-                        )
-                    # Ghostscript can corrupt ToUnicode maps; add embedded fonts afterward.
-                    for page, text_blocks in zip(checked, text_layers):
-                        for rect, text in text_blocks:
-                            spare_height, _ = page.insert_htmlbox(
-                                rect,
-                                html.escape(text).replace("\n", "<br>"),
-                                css="* { margin: 0; padding: 0; } body { font-size: 12pt; line-height: 1.8; }",
-                                opacity=0,
-                                scale_low=0,
-                            )
-                            if spare_height < 0:
-                                raise ValueError(
-                                    "OCR block text cannot fit on the page"
-                                )
-                    checked.subset_fonts()
-                    # PDF/A requires the identity mapping MuPDF otherwise leaves implicit.
-                    for xref in range(1, checked.xref_length()):
-                        if (
-                            checked.xref_get_key(xref, "Subtype")
-                            == ("name", "/CIDFontType2")
-                            and checked.xref_get_key(xref, "CIDToGIDMap")[0] == "null"
-                        ):
-                            checked.xref_set_key(xref, "CIDToGIDMap", "/Identity")
-                    finished = temporary / "finished.pdf"
-                    checked.save(finished, garbage=4, deflate=True)
-                os.replace(finished, destination)
+
+def _add_ocr_layer(page, result: dict) -> None:
+    """Place an invisible OCR layer over the unchanged original page."""
+    import pymupdf
+
+    width, height = result.get("width"), result.get("height")
+    if any(
+        type(value) not in (int, float) or not math.isfinite(value) or value <= 0
+        for value in (width, height)
+    ):
+        raise ValueError("Invalid OCR dimensions")
+    preprocessing = result.get("doc_preprocessor_res", {})
+    if preprocessing.get("model_settings", {}).get("use_doc_unwarping"):
+        raise ValueError("Unwarped OCR cannot align with original page images")
+    angle = preprocessing.get("angle", 0)
+    if angle not in (0, 90, 180, 270, -1):
+        raise ValueError("Invalid OCR page orientation")
+    if angle == -1:
+        angle = 0
+    blocks = result.get("parsing_res_list")
+    if not isinstance(blocks, list):
+        raise TypeError("Missing OCR blocks")
+    with pymupdf.open() as overlay:
+        layer = overlay.new_page(width=width, height=height)
+        for block in blocks:
+            content = block.get("block_content", "")
+            if not isinstance(content, str):
+                raise TypeError("Invalid OCR block text")
+            text = _block_text(content)
+            if not text:
+                continue
+            bbox = block.get("block_bbox")
+            if (
+                not isinstance(bbox, list)
+                or len(bbox) != 4
+                or any(
+                    type(value) not in (int, float) or not math.isfinite(value)
+                    for value in bbox
+                )
+                or not (
+                    0 <= bbox[0] < bbox[2] <= width and 0 <= bbox[1] < bbox[3] <= height
+                )
+            ):
+                raise ValueError("Invalid OCR bounding box")
+            # shortcut: block-level layout is approximate; use word boxes for precise selection.
+            spare_height, _ = layer.insert_htmlbox(
+                pymupdf.Rect(bbox),
+                html.escape(text).replace("\n", "<br>"),
+                css="* { margin: 0; padding: 0; } body { font-size: 24pt; line-height: 1.8; }",
+                opacity=0,
+                scale_low=0,
+            )
+            if spare_height < 0:
+                raise ValueError("OCR block text cannot fit on the page")
+        if layer.get_contents():
+            page.show_pdf_page(
+                page.rect * page.derotation_matrix,
+                overlay,
+                rotate=(page.rotation - angle) % 360,
+                keep_proportion=False,
+            )
 
 
 def _convert_to_pdfa(source: Path, destination: Path, temporary: Path) -> None:
@@ -217,6 +189,9 @@ def _convert_to_pdfa(source: Path, destination: Path, temporary: Path) -> None:
             "-sDEVICE=pdfwrite",
             "-sColorConversionStrategy=RGB",
             "-dAutoRotatePages=/None",
+            "-dDownsampleColorImages=false",
+            "-dDownsampleGrayImages=false",
+            "-dDownsampleMonoImages=false",
             f"--permit-file-read={profile}",
             f"-sOutputFile={destination}",
             str(definition),

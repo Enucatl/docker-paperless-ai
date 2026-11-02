@@ -131,20 +131,28 @@ stored documents.
 
 ## Searchable archival PDFs
 
-The OCR worker requests `includeArchiveImages=true` for Paddle responses. Each
-`layoutParsingResults` entry must include `archiveImage`: a base64 PNG of the
-clean corrected page, in exactly the coordinate space used by `prunedResult`
-bounding boxes. Comparison panels and detection visualizations are unsuitable.
-The service must export the actual preprocessing output while preserving
-orientation correction and unwarping. Missing images fail the OCR job before
-document writes; historical JSON without these images requires fresh OCR.
+The OCR worker disables document unwarping (`useDocUnwarping=false`) and does
+not request corrected page images. OCR preprocessing is used for recognition,
+not as the visual source of the archive.
 
-The AI service embeds the recognized text invisibly into these corrected pages
-and converts the result to PDF/A-2 using Ghostscript. It sends the archive and
-transcript together to `POST /api/documents/{id}/archive/`, with the original's
-SHA-256 as `source_checksum`. Paperless preserves the original and rejects stale
-results. Stage tags and stored OCR provenance are updated only after the archive
-upload succeeds. Page images are transient and never stored in `ai_ocr_output`.
+The AI service converts the original PDF to PDF/A-2 using Ghostscript, preserving
+native text, vector content and embedded image resolution. Pages with no existing
+extractable text receive an invisible OCR text layer; pages with existing text
+are left alone to avoid duplicate selection and search results. This is a
+presence check, not a text-density or image-count threshold. A page combining
+native text and scanned regions keeps its existing text only.
+
+The overlay uses Paddle block bounding boxes, so selection within paragraphs
+and tables is approximate. Original page images are never replaced with OCR
+preprocessing images. Orientation corrections are mapped back onto the original
+page; unwarped OCR is rejected for overlays because its nonlinear geometry
+cannot be mapped back this way. The full OCR transcript remains searchable in
+Paperless.
+
+It sends the archive and transcript together to `POST /api/documents/{id}/archive/`,
+with the original's SHA-256 as `source_checksum`. Paperless preserves the original
+and rejects stale results. Stage tags and stored OCR provenance are updated only
+after the archive upload succeeds.
 The vision adapter (`layout_model=none`) continues its text-only workflow.
 
 On Atlas, prohibit Paperless's local OCR, classifier, and built-in AI via

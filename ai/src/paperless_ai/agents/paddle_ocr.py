@@ -173,7 +173,7 @@ async def run_paddle_ocr(
         file_path: Local PDF to send without rendering or sampling pages.
         config: Parsing service base URL and request timeout.
         metadata: Validated batch identity, or None for a standalone job.
-        archive_path: Optional destination for a searchable PDF/A from corrected pages.
+        archive_path: Optional destination for a PDF/A preserving original pages.
 
     Returns:
         Ordered Markdown, structured output, source page count and elapsed time.
@@ -197,7 +197,7 @@ async def run_paddle_ocr(
             json={
                 "file": base64.b64encode(source).decode("ascii"),
                 "fileType": 0,
-                **({"includeArchiveImages": True} if archive_path is not None else {}),
+                "useDocUnwarping": False,
                 "useLayoutDetection": True,
                 "markdownIgnoreLabels": [],
                 "returnMarkdownImages": False,
@@ -223,19 +223,10 @@ async def run_paddle_ocr(
     if archive_path is not None:
         from paperless_ai.agents.archive import create_searchable_archive
 
-        corrected_images = []
-        for page in payload["result"]["layoutParsingResults"]:
-            image = page.get("archiveImage")
-            if not isinstance(image, str) or not image:
-                raise ValueError(
-                    "Paddle response lacks a clean corrected archive image"
-                )
-            corrected_images.append(base64.b64decode(image, validate=True))
         await asyncio.to_thread(
             create_searchable_archive,
             Path(file_path),
             output,
             archive_path,
-            corrected_images=corrected_images,
         )
     return text, output, page_count, elapsed

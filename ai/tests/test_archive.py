@@ -1,4 +1,4 @@
-"""Verify searchable archives use corrected page pixels and complete OCR text."""
+"""Verify archives retain native PDF content and publish only valid conversions."""
 
 import hashlib
 import io
@@ -13,18 +13,18 @@ from paperless_ai.agents.archive import create_searchable_archive
 
 @pytest.fixture
 def archive_input(tmp_path):
-    """Provide original pages and differently colored corrected page images."""
+    """Provide a mixed document with native text, vectors and a high resolution scan."""
     source = tmp_path / "original.pdf"
+    image = io.BytesIO()
+    Image.new("RGB", (1500, 2000), "#ffeecc").save(image, format="PNG")
     with pymupdf.open() as document:
         page = document.new_page(width=300, height=400)
         page.insert_text((20, 30), "Original stays untouched")
-        document.new_page(width=300, height=400)
+        page.draw_rect(pymupdf.Rect(20, 40, 280, 380))
+        page.insert_image(pymupdf.Rect(20, 50, 50, 90), stream=image.getvalue())
+        page = document.new_page(width=300, height=400)
+        page.insert_image(page.rect, stream=image.getvalue())
         document.save(source)
-    images = []
-    for color in ("#ffeecc", "#cceeff"):
-        image = io.BytesIO()
-        Image.new("RGB", (600, 800), color).save(image, format="PNG")
-        images.append(image.getvalue())
     output = {
         "source_sha256": hashlib.sha256(source.read_bytes()).hexdigest(),
         "page_count": 2,
@@ -34,111 +34,73 @@ def archive_input(tmp_path):
                 "prunedResult": {
                     "width": 600,
                     "height": 800,
-                    "doc_preprocessor_res": {
-                        "angle": 0,
-                        "model_settings": {"use_doc_unwarping": True},
-                    },
-                    "parsing_res_list": [],
+                    "doc_preprocessor_res": {"angle": 0},
+                    "parsing_res_list": [
+                        {
+                            "block_content": "Recognized scan",
+                            "block_bbox": [40, 80, 560, 180],
+                        }
+                    ],
                 },
             }
             for index in range(2)
         ],
     }
-    return source, output, images, tmp_path / "archive.pdf"
+    return source, output, tmp_path / "archive.pdf"
 
 
-def test_pdfa_preserves_corrected_pixels_unicode_and_box_position(archive_input):
-    """Real Ghostscript conversion keeps invisible multilingual text and images."""
-    source, output, images, destination = archive_input
-    output["pages"][0]["prunedResult"]["parsing_res_list"] = [
-        {
-            "block_content": "Résumé Ελληνικά 日本語 发票",
-            "block_bbox": [60, 80, 540, 180],
-        },
-        {
-            "block_content": "<table><tr><td>Café</td><td>€10</td></tr></table>",
-            "block_bbox": [60, 400, 540, 500],
-        },
-    ]
+def test_pdfa_preserves_native_text_vectors_and_image_resolution(archive_input):
+    """Real conversion retains mixed pages and adds OCR only to the scan."""
+    source, output, destination = archive_input
     original = source.read_bytes()
-    create_searchable_archive(source, output, destination, corrected_images=images)
+    create_searchable_archive(source, output, destination)
     assert source.read_bytes() == original
     with pymupdf.open(destination) as document:
         assert len(document) == 2
-        text = document[0].get_text()
-        for word in ("Résumé", "Ελληνικά", "日本語", "发票", "Café", "€10"):
-            assert word in text
-        assert "Original stays untouched" not in text
-        assert not document[1].get_text().strip()
-        boxes = document[0].search_for("Résumé")
-        assert boxes and pymupdf.Rect(30, 40, 270, 90).contains(boxes[0])
-        pixmap = document[0].get_pixmap()
-        assert all(
-            abs(a - b) <= 3 for a, b in zip(pixmap.pixel(60, 60), (255, 238, 204))
-        )
+        assert document[0].get_text().strip() == "Original stays untouched"
+        assert document[1].get_text().strip() == "Recognized scan"
+        assert document[0].get_drawings()
+        for page in document:
+            assert page.rect == pymupdf.Rect(0, 0, 300, 400)
+            assert [(entry[2], entry[3]) for entry in page.get_images()] == [
+                (1500, 2000)
+            ]
+        assert document[1].get_pixmap().pixel(60, 60) == (255, 238, 204)
         assert (
             document.xref_get_key(document.pdf_catalog(), "OutputIntents")[0] == "array"
         )
 
 
-def test_quarter_turn_correction_swaps_page_size(archive_input):
-    """The corrected image and text share upright page coordinates."""
-    source, output, images, destination = archive_input
-    output["pages"][0]["prunedResult"]["doc_preprocessor_res"]["angle"] = 90
-    output["pages"][0]["prunedResult"]["width"] = 800
-    output["pages"][0]["prunedResult"]["height"] = 600
-    corrected = io.BytesIO()
-    Image.new("RGB", (800, 600), "white").save(corrected, format="PNG")
-    images[0] = corrected.getvalue()
-    output["pages"][0]["prunedResult"]["parsing_res_list"] = [
-        {"block_content": "Upright", "block_bbox": [80, 60, 720, 180]}
-    ]
-    create_searchable_archive(source, output, destination, corrected_images=images)
-    with pymupdf.open(destination) as document:
-        assert document[0].rect == pymupdf.Rect(0, 0, 400, 300)
-        assert "Upright" in document[0].get_text()
-
-
-@pytest.mark.parametrize(
-    "bbox",
-    [[-1, 0, 20, 20], [0, 0, 601, 20], [20, 0, 10, 20], [0, 0, float("nan"), 20], None],
-)
-def test_invalid_coordinates_do_not_publish_archive(archive_input, bbox):
-    """Reject malformed coordinates before replacing any existing archive."""
-    source, output, images, destination = archive_input
-    output["pages"][0]["prunedResult"]["parsing_res_list"] = [
-        {"block_content": "Text", "block_bbox": bbox}
-    ]
-    destination.write_bytes(b"existing archive")
-    with pytest.raises(ValueError, match="bounding box"):
-        create_searchable_archive(source, output, destination, corrected_images=images)
-    assert destination.read_bytes() == b"existing archive"
-
-
-@pytest.mark.parametrize(
-    "failure", ["source", "coverage", "images", "dimensions", "order"]
-)
+@pytest.mark.parametrize("failure", ["source", "coverage", "count", "order"])
 def test_wrong_source_or_pages_cannot_be_archived(archive_input, failure):
     """Keep the original and previous archive when OCR no longer matches them."""
-    source, output, images, destination = archive_input
+    source, output, destination = archive_input
+    destination.write_bytes(b"existing archive")
     if failure == "source":
         output["source_sha256"] = "0" * 64
     elif failure == "coverage":
         output["pages"].pop()
-    elif failure == "images":
-        images.pop()
-    elif failure == "dimensions":
-        output["pages"][0]["prunedResult"]["width"] = 900
+    elif failure == "count":
+        output["page_count"] = 3
     else:
         output["pages"][0]["page_index"] = 1
     with pytest.raises(ValueError):
-        create_searchable_archive(source, output, destination, corrected_images=images)
-    assert not destination.exists()
+        create_searchable_archive(source, output, destination)
+    assert destination.read_bytes() == b"existing archive"
+
+
+def test_original_cannot_be_destination(archive_input):
+    """Never overwrite the original with its converted archive."""
+    source, output, _ = archive_input
+    original = source.read_bytes()
+    with pytest.raises(ValueError, match="replace the original"):
+        create_searchable_archive(source, output, source)
+    assert source.read_bytes() == original
 
 
 def test_converter_failure_preserves_existing_archive(archive_input, monkeypatch):
     """Do not publish incomplete output if strict PDF/A conversion fails."""
-    source, output, images, destination = archive_input
+    source, output, destination = archive_input
     destination.write_bytes(b"existing archive")
 
     def fail(*args, **kwargs):
@@ -146,5 +108,119 @@ def test_converter_failure_preserves_existing_archive(archive_input, monkeypatch
 
     monkeypatch.setattr("paperless_ai.agents.archive.subprocess.run", fail)
     with pytest.raises(subprocess.CalledProcessError):
-        create_searchable_archive(source, output, destination, corrected_images=images)
+        create_searchable_archive(source, output, destination)
     assert destination.read_bytes() == b"existing archive"
+
+
+def test_invalid_conversion_preserves_existing_archive(archive_input, monkeypatch):
+    """Reject a valid PDF that is missing the required archive metadata."""
+    source, output, destination = archive_input
+    destination.write_bytes(b"existing archive")
+
+    def copy_original(source, destination, temporary):
+        destination.write_bytes(source.read_bytes())
+
+    monkeypatch.setattr("paperless_ai.agents.archive._convert_to_pdfa", copy_original)
+    with pytest.raises(ValueError, match="complete PDF/A-2"):
+        create_searchable_archive(source, output, destination)
+    assert destination.read_bytes() == b"existing archive"
+
+
+def test_scan_unicode_overlay_is_invisible(archive_input):
+    """Searchable multilingual text does not alter the visible scan pixels."""
+    source, output, destination = archive_input
+    output["pages"][1]["prunedResult"]["parsing_res_list"] = [
+        {
+            "block_content": "Résumé Ελληνικά 日本語 发票",
+            "block_bbox": [40, 80, 560, 180],
+        },
+        {
+            "block_content": "<table><tr><td>Café</td><td>€10</td></tr></table>",
+            "block_bbox": [40, 200, 560, 300],
+        },
+    ]
+    create_searchable_archive(source, output, destination)
+    with pymupdf.open(source) as original, pymupdf.open(destination) as archive:
+        assert original[1].get_pixmap().samples == archive[1].get_pixmap().samples
+        text = archive[1].get_text()
+        for word in ("Résumé", "Ελληνικά", "日本語", "发票", "Café", "€10"):
+            assert word in text
+        assert original[0].get_text() == archive[0].get_text()
+
+
+@pytest.mark.parametrize(
+    "angle, rotation",
+    [(0, 0), (90, 0), (180, 0), (270, 0), (90, 90), (90, 180), (270, 270)],
+)
+def test_ocr_rotation_maps_back_to_original(archive_input, angle, rotation):
+    """Corrected OCR boxes return to the original image and PDF rotation."""
+    source, output, destination = archive_input
+    with pymupdf.open(source) as document:
+        document[1].set_rotation(rotation)
+        document.saveIncr()
+    output["source_sha256"] = hashlib.sha256(source.read_bytes()).hexdigest()
+    result = output["pages"][1]["prunedResult"]
+    result["doc_preprocessor_res"]["angle"] = angle
+    width, height = (600, 800) if (rotation + angle) % 180 == 0 else (800, 600)
+    result.update(width=width, height=height)
+    result["parsing_res_list"] = [
+        {
+            "block_content": "Recognized",
+            "block_bbox": [width * 0.1, height * 0.2, width * 0.4, height * 0.3],
+        }
+    ]
+    # These are the inverse counterclockwise rotations in normalized image space.
+    expected = {
+        0: (0.1, 0.2, 0.4, 0.3),
+        90: (0.7, 0.1, 0.8, 0.4),
+        180: (0.6, 0.7, 0.9, 0.8),
+        270: (0.2, 0.6, 0.3, 0.9),
+    }[angle]
+    create_searchable_archive(source, output, destination)
+    with pymupdf.open(source) as original, pymupdf.open(destination) as archive:
+        page = archive[1]
+        expected_rect = pymupdf.Rect(expected) * pymupdf.Matrix(
+            page.rect.width, page.rect.height
+        )
+        boxes = page.search_for("Recognized")
+        assert len(boxes) == 1
+        displayed_box = boxes[0] * page.rotation_matrix
+        assert (expected_rect + (-0.01, -0.01, 0.01, 0.01)).contains(displayed_box)
+        assert original[1].get_pixmap().samples == page.get_pixmap().samples
+
+
+@pytest.mark.parametrize(
+    "failure", ["bbox", "dimensions", "angle", "unwarp", "blocks", "text"]
+)
+def test_invalid_overlay_preserves_previous_archive(archive_input, failure):
+    """Invalid OCR geometry or text cannot publish a partial archive."""
+    source, output, destination = archive_input
+    destination.write_bytes(b"existing archive")
+    result = output["pages"][1]["prunedResult"]
+    if failure == "bbox":
+        result["parsing_res_list"][0]["block_bbox"] = [0, 0, float("nan"), 20]
+    elif failure == "dimensions":
+        result["width"] = 0
+    elif failure == "angle":
+        result["doc_preprocessor_res"]["angle"] = 45
+    elif failure == "unwarp":
+        result["doc_preprocessor_res"]["model_settings"] = {"use_doc_unwarping": True}
+    elif failure == "blocks":
+        result["parsing_res_list"] = None
+    else:
+        result["parsing_res_list"][0]["block_content"] = 123
+    with pytest.raises((TypeError, ValueError)):
+        create_searchable_archive(source, output, destination)
+    assert destination.read_bytes() == b"existing archive"
+
+
+def test_existing_invisible_text_is_not_duplicated(archive_input):
+    """An existing scanned-page OCR layer takes precedence over fresh OCR."""
+    source, output, destination = archive_input
+    with pymupdf.open(source) as document:
+        document[1].insert_text((20, 30), "Existing OCR", render_mode=3)
+        document.saveIncr()
+    output["source_sha256"] = hashlib.sha256(source.read_bytes()).hexdigest()
+    create_searchable_archive(source, output, destination)
+    with pymupdf.open(destination) as document:
+        assert document[1].get_text().strip() == "Existing OCR"

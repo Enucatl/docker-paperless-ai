@@ -159,7 +159,9 @@ async def test_archive_upload_failure_preserves_tags_and_retries(monkeypatch) ->
     client.patch_document.assert_not_awaited()
     queues.remove.assert_not_awaited()
     queues.enqueue_metadata.assert_not_awaited()
-    queues.mark_failure.assert_awaited_once_with(42, TaskQueues.KEY_OCR, max_attempts=3)
+    queues.mark_failure.assert_awaited_once_with(
+        42, TaskQueues.KEY_OCR, max_attempts=11
+    )
 
 
 async def test_vision_only_ocr_keeps_text_only_persistence(
@@ -232,7 +234,9 @@ async def test_paddle_failure_preserves_document_and_schedules_retry(
     client.patch_document.assert_not_awaited()
     queues.remove.assert_not_awaited()
     queues.enqueue_metadata.assert_not_awaited()
-    queues.mark_failure.assert_awaited_once_with(42, TaskQueues.KEY_OCR, max_attempts=3)
+    queues.mark_failure.assert_awaited_once_with(
+        42, TaskQueues.KEY_OCR, max_attempts=11
+    )
 
 
 @pytest.mark.parametrize(

@@ -621,3 +621,29 @@ async def test_metadata_batch_dry_run(paperless_client, task_queues):
 
 
 # ---------------------------------------------------------------------------
+
+
+@pytest.mark.requires_redis
+async def test_retry_delays_double_without_cap(task_queues, monkeypatch):
+    """All ten retry delays follow the table, including waits over one hour."""
+    from paperless_common import queue
+    from paperless_ai.core.config import AgentConfig
+
+    monkeypatch.setattr(queue.time, "time", lambda: 1000.0)
+    stage = TaskQueues.KEY_METADATA
+    attempts = AgentConfig().stage_max_attempts
+    assert attempts == 11
+    await task_queues.enqueue_metadata(55)
+    for failure in range(1, 11):
+        assert await task_queues.mark_failure(55, stage, max_attempts=attempts) == (
+            failure,
+            False,
+        )
+        deadline = 1000 + 60 * 2 ** (failure - 1)
+        assert await task_queues.release_due(stage, now=deadline - 1) == 0
+        assert await task_queues.release_due(stage, now=deadline) == 1
+    assert await task_queues.mark_failure(55, stage, max_attempts=attempts) == (
+        11,
+        True,
+    )
+    assert await task_queues.peek_stage(TaskQueues.KEY_FAILED) == {55}

@@ -14,7 +14,6 @@ _WEBHOOK_SUPPRESS_TTL_SECONDS = 300
 _RETRY_PREFIX = "paperless-ai:retry:"
 _DELAYED_PREFIX = "paperless-ai:queue:delayed:"
 _DEFAULT_RETRY_BASE_DELAY_SECONDS = 60
-_DEFAULT_RETRY_MAX_DELAY_SECONDS = 3600
 
 
 def _webhook_suppress_key(doc_id: int) -> str:
@@ -92,7 +91,6 @@ class TaskQueues:
         *,
         max_attempts: int,
         base_delay_seconds: int = _DEFAULT_RETRY_BASE_DELAY_SECONDS,
-        max_delay_seconds: int = _DEFAULT_RETRY_MAX_DELAY_SECONDS,
     ) -> tuple[int, bool]:
         """Increment retry state and atomically delay or dead-letter the item."""
         retry_count, moved, delay = await self._redis.eval(
@@ -108,8 +106,7 @@ class TaskQueues:
             end
 
             local delay = tonumber(ARGV[3]) * (2 ^ math.max(0, retry_count - 1))
-            delay = math.min(delay, tonumber(ARGV[4]))
-            redis.call("ZADD", KEYS[2], tonumber(ARGV[5]) + delay, ARGV[1])
+            redis.call("ZADD", KEYS[2], tonumber(ARGV[4]) + delay, ARGV[1])
             return {retry_count, 0, delay}
             """,
             4,
@@ -120,7 +117,6 @@ class TaskQueues:
             doc_id,
             max_attempts,
             base_delay_seconds,
-            max_delay_seconds,
             time.time(),
         )
         retry_count = int(retry_count)

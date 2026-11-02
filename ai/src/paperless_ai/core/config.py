@@ -117,7 +117,7 @@ class AgentConfig(BaseSettings):
     )
 
     poll_interval: int = 300
-    stage_max_attempts: int = 3
+    stage_max_attempts: int = 11
     ocr_concurrency: int = 4
     correspondent_match_threshold: float = Field(
         default=0.80,

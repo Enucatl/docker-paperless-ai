@@ -6,11 +6,10 @@ Redis 8 and document volumes are retained. OCR and metadata run in the separate
 
 ## Images and placement
 
-- Atlas published base: `ghcr.io/enucatl/paperless-nano@sha256:3a0979b6e45110841590599c64c7134ae4becffa28dd9252eb44bbd1211e0860`.
-- Atlas running image: `sha256:73ed9c0b20eb9d07882a87710a1cfca2896ff5762efc2bc011037ce077d1449a`
-  (`paperless-nano:20261107-thumbnail-fix`), a local layer over that published base.
-- Cerebrum worker: `ghcr.io/enucatl/paperless-nano-worker@sha256:0f54a54c5e158476f47c9b828c5fd66b0535fafa95659fe90627cca5e920beef`.
-- Both published as `v3.4.2-nano-97bc71617`.
+- Atlas core: `ghcr.io/enucatl/paperless-nano@sha256:d6f71b4df95358ffd0bee4361773ce7ffae220f7379366c8a358da80966b8d31`
+  (`v3.4.2-nano-127d19da1`), including the tested thumbnail fix.
+- Cerebrum worker: `ghcr.io/enucatl/paperless-nano-worker@sha256:0f54a54c5e158476f47c9b828c5fd66b0535fafa95659fe90627cca5e920beef`
+  (`v3.4.2-nano-97bc71617`); its compatible wire contract is unchanged.
 - Server account `server-processor`: `search ingestion` only.
 - Worker account `workstation-processor`: `parser metadata` only; unusable password,
   private API token, no document-edit or administrative grants.
@@ -27,14 +26,22 @@ Atlas selects `paperless_services.watcher.APIConsumer`,
 settings. The former `PAPERLESS_USE_API_*` and `PAPERLESS_USE_LEAN_WORKER`
 flags are retired and prevent those services from starting.
 
-The published core rejects its own local-thumbnail provenance during strict
-external-result validation. The local layer fixes `documents/parser_operations.py`
-by attaching internal provenance after validation and preserving the raw worker
-proposal across retries. External validation stays strict. All 61 focused tests
+The initial published core (`v3.4.2-nano-97bc71617`) rejected its own
+local-thumbnail provenance during strict external-result validation. Migration
+checks initially used local image
+`sha256:73ed9c0b20eb9d07882a87710a1cfca2896ff5762efc2bc011037ce077d1449a`
+(`paperless-nano:20261107-thumbnail-fix`) over published base
+`ghcr.io/enucatl/paperless-nano@sha256:3a0979b6e45110841590599c64c7134ae4becffa28dd9252eb44bbd1211e0860`.
+The fix attaches internal provenance after validation and preserves the raw worker
+proposal across retries; external validation stays strict. All 61 focused tests
 passed in disposable containers (19.28 seconds). Source, patch, build recipe,
-test logs and `core-image.tar.gz` are retained in both backups' `hotfix/`
-directories with verified checksums. This layer has not been published to GHCR;
-load that archive before recreating the pinned server on a fresh host.
+test logs and the historical `core-image.tar.gz` remain in both backups' `hotfix/`
+directories with verified checksums.
+
+The configured core now uses the canonical published image from commit
+`127d19da14453bb5c5234b12c8940e2fa9255bd2`, whose GitHub Actions validation and
+publication passed. A fresh deployment can pull that digest without loading the
+historical local image archive.
 
 ## Authentication and TLS
 

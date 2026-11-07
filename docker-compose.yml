@@ -42,7 +42,7 @@ services:
       file: ../compose-security-baseline/hardening.yml
       service: hardened-xxlarge
     user: "1000:1000"
-    image: sha256:73ed9c0b20eb9d07882a87710a1cfca2896ff5762efc2bc011037ce077d1449a
+    image: ghcr.io/enucatl/paperless-nano@sha256:d6f71b4df95358ffd0bee4361773ce7ffae220f7379366c8a358da80966b8d31
     cpu_shares: 256
     read_only: false
     tmpfs:

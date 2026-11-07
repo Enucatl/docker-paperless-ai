@@ -42,7 +42,7 @@ services:
       file: ../compose-security-baseline/hardening.yml
       service: hardened-xxlarge
     user: "1000:1000"
-    image: ghcr.io/enucatl/paperless-ngx:latest
+    image: sha256:73ed9c0b20eb9d07882a87710a1cfca2896ff5762efc2bc011037ce077d1449a
     cpu_shares: 256
     read_only: false
     tmpfs:
@@ -68,6 +68,7 @@ services:
       - /etc/ssl/certs/ca-certificates.crt:/etc/ssl/certs/ca-certificates.crt:ro
     environment:
       - PAPERLESS_SECRET_KEY
+      - PAPERLESS_APP_TITLE=Paperless Nano
       - PAPERLESS_DBPASS
       - PAPERLESS_CONSUMER_DELETE_DUPLICATES=true
       - PAPERLESS_OCR_LANGUAGE
@@ -76,13 +77,21 @@ services:
       - PAPERLESS_TASK_WORKERS=1
       - PAPERLESS_THREADS_PER_WORKER=2
       - PAPERLESS_WEBSERVER_WORKERS=1
-      - PAPERLESS_USE_API_CONSUMER=1
-      - PAPERLESS_USE_API_SCHEDULER=1
-      - PAPERLESS_USE_LEAN_WORKER=1
+      - PAPERLESS_CONSUMER_CLASS=paperless_services.watcher.APIConsumer
+      - PAPERLESS_SCHEDULER_CLASS=paperless_services.scheduler.APIScheduler
+      - PAPERLESS_WORKER_CLASS=paperless_worker.bootstrap.LeanWorker
       - PAPERLESS_API_TOKEN_FILE=/run/secrets/paperless_token
       - PAPERLESS_TRAIN_TASK_CRON=disable
       - PAPERLESS_CLASSIFIER_ENABLED=false
-      - PAPERLESS_LOCAL_OCR_ENABLED=false
+      - PAPERLESS_PROCESSOR_USER=server-processor
+      - PAPERLESS_PROCESSOR_CAPABILITIES=search ingestion
+      - PAPERLESS_PARSER=documents.external_workers.ExternalParser
+      - PAPERLESS_ENRICHMENT_PROVIDER=documents.external_workers.ExternalMetadata
+      - PAPERLESS_ENRICHMENT_ALLOW_REMOTE=true
+      - PAPERLESS_REMOTE_OCR_MODE=always
+      - PAPERLESS_OCR_PROVENANCE_FIELD=5
+      - PAPERLESS_CONSUMER_DISABLE
+      - PAPERLESS_EMAIL_TASK_CRON
       - PAPERLESS_AI_ALLOWED=false
       - PAPERLESS_TIME_ZONE
       - PAPERLESS_REDIS=redis://broker:6379
@@ -104,6 +113,14 @@ services:
       - "traefik.http.routers.paperless.middlewares=authelia@docker,secured@file"
       - "traefik.http.routers.paperless.tls=true"
       - "traefik.http.routers.paperless.service=paperless"
+      # Operation API uses Paperless processor tokens instead of interactive SSO.
+      - "traefik.http.routers.paperless-operations.rule=Host(`paperless.${DOCKER_DOMAIN}`) && PathPrefix(`/api/operations/`)"
+      - "traefik.http.routers.paperless-operations.entrypoints=https"
+      - "traefik.http.routers.paperless-operations.middlewares=paperless-operation-headers,secured@file"
+      - "traefik.http.routers.paperless-operations.tls=true"
+      - "traefik.http.routers.paperless-operations.service=paperless"
+      - "traefik.http.middlewares.paperless-operation-headers.headers.customrequestheaders.Remote-User="
+      - "traefik.http.middlewares.paperless-operation-headers.headers.customrequestheaders.Remote_User="
       - "traefik.http.services.paperless.loadbalancer.server.port=8000"
       - "traefik.docker.network=paperless-ai_traefik"
 
@@ -171,6 +188,8 @@ services:
   # Configure in Paperless: Settings → Workflows → Action: Webhook
   #   URL: http://webhook-listener:8001/webhook/document
   webhook-listener:
+    profiles: [legacy]
+    restart: "no"
     extends:
       file: ../compose-security-baseline/hardening.yml
       service: hardened-small
@@ -227,6 +246,8 @@ services:
   # Stop ai before processing with the CLI; only one worker process may run.
   # See docs/setup.md for full setup instructions.
   ai:
+    profiles: [legacy]
+    restart: "no"
     extends:
       file: ../compose-security-baseline/hardening.yml
       service: hardened-xlarge

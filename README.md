@@ -1,5 +1,9 @@
 # Paperless AI
 
+Atlas now uses the [Paperless Nano deployment](docs/nano-deployment.md). The
+webhook/AI services described below are retained under the `legacy` Compose
+profile for rollback and must stay stopped while Nano processes documents.
+
 **From a scanned page to an answer you can verify.** [paperless-ngx](https://github.com/paperless-ngx/paperless-ngx) imports and searches documents. This project adds AI reading for difficult scans, automatic organization, and a browser chat copilot without changing Paperless itself.
 
 - **Read:** A complete-PDF OCR service (Paddle or the optional vision adapter) transcribes every page and saves searchable text in Paperless.

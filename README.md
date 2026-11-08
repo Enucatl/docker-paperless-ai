@@ -1,45 +1,22 @@
-# Paperless AI
+# Paperless Nano on Atlas
 
-Atlas now uses the [Paperless Nano deployment](docs/nano-deployment.md). The
-webhook/AI services described below are retained under the `legacy` Compose
-profile for rollback and must stay stopped while Nano processes documents.
+This repository deploys Paperless Nano, PostgreSQL 18, Redis 8 and Phoenix on
+Atlas. The independently published Nano worker on Cerebrum performs OCR and
+metadata extraction through Paperless's durable operation API. There is no
+webhook listener, tag-driven processing queue or ingestion worker in this project.
 
-**From a scanned page to an answer you can verify.** [paperless-ngx](https://github.com/paperless-ngx/paperless-ngx) imports and searches documents. This project adds AI reading for difficult scans, automatic organization, and a browser chat copilot without changing Paperless itself.
+Three tools remain here:
 
-- **Read:** A complete-PDF OCR service (Paddle or the optional vision adapter) transcribes every page and saves searchable text in Paperless.
-- **Organize:** a text model extracts a title, date, sender, and summary.
-- **Ask:** the copilot searches Paperless, reads matching documents, and answers with citations.
+- **Chat/search copilot:** a Paperless full-text search assistant with citations
+  and persistent conversation history. It is parked under the `copilot` Compose
+  profile and does not run during ordinary startup.
+- **Correspondent cleanup:** one-shot plan generation, bulk maintenance and a
+  browser review interface under the `cleanup` profile.
+- **Evaluations and Phoenix:** input-only OCR/metadata experiments and model
+  comparisons. Evaluation agents are retained for experiments; they do not
+  process the production document queue.
 
-Paperless workflows and tags start the work. A webhook listener puts document IDs in Redis; Python workers process them and write results back through the Paperless API. The stack runs with Docker Compose, PostgreSQL stores Paperless and chat data, and [Arize Phoenix](https://phoenix.arize.com/) records traces and evaluations. Models can run through OpenRouter or an OpenAI-compatible local server such as Ollama or vLLM.
-
-```mermaid
-flowchart LR
-    A[Document in Paperless] --> B[Workflow and webhook]
-    B --> C[Redis queue]
-    C --> D[Parse every document page]
-    D --> E[Extract document details]
-    E --> A
-    F[Chat copilot] --> G[Paperless search]
-    G --> F
-```
-
-The copilot uses Paperless's existing full-text search, so there is no separate vector index. If local model serving is offline, queued documents wait for it to return.
-
-The default cloud models receive document content; see [privacy details and local model options](docs/reference.md#privacy).
-
-![Chat copilot answering from documents](docs/assets/chat-demo.png)
-
-## Setup
-
-This Compose deployment assumes an existing Traefik network, Paperless data volumes, and the sibling [container hardening baseline](https://github.com/Enucatl/docker-compose-security-baseline). See the [setup guide](docs/setup.md) for prerequisites, secrets, Paperless workflows, startup, backfills, model selection, and upgrades.
-
-## Reference
-
-- [Architecture, data flow, and privacy](docs/reference.md#architecture-and-data-flow)
-- [OCR service setup](docs/paddleocr.md) · [Workstation implementation prompt](paddle.md)
-- [Configuration and Docker secrets](docs/reference.md#configuration)
-- [Daily operations and correspondent cleanup](docs/reference.md#operations)
-- [Testing and model evaluation](docs/reference.md#testing-and-evaluation)
-- [Repository layout](docs/reference.md#repository-layout)
-
-For the project story and design tradeoffs, read the [case study](docs/index.md) and [deep dive](docs/deep-dive.md).
+See [deployment](docs/nano-deployment.md), [setup](docs/setup.md) and
+[tool reference](docs/reference.md). The [historical evaluation report](docs/phoenix-paperless-eval-test-report.md)
+records the implementation and models actually measured, rather than validation
+of the current worker image.

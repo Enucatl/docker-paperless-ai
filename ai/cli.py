@@ -1,35 +1,10 @@
-#!/usr/bin/env python3
-"""
-CLI entrypoint for the AI post-processing service.
-
-Modes:
-    --once       Process all pending documents once and exit
-    --watch      Poll continuously with concurrent workers (default via Docker)
-    --eval       Run offline evaluation against the input-only eval corpus
-    --dry-run    Log what would happen without modifying any documents
-    --purge-notes  Delete all AI-generated notes from previous runs
-    --cleanup-correspondents-plan PATH   Write a reviewable correspondent merge plan
-    --cleanup-correspondents-apply PATH  Apply an approved correspondent merge plan
-
-Usage:
-    python cli.py --once
-    python cli.py --watch
-    python cli.py --eval
-    python cli.py --once --dry-run
-
-Pipeline stages (tag-driven):
-    ai:run-ocr      → OCR worker: download PDF, run document OCR, write content
-    ai:run-metadata → Metadata worker: read content, run LLM, write title/date/correspondent
-"""
+"""Evaluation and correspondent maintenance commands."""
 
 import argparse
 import asyncio
 import logging
-import signal
 import sys
-import time
 from dataclasses import replace
-from pathlib import Path
 
 from paperless_ai.core.config import AgentConfig
 from paperless_common.paperless import PaperlessClient, _raise_for_status
@@ -41,15 +16,6 @@ logging.basicConfig(
     datefmt="%Y-%m-%d %H:%M:%S",
 )
 log = logging.getLogger(__name__)
-
-HEALTHCHECK_FILE = "/tmp/ai-healthy"
-
-
-def _write_heartbeat() -> None:
-    try:
-        Path(HEALTHCHECK_FILE).write_text(str(time.time()))
-    except OSError:
-        pass
 
 
 def _load_config(
@@ -93,15 +59,6 @@ async def _run_eval(args: argparse.Namespace) -> None:
     from paperless_ai.eval.run_evals import run_evals
 
     await run_evals(_load_config(args, paperless=False), split=args.split)
-
-
-async def _purge_notes(
-    client: PaperlessClient, config: AgentConfig, args: argparse.Namespace
-) -> None:
-    """Remove AI notes using only Paperless."""
-    from paperless_ai.core.runner import purge_ai_notes
-
-    await purge_ai_notes(client, config.dry_run)
 
 
 async def _cleanup_plan(
@@ -219,148 +176,38 @@ async def _cleanup_apply(
 
 
 async def _cleanup_weekly(args: argparse.Namespace) -> None:
-    """Wait for queues, apply automatic cleanup, and publish the review plan."""
-    from paperless_common.queue import TaskQueues
+    """Apply automatic cleanup and publish the review plan."""
     from paperless_ai.core.correspondent_cleanup import (
         CleanupReviewStore,
         apply_correspondent_merge_plan,
         build_correspondent_merge_plan,
         write_merge_plan_atomically,
-        wait_for_cleanup_queues,
     )
 
     config = _load_config(args)
-    queues = TaskQueues(config.redis_url)
-    try:
-        log.info("Waiting for OCR and metadata queues to remain empty for 10 minutes")
-        await wait_for_cleanup_queues(queues)
-        cleanup_review_store = await CleanupReviewStore.from_config(config)
-        async with PaperlessClient(
-            config.paperless_url, config.paperless_token
-        ) as client:
-            plan = await build_correspondent_merge_plan(
-                client, config, typesafe=True, review_store=cleanup_review_store
-            )
-            summary = await apply_correspondent_merge_plan(
-                client,
-                plan,
-                review_store=cleanup_review_store,
-                advance_manual_boundary=False,
-            )
-        if summary["skipped_nonempty_deletes"] or summary["skipped_stale_documents"]:
-            raise RuntimeError("automatic cleanup became stale during apply")
-        write_merge_plan_atomically(
-            replace(
-                plan,
-                approved_clusters=[],
-                orphan_correspondents=[],
-                automatic_applied_clusters=plan.approved_clusters,
-            ),
-            args.cleanup_correspondents_weekly,
+    cleanup_review_store = await CleanupReviewStore.from_config(config)
+    async with PaperlessClient(config.paperless_url, config.paperless_token) as client:
+        plan = await build_correspondent_merge_plan(
+            client, config, typesafe=True, review_store=cleanup_review_store
         )
-        log.info("Weekly correspondent cleanup completed: %s", summary)
-    finally:
-        await queues.close()
-
-
-async def _run_workers(
-    client: PaperlessClient, config: AgentConfig, args: argparse.Namespace
-) -> None:
-    """Initialize and run the OCR and metadata workers."""
-    from paperless_common.queue import TaskQueues
-    from paperless_ai.core.runtime import initialize_paperless, workers
-    from paperless_ai.core.runner import (
-        clear_shutdown_request,
-        request_shutdown,
-        wait_for_shutdown,
-        close_model_probe_session,
-        run_ocr_batch,
-        run_metadata_batch,
+        summary = await apply_correspondent_merge_plan(
+            client,
+            plan,
+            review_store=cleanup_review_store,
+            advance_manual_boundary=False,
+        )
+    if summary["skipped_nonempty_deletes"] or summary["skipped_stale_documents"]:
+        raise RuntimeError("automatic cleanup became stale during apply")
+    write_merge_plan_atomically(
+        replace(
+            plan,
+            approved_clusters=[],
+            orphan_correspondents=[],
+            automatic_applied_clusters=plan.approved_clusters,
+        ),
+        args.cleanup_correspondents_weekly,
     )
-
-    clear_shutdown_request()
-    log.info("OCR layout-parsing endpoint: %s", config.ocr_endpoint)
-    log.info("Pipeline tags: ocr=%r metadata=%r", config.tag_ocr, config.tag_metadata)
-    log.info("Checking LLM connectivity (model: %s)...", config.metadata_model)
-    try:
-        _kwargs: dict = {
-            "messages": [{"role": "user", "content": "Reply with OK"}],
-            "max_tokens": 5,
-        }
-        from paperless_ai.inference import complete
-
-        await complete(
-            model=config.metadata_model,
-            endpoint=config.metadata_endpoint,
-            domain="startup_connectivity",
-            **_kwargs,
-        )
-        log.info("LLM connectivity OK")
-    except Exception as e:
-        log.warning(
-            "LLM connectivity check failed: %s — will retry during processing",
-            e,
-        )
-
-    field_ids = await initialize_paperless(client, config)
-    (
-        custom_field_id,
-        ai_summary_field_id,
-        ai_result_field_id,
-        ai_ocr_output_field_id,
-    ) = field_ids
-
-    # Set up Redis queues
-    queues = TaskQueues(config.redis_url)
-    log.info("Redis task queues: %s", config.redis_url)
-
-    try:
-        if args.once:
-            # Sequential: OCR → metadata (docs flow through both stages in one run)
-            ocr_s, ocr_f = await run_ocr_batch(
-                client, config, queues, ai_ocr_output_field_id
-            )
-            meta_s, meta_f = await run_metadata_batch(
-                client,
-                config,
-                queues,
-                custom_field_id,
-                ai_summary_field_id,
-                ai_result_field_id,
-            )
-            _write_heartbeat()
-            log.info(
-                "Done. OCR: %d/%d  Metadata: %d/%d",
-                ocr_s,
-                ocr_s + ocr_f,
-                meta_s,
-                meta_s + meta_f,
-            )
-        else:
-            # Watch mode: two concurrent workers, each polling their queue
-            def _request_shutdown(signum: int, frame: object) -> None:
-                log.info(
-                    "Received %s — will stop after current document completes",
-                    signal.Signals(signum).name,
-                )
-                request_shutdown()
-
-            signal.signal(signal.SIGTERM, _request_shutdown)
-            signal.signal(signal.SIGINT, _request_shutdown)
-
-            log.info(
-                "Watch mode: workers polling every %ds (SIGTERM/Ctrl+C to stop)",
-                config.poll_interval,
-            )
-
-            async with workers(
-                client, config, queues, field_ids, lambda stage: _write_heartbeat()
-            ):
-                await wait_for_shutdown()
-            log.info("Shutdown complete.")
-    finally:
-        await close_model_probe_session()
-        await queues.close()
+    log.info("Weekly correspondent cleanup completed: %s", summary)
 
 
 async def main_async(args: argparse.Namespace) -> None:
@@ -368,9 +215,7 @@ async def main_async(args: argparse.Namespace) -> None:
     if args.cleanup_correspondents_weekly:
         await _cleanup_weekly(args)
         return
-    if args.purge_notes:
-        handler = _purge_notes
-    elif args.eval:
+    if args.eval:
         await _run_eval(args)
         return
     elif args.cleanup_correspondents_plan:
@@ -380,9 +225,9 @@ async def main_async(args: argparse.Namespace) -> None:
     elif args.cleanup_correspondents_apply:
         handler = _cleanup_apply
     else:
-        handler = _run_workers
+        raise ValueError("Select an evaluation or cleanup command")
 
-    config = _load_config(args, metadata=handler is _run_workers)
+    config = _load_config(args, metadata=False)
     async with PaperlessClient(config.paperless_url, config.paperless_token) as client:
         await _check_paperless(client)
         await handler(client, config, args)
@@ -390,14 +235,10 @@ async def main_async(args: argparse.Namespace) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="AI post-processing for paperless-ngx documents"
+        description="Paperless evaluation and correspondent maintenance"
     )
     mode = parser.add_mutually_exclusive_group()
-    mode.add_argument(
-        "--once",
-        action="store_true",
-        help="Process all pending documents once and exit",
-    )
+
     parser.add_argument(
         "--cleanup-typesafe",
         action="store_true",
@@ -408,11 +249,7 @@ def main() -> None:
         default="correspondent-cleanup-analysis",
         help="Directory for read-only TypeSafe CSV, JSON, and HTML outputs",
     )
-    mode.add_argument(
-        "--watch",
-        action="store_true",
-        help="Poll continuously with two concurrent workers (default via Docker)",
-    )
+
     mode.add_argument(
         "--eval",
         action="store_true",
@@ -431,7 +268,7 @@ def main() -> None:
     mode.add_argument(
         "--cleanup-correspondents-weekly",
         metavar="PATH",
-        help="Wait for queues, apply TypeSafe automatic cleanup, and publish review plan",
+        help="Apply TypeSafe cleanup after Nano processing and publish review plan",
     )
     parser.add_argument(
         "--split",
@@ -444,22 +281,8 @@ def main() -> None:
         action="store_true",
         help="Log what would happen without modifying any documents",
     )
-    parser.add_argument(
-        "--purge-notes",
-        action="store_true",
-        help="Delete all AI-generated notes from previous runs and exit",
-    )
-    args = parser.parse_args()
 
-    if not (
-        args.once
-        or args.eval
-        or args.cleanup_correspondents_plan
-        or args.cleanup_correspondents_apply
-        or args.cleanup_correspondents_weekly
-        or args.cleanup_typesafe
-    ):
-        args.once = False  # watch mode is the default
+    args = parser.parse_args()
 
     asyncio.run(main_async(args))
 

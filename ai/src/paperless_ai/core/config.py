@@ -23,7 +23,6 @@ def _inject_secrets() -> None:
         "OPENROUTER_API_KEY",
         "HF_TOKEN",
         "PAPERLESS_TOKEN",
-        "WEBHOOK_SECRET",
         "TYPESAFE_API_KEY",
     ):
         val = read_secret(key)
@@ -116,9 +115,6 @@ class AgentConfig(BaseSettings):
         ),
     )
 
-    poll_interval: int = 300
-    stage_max_attempts: int = 11
-    ocr_concurrency: int = 4
     correspondent_match_threshold: float = Field(
         default=0.80,
         validation_alias="CORRESPONDENT_MATCH_THRESHOLD",
@@ -153,12 +149,6 @@ class AgentConfig(BaseSettings):
     typesafe_endpoint: str | None = Field(
         default=None, validation_alias="TYPESAFE_ENDPOINT"
     )
-    # TAG_PENDING is the legacy name — keep for backward compat
-    tag_ocr: str = Field(
-        default="ai:run-ocr",
-        validation_alias=AliasChoices("tag_ocr", "TAG_OCR", "TAG_PENDING"),
-    )
-    tag_metadata: str = "ai:run-metadata"
     dry_run: bool = False
 
     # TEMPERATURE is a generic fallback when specific ones are not set
@@ -181,14 +171,6 @@ class AgentConfig(BaseSettings):
     metadata_prompt: str = Field(
         default_factory=lambda: _load_prompt("metadata_prompt.txt")
     )
-
-    # Redis queue (DB 1, isolated from Paperless DB 0)
-    redis_url: str = "redis://broker:6379/1"
-
-    # Paperless workflow automation
-    manage_paperless_workflows: bool = True
-    paperless_webhook_url: str = "http://webhook-listener:8001/webhook/document"
-    webhook_secret: Optional[str] = None
 
     metadata_max_tokens: int = Field(
         default=1000,
@@ -268,7 +250,7 @@ class AgentConfig(BaseSettings):
 
         Args:
             required_models: Model purposes needed by this process. The default
-                preserves validation for the combined search and worker service.
+                requires both model purposes unless a command selects its own.
         """
         _inject_secrets()  # read *_FILE env vars and inject into os.environ
         config = cls()

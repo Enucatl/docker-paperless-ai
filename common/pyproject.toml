@@ -5,7 +5,6 @@ description = "Shared Paperless AI runtime helpers"
 requires-python = ">=3.14"
 dependencies = [
     "niquests>=3.0",
-    "redis[hiredis]>=5.0",
 ]
 
 [build-system]

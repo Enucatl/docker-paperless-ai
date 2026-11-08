@@ -1,15 +1,4 @@
-"""
-Pytest fixtures for the paperless-ai E2E test suite.
-
-Session-scoped fixtures handle the slow operations (waiting for Paperless,
-fetching an API token) once per run.  Function-scoped fixtures isolate
-document state between tests and reset mocks cleanly.
-
-Infrastructure available in the test environment (docker-compose.test.yml):
-  - Paperless-ngx (webserver)    http://webserver:8000
-  - Redis (broker)               redis://broker:6379/1  (DB 1, AI queue)
-  - Webhook listener             http://webhook-listener:8001
-"""
+"""Shared mocks and optional live Paperless fixtures."""
 
 import asyncio
 import io
@@ -22,80 +11,11 @@ from shared_inference import CompletionResult, Usage
 
 import niquests
 import pytest
-import redis as _redis_sync
-
-
-def pytest_configure(config):
-    """Register custom pytest markers."""
-    config.addinivalue_line(
-        "markers", "requires_redis: mark test as requiring Redis to be running"
-    )
-    config.addinivalue_line(
-        "markers",
-        "requires_webhook_listener: mark test as requiring webhook-listener to be running",
-    )
 
 
 PAPERLESS_URL = os.environ.get("PAPERLESS_URL", "http://webserver:8000")
-REDIS_URL = os.environ.get("REDIS_URL", "redis://broker:6379/1")
-WEBHOOK_URL = os.environ.get("WEBHOOK_URL", "http://webhook-listener:8001")
 TEST_USER = os.environ.get("TEST_PAPERLESS_USER", "admin")
 TEST_PASS = os.environ.get("TEST_PAPERLESS_PASS", "admin")
-
-# OCR and metadata task queues
-_TASK_QUEUE_KEYS = [
-    "paperless-ai:queue:ocr",
-    "paperless-ai:queue:metadata",
-]
-_ALL_QUEUE_KEYS = [
-    *_TASK_QUEUE_KEYS,
-    "paperless-ai:queue:failed",
-    *[f"paperless-ai:queue:delayed:{key}" for key in _TASK_QUEUE_KEYS],
-]
-
-
-# ---------------------------------------------------------------------------
-# Sync Redis helpers (used in sync fixtures and teardown)
-# ---------------------------------------------------------------------------
-
-
-def _redis_client() -> _redis_sync.Redis:
-    return _redis_sync.from_url(REDIS_URL, decode_responses=False)
-
-
-def _clear_redis_queue() -> None:
-    """Clear all stage queues."""
-    r = _redis_client()
-    for key in _ALL_QUEUE_KEYS:
-        r.delete(key)
-    r.close()
-
-
-def _redis_queue_size() -> int:
-    """Return total pending count across all queues."""
-    r = _redis_client()
-    total = sum(int(r.scard(key)) for key in _TASK_QUEUE_KEYS)
-    r.close()
-    return total
-
-
-def _redis_queue_members() -> set[int]:
-    """Return all pending doc IDs across all queues."""
-    r = _redis_client()
-    members: set[int] = set()
-    for key in _TASK_QUEUE_KEYS:
-        members.update(int(m) for m in r.smembers(key))
-    r.close()
-    return members
-
-
-def _redis_stage_members(stage: str) -> set[int]:
-    """Return pending doc IDs for a specific stage queue key."""
-    r = _redis_client()
-    members = r.smembers(stage)
-    r.close()
-    return {int(m) for m in members}
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -150,42 +70,6 @@ def _fetch_token(url: str, user: str, password: str, retries: int = 20) -> str:
 # ---------------------------------------------------------------------------
 # Session-scoped: shared across the whole test run
 # ---------------------------------------------------------------------------
-
-
-def _redis_available() -> bool:
-    """Check if Redis is available."""
-    try:
-        r = _redis_client()
-        r.ping()
-        r.close()
-        return True
-    except Exception:
-        return False
-
-
-def _webhook_listener_available() -> bool:
-    """Check if webhook-listener is available."""
-    try:
-        r = niquests.get(f"{WEBHOOK_URL}/health", timeout=2.0)
-        return r.status_code < 500
-    except Exception:
-        return False
-
-
-@pytest.fixture(scope="session")
-def redis_available():
-    """Fixture that returns whether Redis is available."""
-    return _redis_available()
-
-
-def pytest_runtest_setup(item):
-    """Skip tests that require infrastructure if not available."""
-    if "requires_redis" in item.keywords:
-        if not _redis_available():
-            pytest.skip("Redis is not available")
-    if "requires_webhook_listener" in item.keywords:
-        if not _webhook_listener_available():
-            pytest.skip("webhook-listener is not available")
 
 
 @pytest.fixture(scope="session")
@@ -249,82 +133,6 @@ def mock_litellm():
         patch("paperless_ai.inference.complete", side_effect=fake),
     ):
         yield
-
-
-@pytest.fixture
-def mock_document_service():
-    """Return deterministic complete-document OCR for pipeline integration tests."""
-    from unittest.mock import AsyncMock
-
-    output = {
-        "schema_version": 1,
-        "pipeline": "test-document-service",
-        "model": "test-ocr",
-        "layout_model": "test-layout",
-        "page_count": 1,
-        "pages": [{"page_index": 0, "markdown": {"text": _OCR_TEXT}}],
-    }
-
-    async def mock_document_ocr(source, config, metadata, *, archive_path=None):
-        """Return source-bound output and write the requested mock PDF archive."""
-        from hashlib import sha256
-        from pathlib import Path
-
-        source_bytes = Path(source).read_bytes()
-        if archive_path is not None:
-            archive_path.write_bytes(source_bytes)
-        return (
-            _OCR_TEXT,
-            {**output, "source_sha256": sha256(source_bytes).hexdigest()},
-            1,
-            0.01,
-        )
-
-    with (
-        patch(
-            "paperless_ai.agents.paddle_ocr.run_paddle_ocr",
-            new=AsyncMock(side_effect=mock_document_ocr),
-        ),
-        patch(
-            "paperless_ai.core.runner._check_server_reachable",
-            new=AsyncMock(return_value=True),
-        ),
-        patch(
-            "paperless_ai.agents.paddle_ocr.fetch_ocr_metadata",
-            new=AsyncMock(
-                return_value={
-                    "pipeline": "test-document-service",
-                    "model": "test-ocr",
-                    "layout_model": "test-layout",
-                }
-            ),
-        ),
-    ):
-        yield
-
-
-# ---------------------------------------------------------------------------
-# Function-scoped: Redis queues — cleared before and after each test
-# ---------------------------------------------------------------------------
-
-
-@pytest.fixture
-async def task_queues():
-    """
-    A fresh TaskQueues backed by the real test Redis (DB 1).
-
-    Clears both stage queues before and after each test.
-    """
-    from paperless_common.queue import TaskQueues
-
-    if not _redis_available():
-        pytest.skip("Redis is not available")
-
-    _clear_redis_queue()
-    q = TaskQueues(REDIS_URL)
-    yield q
-    await q.close()
-    _clear_redis_queue()
 
 
 # ---------------------------------------------------------------------------

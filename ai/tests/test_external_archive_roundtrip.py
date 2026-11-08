@@ -8,6 +8,7 @@ import pytest
 from tests.conftest import _make_test_pdf, _upload_document
 
 
+@pytest.mark.live
 async def test_external_archive_roundtrip_preserves_original(paperless_client) -> None:
     """Attach PDF/text together and reject stale output without changing either."""
     client = paperless_client

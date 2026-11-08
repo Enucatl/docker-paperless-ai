@@ -7,7 +7,6 @@ import logging
 import re
 import sys
 import tempfile
-import time
 import unicodedata
 from collections import defaultdict
 from dataclasses import asdict, dataclass, field
@@ -781,35 +780,6 @@ def write_merge_plan_atomically(plan: CorrespondentMergePlan, path: str) -> None
         handle.write(json.dumps(plan.to_dict(), indent=2) + "\n")
         temporary = Path(handle.name)
     temporary.replace(output)
-
-
-async def wait_for_cleanup_queues(
-    queues: Any,
-    *,
-    empty_seconds: float = 600,
-    timeout_seconds: float = 4200,
-    poll_seconds: float = 10,
-    clock: Any = time.monotonic,
-    sleep: Any = asyncio.sleep,
-) -> None:
-    """Wait until OCR and metadata work has stayed empty for the full interval."""
-    started = clock()
-    empty_since: float | None = None
-    while True:
-        now = clock()
-        if now - started >= timeout_seconds:
-            raise TimeoutError("OCR and metadata queues did not settle before timeout")
-        work = await asyncio.gather(
-            queues.stage_work_count(queues.KEY_OCR),
-            queues.stage_work_count(queues.KEY_METADATA),
-        )
-        if any(work):
-            empty_since = None
-        elif empty_since is None:
-            empty_since = now
-        elif now - empty_since >= empty_seconds:
-            return
-        await sleep(min(poll_seconds, max(0, timeout_seconds - (clock() - started))))
 
 
 def write_cleanup_analysis(

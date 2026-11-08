@@ -54,38 +54,6 @@ def test_eval_needs_no_paperless_or_default_models(cli, monkeypatch):
 
 
 @pytest.mark.parametrize("dry_run", [False, True])
-def test_purge_uses_only_paperless(cli, paperless, monkeypatch, caplog, dry_run):
-    """Purge retains its dry-run flag and valid connectivity parameters."""
-    monkeypatch.setattr(
-        "sys.argv", ["cli.py", "--purge-notes"] + (["--dry-run"] if dry_run else [])
-    )
-    with (
-        patch(
-            "paperless_ai.core.runner.purge_ai_notes", new_callable=AsyncMock
-        ) as purge,
-        patch("paperless_ai.inference.complete", new_callable=AsyncMock) as complete,
-    ):
-        with caplog.at_level("INFO"):
-            cli.main()
-    paperless.get.assert_awaited_once_with("/api/")
-    assert "5.1.2" in caplog.text
-    assert purge.call_args.args[1] is dry_run
-    complete.assert_not_awaited()
-
-
-def test_paperless_failure_stops_command(cli, paperless, monkeypatch):
-    """An unreachable API stops execution before note deletion."""
-    monkeypatch.setattr("sys.argv", ["cli.py", "--purge-notes"])
-    paperless.get.side_effect = ConnectionError("Connection refused")
-    with patch(
-        "paperless_ai.core.runner.purge_ai_notes", new_callable=AsyncMock
-    ) as purge:
-        with pytest.raises(SystemExit, match="1"):
-            cli.main()
-    purge.assert_not_awaited()
-
-
-@pytest.mark.parametrize("dry_run", [False, True])
 def test_cleanup_apply_needs_no_models(cli, paperless, monkeypatch, tmp_path, dry_run):
     """Load and apply a real empty plan without requiring inference settings."""
     from paperless_ai.core.correspondent_cleanup import (
@@ -113,61 +81,6 @@ def test_cleanup_apply_needs_no_models(cli, paperless, monkeypatch, tmp_path, dr
     ):
         cli.main()
     complete.assert_not_awaited()
-
-
-@pytest.mark.parametrize("flag", ["--once", "--watch"])
-def test_workers_require_metadata(cli, monkeypatch, flag):
-    """Both worker modes reject missing models before opening services."""
-    monkeypatch.setattr("sys.argv", ["cli.py", flag])
-    with patch.object(cli, "PaperlessClient") as client:
-        with pytest.raises(ValueError, match="INFERENCE_METADATA_MODEL is required"):
-            cli.main()
-    client.assert_not_called()
-
-
-def test_once_retains_worker_initialization_without_chat(cli, paperless, monkeypatch):
-    """Workers still probe metadata and initialize their shared resources."""
-    monkeypatch.setenv("INFERENCE_METADATA_MODEL", "test-model")
-    monkeypatch.setattr("sys.argv", ["cli.py", "--once"])
-    monkeypatch.setattr(cli, "_write_heartbeat", MagicMock())
-    with (
-        patch("paperless_ai.inference.complete", new_callable=AsyncMock) as complete,
-        patch(
-            "paperless_ai.core.runtime.initialize_paperless",
-            new_callable=AsyncMock,
-            return_value=(1, 2, 3, 4),
-        ) as initialize,
-        patch("paperless_common.queue.TaskQueues", return_value=AsyncMock()) as queues,
-        patch(
-            "paperless_ai.core.runner.run_ocr_batch",
-            new_callable=AsyncMock,
-            return_value=(0, 0),
-        ) as ocr,
-        patch(
-            "paperless_ai.core.runner.run_metadata_batch",
-            new_callable=AsyncMock,
-            return_value=(0, 0),
-        ) as metadata,
-    ):
-        cli.main()
-    paperless.get.assert_awaited_once_with("/api/")
-    assert complete.call_args.kwargs["domain"] == "startup_connectivity"
-    initialize.assert_awaited_once()
-    assert ocr.call_args.args[-1] == 4
-    assert metadata.call_args.args[-3:] == (1, 2, 3)
-    queues.return_value.close.assert_awaited_once()
-
-
-@pytest.mark.parametrize("missing", ["PAPERLESS_URL", "PAPERLESS_TOKEN"])
-def test_workers_require_paperless_credentials(cli, monkeypatch, missing):
-    """Workers retain required Paperless credentials."""
-    monkeypatch.setenv("INFERENCE_METADATA_MODEL", "test-model")
-    monkeypatch.setenv("PAPERLESS_URL", "http://paperless.test")
-    monkeypatch.setenv("PAPERLESS_TOKEN", "token")
-    monkeypatch.delenv(missing)
-    monkeypatch.setattr("sys.argv", ["cli.py", "--once"])
-    with pytest.raises(SystemExit, match="1"):
-        cli.main()
 
 
 @pytest.mark.parametrize("mode", ["plan", "typesafe", "typesafe-plan"])

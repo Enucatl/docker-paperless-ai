@@ -1,298 +1,46 @@
 # Setup
 
-[← Overview](../README.md) · [Reference](reference.md)
+This Compose project is tailored to Atlas. It expects Docker Compose, the sibling
+`../compose-security-baseline/hardening.yml`, Traefik and Authelia, and the existing
+external volumes `paperless-ai_data` and `paperless-ai_media`. The host consumption
+directory is `/opt/paperless-consume`; the host CA bundle is mounted read-only.
 
-Run commands from the repository root unless a section says otherwise.
+Use the existing `.env` and private `secrets/` files. [`.env.example`](../.env.example)
+lists deployment and tool settings. Keep PostgreSQL's `POSTGRES_PASSWORD` and
+`PAPERLESS_DBPASS` consistent. Keep the Compose project name `paperless-ai` to
+retain its database and other named volumes.
 
-## Before you start
+Start the normal services with the parent environment included:
 
-This repository's `docker-compose.yml` is tailored to an existing host. It expects:
-
-- Docker Compose and the sibling `../compose-security-baseline/hardening.yml` file.
-- The stack-owned `paperless-ai_traefik` network, with Traefik attached externally and Authelia configured for the routes in Compose.
-- External Docker volumes `paperless-ai_data` and `paperless-ai_media`. Compose creates the persistent `consume` volume automatically.
-- A host CA bundle at `/etc/ssl/certs/ca-certificates.crt`.
-- Files for every secret listed in `docker-compose.yml` under `secrets:`. Put real credentials in the files you use; empty files can stand in for unused model providers. Keep `secrets/` private.
-
-For a new installation, create the network and external volumes if they do not already exist:
-
-```bash
-docker volume create paperless-ai_data
-docker volume create paperless-ai_media
-docker compose create --no-build webserver
+```sh
+docker compose --env-file ../.env --env-file .env up -d db broker webserver phoenix
 ```
 
-The sibling hardening file comes from [docker-compose-security-baseline](https://github.com/Enucatl/docker-compose-security-baseline). This deployment also assumes a reverse proxy and domain that match `DOCKER_DOMAIN`.
-
-## 1. Configure environment
-
-```bash
-cp .env.example .env
-mkdir -p secrets
-touch secrets/{paperless_token,webhook_secret,openai_api_key,anthropic_api_key,google_api_key,openrouter_api_key,hf_token,typesafe_api_token,phoenix_postgres_password,ai_chat_postgres_password}.txt
-chmod 700 secrets
-chmod 600 secrets/*.txt
-```
-
-Set at minimum (use a generated secret key and your own domain):
-
-```env
-PAPERLESS_SECRET_KEY=<output of openssl rand -hex 32>
-DOCKER_DOMAIN=example.com
-```
-
-Put your OpenRouter key in `secrets/openrouter_api_key.txt`. Compose reads it as
-a Docker secret. The default inference endpoint uses OpenRouter.
-
-Create strong values in `secrets/phoenix_postgres_password.txt` and `secrets/ai_chat_postgres_password.txt` before starting PostgreSQL. The database initialization scripts use them on a fresh volume. Also set a strong `POSTGRES_PASSWORD` and matching `PAPERLESS_DBPASS` in `.env`.
-
-## 2. Start Paperless
-
-On a new installation, start the database, Redis, and Paperless first so you can
-create an API token in its UI:
-
-```bash
-docker compose up -d db broker webserver
-```
-
-Open `https://paperless.${DOCKER_DOMAIN}` through your configured reverse
-proxy and finish Paperless's initial account setup.
-
-## 3. Configure Paperless
-
-In the Paperless UI go to **Settings -> API Tokens** and create an API token
-for the AI services. Put that value into `secrets/paperless_token.txt` for
-Compose, or `PAPERLESS_TOKEN` for a local run.
-
-The token must be allowed to:
-
-- read and patch documents
-- create and update tags
-- create and update custom fields
-- create and update workflows
-
-If the token cannot manage workflows and `MANAGE_PAPERLESS_WORKFLOWS=true`
-(default), the `ai` service will fail on startup instead of running with a
-partially configured Paperless instance.
-
-By default the `ai` service creates or updates the required Paperless workflows
-automatically on startup:
-
-- `paperless-ai: document-added`
-- `paperless-ai: document-updated`
-
-The service also creates or updates the required `ai:run-ocr` tag if it does
-not exist. If `WEBHOOK_SECRET` is set, the generated workflows include the
-matching `X-Webhook-Token` header automatically.
-
-If you prefer to manage workflows yourself, set:
-
-```env
-MANAGE_PAPERLESS_WORKFLOWS=false
-```
-
-and create the same two workflows manually:
-
-- `Document Added`: assignment adds `ai:run-ocr`, then webhook posts to `http://webhook-listener:8001/webhook/document`
-- `Document Updated`: filtered on `ai:run-ocr`, webhook posts to `http://webhook-listener:8001/webhook/document`
-
-If you use a webhook secret, add its value as the `X-Webhook-Token` header on
-both manually managed webhooks.
-
-Tags (`ai:run-ocr`, `ai:run-metadata`) are created automatically
-on first run if they do not exist. The AI service also creates these custom
-fields automatically on first successful startup:
-
-- `ai_processed` (Date)
-- `ai_summary` (Long text)
-- `ai_result` (Long text)
-- `ai_ocr_output` (Long text, document OCR JSON and provenance)
-
-## 4. Start the full stack
-
-```bash
-docker compose up -d
-```
-
-This starts Phoenix, the webhook listener, and the always-on `ai` service
-alongside Paperless, PostgreSQL, and Redis. The AI service hosts both the
-copilot HTTP API and the long-running worker loop. The browser copilot is at
-`https://paperless.${DOCKER_DOMAIN}/ai/chat` with the included Traefik labels.
-
-## 5. Use the service
-
-After the stack is up and the workflows exist, new documents flow automatically:
-
-1. Paperless imports a file.
-2. The auto-managed `document-added` workflow adds tag `ai:run-ocr`.
-3. The same workflow sends the webhook to `webhook-listener`.
-4. The thin webhook listener enqueues the document in Redis.
-5. The `ai` service runs OCR -> metadata and serves `/chat`.
-6. The pipeline removes the stage tags when each step completes.
-7. The worker writes:
-   - `ai_processed`
-   - `ai_summary`
-   - `ai_result`
-   - `ai_ocr_output` with structured OCR and provenance
-
-The `ai` service exposes:
-
-- `/chat` for the browser chat UI
-- `/ws/chat` for the WebSocket copilot endpoint
-
-### One-shot run
-
-Process all pending documents and exit. Stop the service first: document locks
-are process-local, so only one processing worker process may be active.
-
-```bash
-docker compose stop ai
-docker compose run --rm --entrypoint python ai cli.py --once
-docker compose up -d ai
-```
-
-### Dry run
-
-Preview actions without modifying any documents:
-
-```bash
-docker compose run --rm --entrypoint python ai cli.py --once --dry-run
-```
-
-### Backfill or process all existing documents
-
-For documents that were already in Paperless before the workflows existed:
-
-1. Make sure the auto-managed `document-updated` workflow exists, or create it manually if workflow automation is disabled.
-2. In the Paperless UI, bulk-select the documents you want to process.
-3. Add the tag `ai:run-ocr`.
-4. Paperless emits `Document Updated`, the webhook fires, and the queue fills.
-5. Leave `ai` running, or drain the queue once with:
-
-```bash
-docker compose stop ai
-docker compose run --rm --entrypoint python ai cli.py --once
-docker compose up -d ai
-```
-
-If you want to do the whole library in batches, just bulk-assign `ai:run-ocr`
-to increasingly large slices of your archive.
-
-## Models
-
-OCR uses a complete-PDF `/layout-parsing` service. Set
-`INFERENCE_OCR_ENDPOINT=http://workstation:8080` for Paddle directly, or
-`INFERENCE_OCR_ENDPOINT=http://vision-ocr:8000` for the optional vision adapter.
-See [OCR service setup](paddleocr.md) for both configurations. No stored-document
-migration or archive reprocessing is required.
-
-The adapter calls any OpenAI-compatible vision endpoint, including vLLM and
-cloud gateways. Configure it separately:
-
-```env
-VISION_OCR_ENDPOINT=https://openrouter.ai/api/v1
-VISION_OCR_MODEL=google/gemini-3.1-flash-lite
-VISION_OCR_API_KEY=your-key
-INFERENCE_OCR_ENDPOINT=http://vision-ocr:8000
-```
-
-```bash
-docker compose up -d --build vision-ocr
-docker compose up -d --force-recreate ai
-# Stop the optional adapter when it is no longer needed:
-docker compose stop vision-ocr
-```
-
-The URL selects the service but does not start it. Ordinary Compose startup
-excludes the adapter. Native Gemini and Anthropic APIs are not supported by
-this adapter; use an OpenAI-compatible gateway.
-
-Metadata and chat retain their existing model settings and credentials:
-
-```env
-INFERENCE_METADATA_MODEL=google/gemini-3.1-flash-lite
-INFERENCE_CHAT_MODEL=google/gemini-3.1-flash-lite
-# Optional OpenAI-compatible local endpoints:
-# INFERENCE_METADATA_ENDPOINT=http://workstation:8101/v1
-# INFERENCE_CHAT_ENDPOINT=http://workstation:8101/v1
-```
-
-Recreate `ai` after changing its settings. For running local model endpoints,
-see [Enucatl/vllm](https://github.com/Enucatl/vllm).
-
-## Existing installations
-
-These steps apply when upgrading an existing deployment. New PostgreSQL volumes run the initialization scripts automatically.
-
-### Migrate a PostgreSQL 17 volume to 18
-
-PostgreSQL 18 uses the versioned data directory under `/var/lib/postgresql/18/docker`,
-so the database volume now mounts at `/var/lib/postgresql`.
-
-If you already have data in the old PostgreSQL 17 volume, migrate it with a dump
-and restore before starting the upgraded stack. Export `POSTGRES_PASSWORD` from
-your `.env` into the shell before running these commands:
-
-```bash
-docker compose down
-docker run --rm -d \
-  --name paperless-postgres-17 \
-  -e POSTGRES_PASSWORD="$POSTGRES_PASSWORD" \
-  -v paperless-ai_pgdata:/var/lib/postgresql/data \
-  docker.io/library/postgres:17
-until docker exec paperless-postgres-17 pg_isready -U postgres >/dev/null; do
-  sleep 1
-done
-docker exec paperless-postgres-17 pg_dumpall -U postgres > paperless.sql
-docker stop paperless-postgres-17
-docker volume rm paperless-ai_pgdata
-docker compose up -d db
-until docker exec "$(docker compose ps -q db)" pg_isready -U postgres >/dev/null; do
-  sleep 1
-done
-docker exec -i "$(docker compose ps -q db)" psql -U postgres < paperless.sql
-```
-
-If your Docker project name is not `paperless-ai`, replace `paperless-ai_pgdata`
-with the actual volume name reported by `docker volume ls`.
-
-### Phoenix PostgreSQL backend
-
-Phoenix stores its traces and evaluation data in the separate `phoenix` database
-within the existing PostgreSQL service. The Phoenix role password is kept in
-`secrets/phoenix_postgres_password.txt`; its host ACL is managed by
-`puppet-control-repo/data/nodes/docker.yaml`.
-
-The `db/init/phoenix-user-db.sh` script runs automatically when PostgreSQL is
-initialized from an empty volume. Because the current PostgreSQL volume already
-exists, run it once manually after Puppet has provisioned the secret:
-
-```bash
-docker compose up -d db
+Configure processor accounts, external parser/metadata descriptors, storage and
+worker credentials as described in the [deployment](nano-deployment.md). Model
+serving and the published Nano worker are deployed on Cerebrum, not built here.
+
+## Tool databases
+
+Phoenix stores traces and evaluation results in the `phoenix` database within
+the existing PostgreSQL service. The parked copilot stores conversations in
+`ai_chat` under its dedicated database role. Their passwords are private Docker
+secrets. On an empty PostgreSQL volume, `db/init/` creates these roles and databases.
+For an existing volume, the bootstrap scripts are idempotent:
+
+```sh
 docker compose exec -T db /docker-entrypoint-initdb.d/20-phoenix-user-db.sh
-docker compose up -d phoenix
-```
-
-The script is idempotent. It creates or updates the `phoenix` role and creates
-the `phoenix` database if needed. Phoenix then applies its own schema migrations
-on startup. The old SQLite database remains in the `phoenixdata` volume and is
-not migrated by this setup.
-
-### Copilot conversation database
-
-The copilot stores history in its own `ai_chat` database, owned only by the
-`ai_chat` PostgreSQL role. Create `secrets/ai_chat_postgres_password.txt` with
-a strong password before starting the stack. On an existing PostgreSQL volume,
-run the same idempotent bootstrap used for Phoenix once:
-
-```bash
-docker compose up -d db
 docker compose exec -T db /docker-entrypoint-initdb.d/30-ai-chat-user-db.sh
-docker compose up -d ai
 ```
 
-The AI service applies its own conversation migrations at startup. It receives
-the password through a Docker secret, while `CHAT_DATABASE_URL` identifies the
-dedicated database. `CHAT_OWNER_HEADER` defaults to `Remote-User`; set it when
-your reverse proxy uses another authenticated-user header. Without that header,
-conversations use the nullable single-user owner.
+Phoenix applies its own schema updates at startup. The copilot applies its
+conversation schema updates when explicitly started. Keep both databases and
+`phoenixdata` even while chat is parked.
+
+## Optional tools
+
+Cleanup uses a Paperless API token with document/correspondent maintenance
+permissions and the configured cleanup database access. Chat uses a Paperless
+read token and its own conversation database. Model credentials and endpoints
+are configured per service; unused provider secrets may remain empty files.
+See [the reference](reference.md) for commands and evaluation settings.

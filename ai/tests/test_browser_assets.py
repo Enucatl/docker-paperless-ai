@@ -17,7 +17,7 @@ from paperless_ai.core.correspondent_cleanup import (
     CorrespondentMergePlan,
     CorrespondentPairDecision,
 )
-from paperless_ai.search import webhook
+from paperless_ai.search import app as webhook
 
 
 @pytest.mark.parametrize(

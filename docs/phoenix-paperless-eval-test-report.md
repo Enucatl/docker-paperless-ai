@@ -1,5 +1,8 @@
 # Phoenix model comparison: `paperless-eval-test`
 
+Historical result: this report describes the evaluation implementation measured
+on the date below. It does not validate the current Nano worker image.
+
 Date: 2026-09-18
 
 Dataset: `paperless-eval-test`

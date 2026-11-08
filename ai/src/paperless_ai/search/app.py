@@ -1,4 +1,4 @@
-"""Interactive copilot and search app hosted by the always-on AI service."""
+"""Standalone interactive copilot and search app."""
 
 from __future__ import annotations
 
@@ -6,7 +6,6 @@ import asyncio
 import json
 import logging
 import os
-import time
 import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -26,10 +25,8 @@ from fastapi.responses import FileResponse, JSONResponse
 from paperless_common.secrets import read_secret
 
 from paperless_ai.core.config import AgentConfig
-from paperless_ai.core.runtime import initialize_paperless, workers
 from paperless_common.paperless import PaperlessClient
 from paperless_common.telemetry import setup_telemetry
-from paperless_common.queue import TaskQueues
 
 if TYPE_CHECKING:
     from paperless_ai.search.chat_agent import ChatCopilot
@@ -37,15 +34,10 @@ if TYPE_CHECKING:
 
 log = logging.getLogger(__name__)
 
-_queues: TaskQueues | None = None
 _paperless_client: PaperlessClient | None = None
 _chat_copilot: ChatCopilot | None = None
 _chat_store: ChatStore | None = None
 _config: AgentConfig | None = None
-_worker_tasks: list[asyncio.Task] = []
-_worker_heartbeats: dict[str, float] = {"ocr": 0.0, "metadata": 0.0}
-_worker_ready: bool = False
-_worker_setup_error: str | None = None
 
 
 def _is_unavailable_chat_source_error(exc: Exception) -> bool:
@@ -59,18 +51,10 @@ def _is_unavailable_chat_source_error(exc: Exception) -> bool:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global _queues, _paperless_client, _chat_copilot, _chat_store, _config
-    global _worker_tasks, _worker_heartbeats, _worker_ready, _worker_setup_error
+    global _paperless_client, _chat_copilot, _chat_store, _config
 
-    redis_url = os.environ.get("REDIS_URL", "redis://broker:6379/1")
     paperless_url = os.environ.get("PAPERLESS_URL")
     paperless_token = read_secret("PAPERLESS_TOKEN")
-    log.info(
-        "Startup config: redis=%s paperless_url=%r paperless_token=%s",
-        redis_url,
-        paperless_url,
-        "loaded" if paperless_token else "missing",
-    )
     if not paperless_url:
         raise RuntimeError("PAPERLESS_URL is not set for the copilot service")
     if not paperless_token:
@@ -81,7 +65,7 @@ async def lifespan(app: FastAPI):
     _paperless_client = PaperlessClient(paperless_url, paperless_token)
     log.info("Paperless keyword search enabled (%s)", paperless_url)
 
-    _config = AgentConfig.from_env()
+    _config = AgentConfig.from_env(required_models=("chat",))
     setup_telemetry(service_name=_config.name, project_name=_config.name)
     chat_database_url = os.environ.get("CHAT_DATABASE_URL")
     if not chat_database_url:
@@ -93,45 +77,15 @@ async def lifespan(app: FastAPI):
     )
     await _chat_store.migrate()
     log.info("Chat history database migrations are ready")
-    _queues = TaskQueues(redis_url)
-
-    from paperless_ai.core.runner import clear_shutdown_request
-
-    _worker_ready = False
-    _worker_setup_error = None
-    _worker_heartbeats = {"ocr": 0.0, "metadata": 0.0}
-    _worker_tasks = []
-    clear_shutdown_request()
-
+    _chat_copilot = None
     try:
-        log.info("Checking Paperless API connectivity and managed resources...")
-        field_ids = await initialize_paperless(_paperless_client, _config)
-
-        _chat_copilot = None
-        log.info("Chat copilot enabled lazily")
-
-        def _mark_worker_heartbeat(stage: str) -> None:
-            _worker_heartbeats[stage] = time.time()
-
-        async with workers(
-            _paperless_client, _config, _queues, field_ids, _mark_worker_heartbeat
-        ) as tasks:
-            _worker_tasks = tasks
-            _worker_ready = True
-            log.info("Copilot service ready")
-            yield
-
+        yield
     finally:
-        if _queues is not None:
-            await _queues.close()
-        if _paperless_client is not None:
-            await _paperless_client.aclose()
+        await _paperless_client.aclose()
+        _paperless_client = None
         _chat_copilot = None
         _chat_store = None
         _config = None
-        _worker_tasks = []
-        _worker_ready = False
-        _worker_setup_error = None
 
 
 app = FastAPI(lifespan=lifespan)
@@ -490,44 +444,15 @@ async def chat_ws(websocket: WebSocket) -> None:
         return
 
 
-def _worker_health_snapshot() -> tuple[bool, dict]:
-    if _config is None:
-        return False, {"ready": False, "error": "config-unavailable", "stages": {}}
-    if _worker_setup_error is not None:
-        return False, {"ready": False, "error": _worker_setup_error, "stages": {}}
-    if not _worker_ready:
-        return False, {"ready": False, "error": "worker-not-ready", "stages": {}}
-
-    now = time.time()
-    stale_after_seconds = max(60, (_config.poll_interval * 2) + 30)
-    stages: dict[str, dict[str, float | bool]] = {}
-    healthy = True
-    for stage, ts in _worker_heartbeats.items():
-        age_seconds = max(0.0, now - ts)
-        stage_ok = age_seconds <= stale_after_seconds
-        healthy = healthy and stage_ok
-        stages[stage] = {
-            "healthy": stage_ok,
-            "age_seconds": round(age_seconds, 1),
-        }
-    return healthy, {
-        "ready": True,
-        "stale_after_seconds": stale_after_seconds,
-        "stages": stages,
-    }
-
-
 @app.get("/health")
 async def health() -> JSONResponse:
-    if _queues is not None:
-        pending = await _queues.pending_count()
-    else:
-        pending = {"ocr": 0, "metadata": 0}
-
-    worker_ok, worker = _worker_health_snapshot()
-    body = {
-        "status": "ok" if worker_ok else "degraded",
-        "pending": pending,
-        "worker": worker,
-    }
-    return JSONResponse(status_code=200 if worker_ok else 503, content=body)
+    """Report whether chat startup completed."""
+    ready = (
+        _config is not None
+        and _paperless_client is not None
+        and _chat_store is not None
+    )
+    return JSONResponse(
+        status_code=200 if ready else 503,
+        content={"status": "ok" if ready else "degraded"},
+    )

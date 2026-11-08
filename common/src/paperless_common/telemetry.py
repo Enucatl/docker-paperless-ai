@@ -1,8 +1,7 @@
 """
 OpenTelemetry helpers shared across services.
 
-The listener package can import these safely without carrying OTEL deps because
-the heavier imports happen lazily inside setup_telemetry().
+Heavy imports happen lazily inside setup_telemetry().
 """
 
 import logging

@@ -7,7 +7,7 @@ import niquests
 import pytest
 from fastapi import HTTPException, WebSocketDisconnect
 
-from paperless_ai.search import webhook
+from paperless_ai.search import app as webhook
 
 
 @pytest.mark.asyncio

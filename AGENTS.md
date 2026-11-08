@@ -1,63 +1,41 @@
-# Paperless AI
+# Paperless Nano deployment and tools
+
+## Scope
+
+This project deploys Nano on Atlas and retains the parked chat/search copilot,
+correspondent cleanup/review, evaluations and Phoenix. Production OCR and
+metadata run through the independently published Nano worker on Cerebrum.
+Do not restore webhook ingress, tag polling or a separate ingestion queue.
+
+Use Redis itself for the broker/cache; bundled Compose uses
+`docker.io/library/redis:8`. Preserve historical evaluation reports with the
+implementation and broker actually measured.
 
 ## Python workflow
 
-This repository has Python projects in `ai/`, `common/`, and `listener/`.
-Run `uv` commands from the project being changed; the main test suite and its
-lockfile are in `ai/`.
+Python projects are in `ai/` and `common/`; the main suite and lockfile are in
+`ai/`. Use `uv` and run Ruff formatting for changed Python projects.
+Run tests in disposable Docker containers with `--rm --userns=host`, keeping
+dependencies and artifacts off the host and removing temporary volumes.
+Inference should be mocked in routine tests. Report pytest duration separately
+from builds/startup and use `--durations=10` to investigate regressions.
 
-```bash
-cd ai
-uv sync --extra test --extra eval
-uv run pytest tests/ -k "not test_webhook and not test_phase_b_pipeline and not test_search"
-```
+## Evaluations
 
-For Python code changes, run `uv run ruff format .` from the affected project
-and the relevant tests.
-
-Keep the test suite fast: pytest should finish in seconds, not minutes. Mock
-inference, poll actual completion promptly, and avoid fixed sleeps or repeated
-minute-long timeouts. Report pytest duration separately from image builds and
-container startup; use `--durations=10` to investigate regressions.
-
-## Integration tests
-
-Tests that require Paperless, Redis, webhook delivery, or container
-networking must use the Docker harness:
-
-```bash
-./run_tests.sh
-./run_tests.sh --no-build
-```
-
-The harness builds the AI image, starts its dependencies, and removes the test
-containers and anonymous volumes on exit. It sets
-`MANAGE_PAPERLESS_WORKFLOWS=false`; webhook tests create and remove their own
-workflows. Webhook tests must use the `webhook_session` fixture except when
-verifying missing or invalid authentication.
-
-## Evaluation
-
-Run OCR and metadata experiments with Phoenix:
-
-```bash
+```sh
 docker compose run --build --rm ai-eval --split code-test
 ```
 
 Experiment definitions are in `ai/src/paperless_ai/eval/experiments.yaml`.
-Use `code-test` for a quick check; `test`, `validation`, and `all` select the
-corresponding dataset splits. If rebuilt datasets retain stale paths, run
-`docker compose down -v phoenix` before retrying.
+`test`, `validation` and `all` select larger corpus splits. Keep Phoenix data
+and existing evaluation results when changing experiment inputs. Evaluation
+agents are separate from the production worker and do not validate its image.
 
 ## Code map
 
-- `ai/src/paperless_ai/search/`: chat copilot, Paperless keyword search, and
-  the search/webhook runtime.
-- `ai/src/paperless_ai/core/`: configuration, runner, and Paperless client
-  compatibility layer.
-- `ai/src/paperless_ai/agents/`: OCR and metadata extraction.
-- `ai/src/paperless_ai/eval/`: evaluation datasets, experiments, and metrics.
-- `common/src/paperless_common/`: shared Paperless, queue, secrets, and
-  telemetry helpers.
-- `listener/src/paperless_listener/`: webhook ingress.
-- `ai/tests/`: unit and Docker-backed integration tests.
+- `ai/src/paperless_ai/search/`: parked chat copilot, history and keyword search.
+- `ai/src/paperless_ai/core/`: configuration and correspondent cleanup/review.
+- `ai/src/paperless_ai/agents/`: OCR and metadata helpers retained for evaluations.
+- `ai/src/paperless_ai/eval/`: datasets, experiments and metrics.
+- `common/src/paperless_common/`: API, language, secrets and telemetry helpers.
+- `ai/tests/`: retained tool tests.

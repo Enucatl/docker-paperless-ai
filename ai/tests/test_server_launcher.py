@@ -47,8 +47,7 @@ async def test_dual_stack_socket_options_and_cleanup(monkeypatch, fails):
 @pytest.mark.parametrize(
     "module,app_path",
     [
-        ("paperless_listener.server", "paperless_listener.app:app"),
-        ("paperless_ai.search.copilot_server", "paperless_ai.search.webhook:app"),
+        ("paperless_ai.search.copilot_server", "paperless_ai.search.app:app"),
     ],
 )
 def test_entrypoint_selects_service(monkeypatch, module, app_path):

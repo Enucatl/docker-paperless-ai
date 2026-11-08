@@ -183,70 +183,9 @@ services:
       start_period: 40s
 
 
-  # Webhook listener — receives document events from Paperless and enqueues
-  # doc IDs in Redis DB 1 for the AI worker to pick up.
-  # Configure in Paperless: Settings → Workflows → Action: Webhook
-  #   URL: http://webhook-listener:8001/webhook/document
-  webhook-listener:
-    profiles: [legacy]
-    restart: "no"
-    extends:
-      file: ../compose-security-baseline/hardening.yml
-      service: hardened-small
-    build:
-      context: .
-      dockerfile: ./listener/Dockerfile
-    sysctls:
-      - net.ipv6.bindv6only=0
-    entrypoint: []
-    command: "python -m paperless_listener.server"
-    healthcheck:
-      test:
-        [
-          "CMD",
-          "python",
-          "-c",
-          "import urllib.request; urllib.request.urlopen('http://[::1]:8001/health', timeout=2)"
-        ]
-      interval: 30s
-      timeout: 5s
-      retries: 5
-      start_period: 15s
-    environment:
-      - AGENT_NAME=paperless-webhook-ingress
-      - REDIS_URL=redis://broker:6379/1
-      - PAPERLESS_URL=http://webserver:8000
-      - PAPERLESS_TOKEN_FILE=/run/secrets/paperless_token
-      - WEBHOOK_SECRET_FILE=/run/secrets/webhook_secret
-    secrets:
-      - paperless_token
-      - webhook_secret
-    networks:
-      - internal
-    depends_on:
-      broker:
-        condition: service_healthy
-
-  # AI service — hosts the chat copilot and the OCR/metadata queue workers.
-  # Workers take document IDs from Redis, re-OCR the source, extract metadata,
-  # and update Paperless through its API. No Paperless patches are required.
-  #
-  # The heavy model serving (Ollama / vLLM) runs on the GPU workstation, which
-  # can be turned on/off independently. While the workstation is off, this
-  # service idles gracefully — documents remain queued under their stage tags.
-  #
-  # One-shot OCR/metadata run for ad-hoc processing:
-  #   docker compose run --rm --entrypoint python ai cli.py --once
-  #
-  # Dry run (preview without modifying anything):
-  #   docker compose run --rm --entrypoint python ai cli.py --once --dry-run
-  #
-  # Paperless workflows assign ai:run-ocr and send document events to the listener.
-  #
-  # Stop ai before processing with the CLI; only one worker process may run.
-  # See docs/setup.md for full setup instructions.
+  # Parked chat/search copilot; starts only with the copilot profile.
   ai:
-    profiles: [legacy]
+    profiles: [copilot]
     restart: "no"
     extends:
       file: ../compose-security-baseline/hardening.yml
@@ -280,9 +219,6 @@ services:
       # Paperless connection (required)
       - PAPERLESS_URL=http://webserver:8000
       - PAPERLESS_TOKEN_FILE=/run/secrets/paperless_token
-      - WEBHOOK_SECRET_FILE=/run/secrets/webhook_secret
-      - PAPERLESS_WEBHOOK_URL=http://webhook-listener:8001/webhook/document
-      - MANAGE_PAPERLESS_WORKFLOWS=${MANAGE_PAPERLESS_WORKFLOWS:-true}
       - CHAT_DATABASE_URL=postgresql://ai_chat@db:5432/ai_chat
       - CHAT_DATABASE_PASSWORD_FILE=/run/secrets/ai_chat_postgres_password
       - CHAT_OWNER_HEADER
@@ -318,12 +254,7 @@ services:
       - PRECISION_SEARCH_NOUL_THRESHOLD
       - RECALL_SEARCH_NOUL_THRESHOLD
 
-      # Redis queue
-      - REDIS_URL=redis://broker:6379/1
-
-      # Behaviour tuning (all optional)
-      - POLL_INTERVAL
-      - TAG_OCR=ai:run-ocr
+      # Model settings
       - INFERENCE_METADATA_TEMPERATURE
       - INFERENCE_METADATA_REASONING_EFFORT
       - INFERENCE_METADATA_MAX_TOKENS
@@ -332,7 +263,6 @@ services:
       - INFERENCE_CHAT_REASONING_EFFORT
       - INFERENCE_CHAT_MAX_TOKENS
       - INFERENCE_CHAT_EXTRA_KWARGS
-      - OCR_CONCURRENCY
       # - DRY_RUN=false
 
       # OpenTelemetry → Arize Phoenix (local, no external data sent)
@@ -357,15 +287,12 @@ services:
     depends_on:
       webserver:
         condition: service_healthy
-      broker:
-        condition: service_healthy
       phoenix:
         condition: service_healthy
       db:
         condition: service_healthy
     secrets:
       - paperless_token
-      - webhook_secret
       - openai_api_key
       - anthropic_api_key
       - google_api_key
@@ -373,31 +300,6 @@ services:
       - hf_token
       - ai_chat_postgres_password
       - typesafe_api_key
-
-  # Optional complete-PDF adapter for OpenAI-compatible vision endpoints.
-  # Explicitly start: docker compose up -d --build vision-ocr
-  vision-ocr:
-    build:
-      context: .
-      dockerfile: ./vision-ocr/Dockerfile
-    profiles: [vision-ocr]
-    restart: "no"
-    environment:
-      - VISION_OCR_ENDPOINT
-      - VISION_OCR_MODEL
-      - VISION_OCR_API_KEY
-      - VISION_OCR_PROMPT
-      - VISION_OCR_MAX_IMAGE_DIMENSION
-      - VISION_OCR_MAX_TOKENS
-      - VISION_OCR_TEMPERATURE
-      - VISION_OCR_REASONING_EFFORT
-      - VISION_OCR_EXTRA_KWARGS
-      - VISION_OCR_TIMEOUT
-    networks:
-      - internal
-      - paperless-ai_traefik
-    labels:
-      - "traefik.enable=false"
 
   ai-cleanup:
     extends:
@@ -413,7 +315,6 @@ services:
       - "${DOCKER_DOMAIN}:host-gateway"
     secrets:
       - paperless_token
-      - webhook_secret
       - openai_api_key
       - anthropic_api_key
       - google_api_key
@@ -424,9 +325,6 @@ services:
       - AGENT_NAME=paperless-ai-cleanup
       - PAPERLESS_URL=http://webserver:8000
       - PAPERLESS_TOKEN_FILE=/run/secrets/paperless_token
-      - WEBHOOK_SECRET_FILE=/run/secrets/webhook_secret
-      - PAPERLESS_WEBHOOK_URL=http://webhook-listener:8001/webhook/document
-      - MANAGE_PAPERLESS_WORKFLOWS=false
       - INFERENCE_OCR_TIMEOUT=${INFERENCE_OCR_TIMEOUT:-600}
       - INFERENCE_METADATA_MODEL
       - INFERENCE_CHAT_MODEL
@@ -540,7 +438,6 @@ services:
       - TYPESAFE_API_KEY_FILE=/run/secrets/typesafe_api_key
       - TYPESAFE_MODEL
       - TYPESAFE_ENDPOINT
-      - REDIS_URL=redis://broker:6379/1
       - OTEL_EXPORTER_OTLP_ENDPOINT=http://phoenix:6006/v1/traces
       - PHOENIX_CLIENT_HEADERS=api_key=local
     volumes: []
@@ -557,8 +454,6 @@ services:
 secrets:
   paperless_token:
     file: ./secrets/paperless_token.txt
-  webhook_secret:
-    file: ./secrets/webhook_secret.txt
   openai_api_key:
     file: ./secrets/openai_api_key.txt
   anthropic_api_key:

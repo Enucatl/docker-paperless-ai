@@ -19,7 +19,6 @@ from paperless_ai.core.correspondent_cleanup import (
     load_merge_plan,
     propose_canonical_name,
     select_disjoint_merges,
-    wait_for_cleanup_queues,
     write_merge_plan,
 )
 from paperless_ai.correspondent import CorrespondentCluster, CorrespondentResolver
@@ -624,72 +623,6 @@ async def test_automatic_apply_does_not_advance_manual_boundary(tmp_path: Path):
 
     assert client.deleted == [1]
     assert await store.get_last_processed_correspondent_id() is None
-
-
-@pytest.mark.asyncio
-async def test_queue_wait_resets_empty_period_when_work_reappears():
-    class Clock:
-        now = 0
-
-        def __call__(self):
-            return self.now
-
-        async def sleep(self, _seconds):
-            self.now += 1
-
-    class Queues:
-        KEY_OCR = "ocr"
-        KEY_METADATA = "metadata"
-
-        def __init__(self):
-            self.samples = iter([0, 1, 0, 0, 0])
-            self.current = 0
-
-        async def stage_work_count(self, stage):
-            if stage == self.KEY_OCR:
-                self.current = next(self.samples)
-            return self.current if stage == self.KEY_OCR else 0
-
-    clock = Clock()
-    await wait_for_cleanup_queues(
-        Queues(),
-        empty_seconds=2,
-        timeout_seconds=10,
-        poll_seconds=1,
-        clock=clock,
-        sleep=clock.sleep,
-    )
-    assert clock.now == 4
-
-
-@pytest.mark.asyncio
-async def test_queue_wait_timeout_does_not_settle():
-    class Clock:
-        now = 0
-
-        def __call__(self):
-            return self.now
-
-        async def sleep(self, _seconds):
-            self.now += 1
-
-    class Queues:
-        KEY_OCR = "ocr"
-        KEY_METADATA = "metadata"
-
-        async def stage_work_count(self, _stage):
-            return 1
-
-    clock = Clock()
-    with pytest.raises(TimeoutError):
-        await wait_for_cleanup_queues(
-            Queues(),
-            empty_seconds=2,
-            timeout_seconds=3,
-            poll_seconds=1,
-            clock=clock,
-            sleep=clock.sleep,
-        )
 
 
 @pytest.mark.asyncio

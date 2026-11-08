@@ -7,7 +7,7 @@ from paperless_common.server import serve
 
 def main() -> None:
     """Run the service with the shared dual-stack launcher."""
-    asyncio.run(serve("paperless_ai.search.webhook:app"))
+    asyncio.run(serve("paperless_ai.search.app:app"))
 
 
 if __name__ == "__main__":

@@ -1,6 +1,6 @@
 # Media Assets
 
-This directory contains the media used by the portfolio write-up. Assets are
+This directory contains the screenshot of the retained, currently parked copilot. Assets are
 redacted so personal document contents, names, addresses, account numbers,
 tokens, hostnames, and internal URLs are not exposed.
 

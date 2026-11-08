@@ -53,7 +53,6 @@ ENV UV_PROJECT_ENVIRONMENT=/usr/local \
 # so no project packages are installed yet — only the declared dependencies.
 COPY ai/pyproject.toml ai/uv.lock ./
 COPY common /common
-COPY listener /listener
 RUN rm -rf /common/build \
     && mkdir src \
     && uv sync --frozen --no-dev --no-install-project
@@ -68,22 +67,9 @@ RUN uv sync --frozen --no-dev \
 RUN mkdir -p /home/app/.cache/huggingface \
     && chown app:app /home/app/.cache /home/app/.cache/huggingface
 
-# Liveness check for the watch-mode poll loop.
-# cli.py calls _write_heartbeat() after every batch cycle, writing the current
-# Unix timestamp (as a float, e.g. "1711900123.45") to /tmp/ai-healthy.
-# The check passes if:
-#   1. The file exists — the loop has completed at least one cycle since startup.
-#   2. The timestamp inside is less than 600 s old — the loop is still running
-#      and has not stalled or crashed silently between poll cycles.
-# cut -d. -f1 strips the fractional part so pure-shell integer arithmetic works.
-# start-period=120s gives the service time to connect to Paperless and the LLM
-# before the first heartbeat is expected.
-HEALTHCHECK --interval=60s --timeout=5s --retries=3 --start-period=120s \
-  CMD [ -f /tmp/ai-healthy ] && [ $(( $(date +%s) - $(cat /tmp/ai-healthy | cut -d. -f1) )) -lt 600 ]
-
 USER app
 ENTRYPOINT ["python", "cli.py"]
-CMD ["--watch"]
+CMD ["--help"]
 
 FROM runtime AS eval
 
